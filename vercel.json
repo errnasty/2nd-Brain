@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-feeds",
+      "schedule": "0 */2 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/cron/sync-feeds/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/articles/[id]/full-text/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}
