@@ -3,6 +3,7 @@ import Parser from "rss-parser";
 type CustomItem = {
   contentEncoded?: string;
   "content:encoded"?: string;
+  author?: string;
 };
 
 export type NormalizedFeed = {
