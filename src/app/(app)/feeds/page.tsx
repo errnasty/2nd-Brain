@@ -12,6 +12,8 @@ type Search = Promise<{
   article?: string;
 }>;
 
+const ARTICLE_LIMIT = 100;
+
 export default async function FeedsPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
   const view = sp.view ?? "unread";
@@ -41,35 +43,13 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     .innerJoin(feeds, eq(feeds.id, articles.feedId))
     .where(and(...where))
     .orderBy(desc(articles.publishDate))
-    .limit(200);
-
-  const selectedArticle = sp.article
-    ? await db
-        .select({
-          id: articles.id,
-          title: articles.title,
-          excerpt: articles.excerpt,
-          author: articles.author,
-          url: articles.url,
-          publishDate: articles.publishDate,
-          readStatus: articles.readStatus,
-          starred: articles.starred,
-          fullText: articles.fullText,
-          feedTitle: feeds.title,
-          feedIconUrl: feeds.iconUrl,
-        })
-        .from(articles)
-        .innerJoin(feeds, eq(feeds.id, articles.feedId))
-        .where(and(eq(articles.id, sp.article), eq(articles.userId, user.id)))
-        .limit(1)
-        .then((r) => r[0])
-    : null;
+    .limit(ARTICLE_LIMIT);
 
   return (
     <>
       <ArticleList items={rows} selectedId={sp.article ?? null} view={view} />
       <ArticleReader
-        article={selectedArticle ?? null}
+        selectedId={sp.article ?? null}
         orderedIds={rows.map((r) => r.id)}
       />
     </>

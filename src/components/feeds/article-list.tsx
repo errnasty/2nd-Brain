@@ -50,11 +50,12 @@ export function ArticleList({
   function openArticle(id: string) {
     const sp = new URLSearchParams(params.toString());
     sp.set("article", id);
-    router.push(`/feeds?${sp.toString()}`);
+    router.replace(`/feeds?${sp.toString()}`, { scroll: false });
     const target = optimistic.find((i) => i.id === id);
     if (target && target.readStatus !== "read") {
       startTransition(async () => {
         applyOptimistic({ id, readStatus: "read" });
+        // Fire-and-forget; no revalidate (the action is optimistic on the server too)
         await setReadStatusAction({ articleIds: [id], status: "read" });
       });
     }

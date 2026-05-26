@@ -1,8 +1,19 @@
 "use client";
 
 import { useSearchParams, useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
-import { Download, Inbox, Plus, RefreshCw, Rss, Star, Trash2 } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  FolderClosed,
+  Inbox,
+  Plus,
+  RefreshCw,
+  Rss,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,6 +22,7 @@ import { AddFeedDialog } from "./add-feed-dialog";
 import { ImportOpmlDialog } from "./import-opml-dialog";
 import {
   deleteFeedAction,
+  moveFeedToFolderAction,
   syncAllAction,
   syncFeedAction,
 } from "@/app/(app)/feeds/actions";
@@ -21,6 +33,8 @@ type UnreadCounts = {
   perFeed: Record<string, number>;
   perFolder: Record<string, number>;
 };
+
+const COLLAPSE_KEY = "feedsNav.collapsed.v1";
 
 export function FeedsNav({
   folders,
@@ -34,15 +48,34 @@ export function FeedsNav({
   const params = useSearchParams();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
-  const [open, setOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [draggingFeed, setDraggingFeed] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | "uncategorized" | null>(null);
+
+  // Persist collapse state
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(COLLAPSE_KEY);
+      if (raw) setCollapsed(JSON.parse(raw));
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
+    } catch {}
+  }, [collapsed]);
+
+  function toggleFolder(id: string) {
+    setCollapsed((m) => ({ ...m, [id]: !m[id] }));
+  }
 
   const activeFeed = params.get("feed");
   const activeFolder = params.get("folder");
   const view = params.get("view") ?? "unread";
-
-  const inboxFeeds = feeds.filter((f) => !f.folderId);
   const totalUnread = Object.values(unread.perFeed).reduce((a, b) => a + b, 0);
+  const uncategorizedFeeds = feeds.filter((f) => !f.folderId);
 
   function setQuery(next: Record<string, string | null>) {
     const sp = new URLSearchParams(params.toString());
@@ -52,6 +85,17 @@ export function FeedsNav({
     }
     sp.delete("article");
     router.push(`/feeds?${sp.toString()}`);
+  }
+
+  function onDropToFolder(folderId: string | null) {
+    if (!draggingFeed) return;
+    const feedId = draggingFeed;
+    setDraggingFeed(null);
+    setDropTarget(null);
+    startTransition(async () => {
+      await moveFeedToFolderAction(feedId, folderId);
+      toast.success(folderId ? "Moved to folder" : "Moved to Uncategorized");
+    });
   }
 
   return (
@@ -70,7 +114,7 @@ export function FeedsNav({
                 toast.success("Synced all feeds");
               })
             }
-            title="Sync all feeds"
+            title="Sync all"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", pending && "animate-spin")} />
           </Button>
@@ -79,7 +123,7 @@ export function FeedsNav({
             variant="ghost"
             className="h-7 w-7"
             onClick={() => setImportOpen(true)}
-            title="Import OPML (from Inoreader, Feedly, etc.)"
+            title="Import OPML"
           >
             <Download className="h-3.5 w-3.5" />
           </Button>
@@ -87,7 +131,7 @@ export function FeedsNav({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            onClick={() => setOpen(true)}
+            onClick={() => setAddOpen(true)}
             title="Add feed"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -95,6 +139,7 @@ export function FeedsNav({
         </div>
       </div>
       <Separator />
+
       <ScrollArea className="flex-1">
         <nav className="p-2 space-y-0.5 text-sm">
           <NavRow
@@ -112,69 +157,140 @@ export function FeedsNav({
             onClick={() => setQuery({ feed: null, folder: null, view: "starred" })}
           />
 
-          <div className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-            Folders
-          </div>
-          {folders.length === 0 && (
-            <div className="px-3 py-1 text-xs text-muted-foreground">No folders yet.</div>
-          )}
-          {folders.map((folder) => (
-            <NavRow
-              key={folder.id}
-              label={folder.name}
-              icon={<span className="h-4 w-4" />}
-              count={unread.perFolder[folder.id] ?? 0}
-              active={activeFolder === folder.id}
-              onClick={() => setQuery({ feed: null, folder: folder.id, view: "unread" })}
-            />
-          ))}
-
-          <div className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-            {folders.length > 0 ? "Uncategorized" : "Feeds"}
-          </div>
-          {inboxFeeds.length === 0 && feeds.length === 0 && (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              No feeds yet. Click + to add one.
+          {folders.length > 0 && (
+            <div className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              Folders
             </div>
           )}
-          {(folders.length > 0 ? inboxFeeds : feeds).map((feed) => (
-            <FeedRow
-              key={feed.id}
-              feed={feed}
-              count={unread.perFeed[feed.id] ?? 0}
-              active={activeFeed === feed.id}
-              onClick={() => setQuery({ feed: feed.id, folder: null, view: "unread" })}
-            />
-          ))}
 
-          {folders.length > 0 && (
-            <>
-              <Separator className="my-2" />
-              {folders.map((folder) => {
-                const folderFeeds = feeds.filter((f) => f.folderId === folder.id);
-                if (folderFeeds.length === 0) return null;
-                return (
-                  <div key={`grp-${folder.id}`} className="mt-2">
-                    <div className="px-3 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-                      {folder.name}
-                    </div>
+          {folders.map((folder) => {
+            const isCollapsed = collapsed[folder.id];
+            const folderFeeds = feeds.filter((f) => f.folderId === folder.id);
+            const isDropTarget = dropTarget === folder.id;
+            return (
+              <div key={folder.id}>
+                <div
+                  onDragOver={(e) => {
+                    if (draggingFeed) {
+                      e.preventDefault();
+                      setDropTarget(folder.id);
+                    }
+                  }}
+                  onDragLeave={() => isDropTarget && setDropTarget(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    onDropToFolder(folder.id);
+                  }}
+                  className={cn(
+                    "group flex items-center gap-1 rounded-md transition-colors",
+                    activeFolder === folder.id && "bg-accent",
+                    isDropTarget && "ring-2 ring-primary",
+                  )}
+                >
+                  <button
+                    onClick={() => toggleFolder(folder.id)}
+                    className="rounded p-1 text-muted-foreground hover:bg-background"
+                    title={isCollapsed ? "Expand" : "Collapse"}
+                  >
+                    {isCollapsed ? (
+                      <ChevronRight className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setQuery({ feed: null, folder: folder.id, view: "unread" })}
+                    className="flex flex-1 items-center gap-2 px-1 py-1.5 text-left"
+                  >
+                    <FolderClosed className="h-4 w-4 text-muted-foreground" />
+                    <span className="flex-1 truncate">{folder.name}</span>
+                    {unread.perFolder[folder.id] > 0 && (
+                      <span className="text-[11px] tabular-nums text-muted-foreground">
+                        {unread.perFolder[folder.id]}
+                      </span>
+                    )}
+                  </button>
+                </div>
+
+                {!isCollapsed && (
+                  <div className="ml-4 border-l border-border/50 pl-1">
+                    {folderFeeds.length === 0 && (
+                      <div className="px-3 py-1 text-xs text-muted-foreground italic">
+                        Empty — drop a feed here
+                      </div>
+                    )}
                     {folderFeeds.map((feed) => (
                       <FeedRow
                         key={feed.id}
                         feed={feed}
                         count={unread.perFeed[feed.id] ?? 0}
                         active={activeFeed === feed.id}
+                        dragging={draggingFeed === feed.id}
+                        onDragStart={() => setDraggingFeed(feed.id)}
+                        onDragEnd={() => {
+                          setDraggingFeed(null);
+                          setDropTarget(null);
+                        }}
                         onClick={() => setQuery({ feed: feed.id, folder: null, view: "unread" })}
                       />
                     ))}
                   </div>
-                );
-              })}
-            </>
-          )}
+                )}
+              </div>
+            );
+          })}
+
+          <div
+            onDragOver={(e) => {
+              if (draggingFeed) {
+                e.preventDefault();
+                setDropTarget("uncategorized");
+              }
+            }}
+            onDragLeave={() => dropTarget === "uncategorized" && setDropTarget(null)}
+            onDrop={(e) => {
+              e.preventDefault();
+              onDropToFolder(null);
+            }}
+            className={cn(
+              "mt-2 rounded-md transition-colors",
+              dropTarget === "uncategorized" && "ring-2 ring-primary",
+            )}
+          >
+            <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+              {folders.length > 0 ? "Uncategorized" : "Feeds"}
+            </div>
+
+            {uncategorizedFeeds.length === 0 && feeds.length === 0 && (
+              <div className="px-3 py-2 text-xs text-muted-foreground">
+                No feeds yet. Click + to add one, or ↓ to import from Inoreader.
+              </div>
+            )}
+            {uncategorizedFeeds.length === 0 && feeds.length > 0 && folders.length > 0 && (
+              <div className="px-3 py-1 text-xs text-muted-foreground italic">
+                Drop a feed here to remove it from its folder
+              </div>
+            )}
+            {uncategorizedFeeds.map((feed) => (
+              <FeedRow
+                key={feed.id}
+                feed={feed}
+                count={unread.perFeed[feed.id] ?? 0}
+                active={activeFeed === feed.id}
+                dragging={draggingFeed === feed.id}
+                onDragStart={() => setDraggingFeed(feed.id)}
+                onDragEnd={() => {
+                  setDraggingFeed(null);
+                  setDropTarget(null);
+                }}
+                onClick={() => setQuery({ feed: feed.id, folder: null, view: "unread" })}
+              />
+            ))}
+          </div>
         </nav>
       </ScrollArea>
-      <AddFeedDialog open={open} onOpenChange={setOpen} folders={folders} />
+
+      <AddFeedDialog open={addOpen} onOpenChange={setAddOpen} folders={folders} />
       <ImportOpmlDialog open={importOpen} onOpenChange={setImportOpen} />
     </aside>
   );
@@ -218,22 +334,36 @@ function FeedRow({
   feed,
   count,
   active,
+  dragging,
+  onDragStart,
+  onDragEnd,
   onClick,
 }: {
   feed: Feed;
   count: number;
   active: boolean;
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
   onClick: () => void;
 }) {
   const [pending, startTransition] = useTransition();
   return (
     <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", feed.id);
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
       className={cn(
         "group flex items-center gap-2 rounded-md pr-1 transition-colors",
         active ? "bg-accent" : "hover:bg-accent",
+        dragging && "opacity-40",
       )}
     >
-      <button onClick={onClick} className="flex flex-1 items-center gap-2 px-3 py-1.5 text-left">
+      <button onClick={onClick} className="flex flex-1 items-center gap-2 px-2 py-1.5 text-left">
         {feed.iconUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={feed.iconUrl} alt="" className="h-4 w-4 rounded-sm" />

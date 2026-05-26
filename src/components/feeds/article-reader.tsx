@@ -13,13 +13,13 @@ import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 
-export type ReaderArticle = {
+type ArticleData = {
   id: string;
   title: string;
   excerpt: string | null;
   author: string | null;
   url: string;
-  publishDate: Date | null;
+  publishDate: string | null;
   readStatus: "unread" | "read" | "archived";
   starred: boolean;
   fullText: string | null;
@@ -28,50 +28,53 @@ export type ReaderArticle = {
 };
 
 export function ArticleReader({
-  article,
+  selectedId,
   orderedIds,
 }: {
-  article: ReaderArticle | null;
+  selectedId: string | null;
   orderedIds: string[];
 }) {
   const router = useRouter();
   const params = useSearchParams();
   const prefs = useReaderPrefs();
+
+  const [article, setArticle] = useState<ArticleData | null>(null);
+  const [loadingMeta, setLoadingMeta] = useState(false);
   const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingContent, setLoadingContent] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
-  const [starred, setStarred] = useState(article?.starred ?? false);
 
   const currentIdx = useMemo(
-    () => (article ? orderedIds.indexOf(article.id) : -1),
-    [article?.id, orderedIds],
+    () => (selectedId ? orderedIds.indexOf(selectedId) : -1),
+    [selectedId, orderedIds],
   );
   const prevId = currentIdx > 0 ? orderedIds[currentIdx - 1] : null;
-  const nextId = currentIdx >= 0 && currentIdx < orderedIds.length - 1 ? orderedIds[currentIdx + 1] : null;
+  const nextId =
+    currentIdx >= 0 && currentIdx < orderedIds.length - 1 ? orderedIds[currentIdx + 1] : null;
 
   const goToArticle = useCallback(
     (id: string | null) => {
       const sp = new URLSearchParams(params.toString());
       if (id) sp.set("article", id);
       else sp.delete("article");
-      router.push(`/feeds?${sp.toString()}`);
+      router.replace(`/feeds?${sp.toString()}`, { scroll: false });
     },
     [params, router],
   );
-
   const close = useCallback(() => goToArticle(null), [goToArticle]);
 
   function toggleStar() {
     if (!article) return;
-    const next = !starred;
-    setStarred(next);
+    const next = !article.starred;
+    setArticle({ ...article, starred: next });
     startTransition(() => toggleStarredAction(article.id, next));
   }
 
   function toggleRead() {
     if (!article) return;
     const next = article.readStatus === "read" ? "unread" : "read";
+    setArticle({ ...article, readStatus: next });
     startTransition(async () => {
       await setReadStatusAction({ articleIds: [article.id], status: next });
       toast.success(next === "read" ? "Marked read" : "Marked unread");
@@ -95,22 +98,51 @@ export function ArticleReader({
     !!article,
   );
 
+  // 1) Fetch article meta when selectedId changes
   useEffect(() => {
-    setStarred(article?.starred ?? false);
     setExtractError(null);
+    setContent(null);
 
-    if (!article) {
-      setContent(null);
+    if (!selectedId) {
+      setArticle(null);
       return;
     }
+
+    let aborted = false;
+    setLoadingMeta(true);
+    fetch(`/api/articles/${selectedId}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (aborted) return;
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
+        const data: ArticleData = await res.json();
+        setArticle(data);
+      })
+      .catch((err) => {
+        if (aborted) return;
+        toast.error(err.message ?? "Failed to load article");
+        setArticle(null);
+      })
+      .finally(() => !aborted && setLoadingMeta(false));
+
+    return () => {
+      aborted = true;
+    };
+  }, [selectedId]);
+
+  // 2) When article meta arrives, ensure full text. Use cached `fullText` or fetch via Readability.
+  useEffect(() => {
+    if (!article) return;
+
     if (article.fullText) {
       setContent(article.fullText);
       return;
     }
-    setContent(null);
-    setLoading(true);
 
     let aborted = false;
+    setLoadingContent(true);
     fetch(`/api/articles/${article.id}/full-text`, { method: "POST" })
       .then(async (res) => {
         const data = await res.json();
@@ -126,14 +158,27 @@ export function ArticleReader({
         if (aborted) return;
         setExtractError(err.message ?? "Failed to load");
       })
-      .finally(() => !aborted && setLoading(false));
+      .finally(() => !aborted && setLoadingContent(false));
 
     return () => {
       aborted = true;
     };
+  }, [article?.id, article?.fullText]);
+
+  // 3) Mark as read implicitly when an unread article is opened. Done after a small delay
+  // so quickly paging with j/k doesn't mark a flood of articles read.
+  useEffect(() => {
+    if (!article || article.readStatus !== "unread") return;
+    const handle = setTimeout(() => {
+      startTransition(async () => {
+        await setReadStatusAction({ articleIds: [article.id], status: "read" });
+        setArticle((cur) => (cur && cur.id === article.id ? { ...cur, readStatus: "read" } : cur));
+      });
+    }, 500);
+    return () => clearTimeout(handle);
   }, [article?.id]);
 
-  if (!article) {
+  if (!selectedId) {
     return (
       <section className="hidden flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground lg:flex">
         <div>Select an article to read.</div>
@@ -178,18 +223,18 @@ export function ArticleReader({
         </Button>
         <Separator orientation="vertical" className="mx-1 h-5" />
         <div className="flex flex-1 items-center gap-2 text-xs text-muted-foreground">
-          {article.feedIconUrl ? (
+          {article?.feedIconUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={article.feedIconUrl} alt="" className="h-4 w-4 rounded-sm" />
           ) : null}
-          <span className="truncate">{article.feedTitle}</span>
-          {readingMinutes && <span className="hidden sm:inline">· ~{readingMinutes} min read</span>}
+          <span className="truncate">{article?.feedTitle ?? ""}</span>
+          {readingMinutes && <span className="hidden sm:inline">· ~{readingMinutes} min</span>}
         </div>
-        <Button size="icon" variant="ghost" onClick={toggleStar} title="Star (s)">
-          <Star className={starred ? "fill-yellow-500 text-yellow-500" : ""} />
+        <Button size="icon" variant="ghost" onClick={toggleStar} title="Star (s)" disabled={!article}>
+          <Star className={article?.starred ? "fill-yellow-500 text-yellow-500" : ""} />
         </Button>
-        <Button size="icon" variant="ghost" asChild title="Open original (v)">
-          <a href={article.url} target="_blank" rel="noopener noreferrer">
+        <Button size="icon" variant="ghost" asChild title="Open original (v)" disabled={!article}>
+          <a href={article?.url ?? "#"} target="_blank" rel="noopener noreferrer">
             <ExternalLink className="h-4 w-4" />
           </a>
         </Button>
@@ -205,25 +250,39 @@ export function ArticleReader({
             } as React.CSSProperties
           }
         >
-          <h1>{article.title}</h1>
-          <div className="not-prose mb-6 text-xs text-muted-foreground">
-            {article.author && <span>{article.author} · </span>}
-            <span>{formatRelativeTime(article.publishDate)}</span>
-          </div>
-          {loading && (
+          {loadingMeta || !article ? (
             <div className="space-y-3">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-8 w-3/4" />
+              <Skeleton className="h-4 w-1/3" />
+              <Skeleton className="mt-6 h-4 w-full" />
               <Skeleton className="h-4 w-5/6" />
               <Skeleton className="h-4 w-2/3" />
             </div>
+          ) : (
+            <>
+              <h1>{article.title}</h1>
+              <div className="not-prose mb-6 text-xs text-muted-foreground">
+                {article.author && <span>{article.author} · </span>}
+                <span>{formatRelativeTime(article.publishDate)}</span>
+              </div>
+              {loadingContent && (
+                <div className="space-y-3">
+                  <Skeleton className="h-4 w-3/4" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-5/6" />
+                  <Skeleton className="h-4 w-2/3" />
+                </div>
+              )}
+              {extractError && (
+                <div className="not-prose mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  Couldn&apos;t extract full text ({extractError}). Showing RSS excerpt.
+                </div>
+              )}
+              {content && !loadingContent && (
+                <div dangerouslySetInnerHTML={{ __html: content }} />
+              )}
+            </>
           )}
-          {extractError && (
-            <div className="not-prose mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              Couldn&apos;t extract full text ({extractError}). Showing the RSS excerpt.
-            </div>
-          )}
-          {content && !loading && <div dangerouslySetInnerHTML={{ __html: content }} />}
         </article>
       </ScrollArea>
     </section>

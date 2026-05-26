@@ -1,0 +1,31 @@
+name: Sync RSS feeds
+
+# GitHub-Actions-backed cron — works on any host (Netlify, Vercel, your own VPS).
+# Set the two secrets in: GitHub repo → Settings → Secrets and variables → Actions
+#   APP_URL      = https://your-site.netlify.app
+#   CRON_SECRET  = the same value you set in your hosting platform's env vars
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"   # every 2 hours UTC
+  workflow_dispatch:         # manual "Run workflow" button
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger feed sync
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing APP_URL or CRON_SECRET secret"; exit 1
+          fi
+          response=$(curl -sS -o /tmp/sync.json -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            --max-time 290 \
+            "$APP_URL/api/cron/sync-feeds")
+          echo "HTTP $response"
+          cat /tmp/sync.json
+          if [ "$response" != "200" ]; then exit 1; fi

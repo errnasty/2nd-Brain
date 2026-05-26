@@ -53,9 +53,21 @@
   * {
     @apply border-border;
   }
+  html {
+    /* Premium serif feel across the whole UI */
+    font-family: "Times New Roman", Times, Georgia, serif;
+  }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "rlig" 1, "calt" 1;
+    font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+    text-rendering: optimizeLegibility;
+  }
+  /* Slightly tighter, more refined small-text */
+  button, input, select, textarea, kbd {
+    font-family: inherit;
+  }
+  kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 }
 

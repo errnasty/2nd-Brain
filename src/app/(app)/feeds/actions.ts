@@ -105,7 +105,9 @@ export async function setReadStatusAction(input: { articleIds: string[]; status:
     .update(articles)
     .set({ readStatus: parsed.data.status })
     .where(and(eq(articles.userId, user.id), inArray(articles.id, parsed.data.articleIds)));
-  revalidatePath("/feeds");
+  // NOTE: intentionally no revalidatePath here — the UI already updates
+  // optimistically and the unread sidebar counts can lag until the next
+  // genuine navigation. This makes opening articles instant.
   return { ok: true as const };
 }
 
@@ -115,7 +117,7 @@ export async function toggleStarredAction(articleId: string, starred: boolean) {
     .update(articles)
     .set({ starred })
     .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)));
-  revalidatePath("/feeds");
+  // Same as above — UI is already optimistic.
 }
 
 const CreateFolderSchema = z.object({ name: z.string().trim().min(1).max(60) });

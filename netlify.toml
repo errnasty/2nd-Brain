@@ -1,0 +1,14 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+# The official plugin handles Next.js App Router, RSC, and Edge functions on Netlify.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Increase function timeout for the on-demand Readability extractor.
+[functions]
+  node_bundler = "esbuild"
+
+# Cron is provided by .github/workflows/sync-feeds.yml hitting /api/cron/sync-feeds
+# from GitHub Actions. That keeps cron free and platform-independent.
