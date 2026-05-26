@@ -4,48 +4,50 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 10% 3.9%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
-    --primary: 240 5.9% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 4.8% 95.9%;
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;
-    --muted-foreground: 240 3.8% 46.1%;
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
+    /* Warm parchment light palette */
+    --background: 40 25% 97%;
+    --foreground: 24 18% 9%;
+    --card: 40 25% 97%;
+    --card-foreground: 24 18% 9%;
+    --popover: 40 25% 97%;
+    --popover-foreground: 24 18% 9%;
+    --primary: 24 18% 9%;
+    --primary-foreground: 40 25% 97%;
+    --secondary: 40 18% 91%;
+    --secondary-foreground: 24 18% 9%;
+    --muted: 40 18% 91%;
+    --muted-foreground: 28 8% 47%;
+    --accent: 40 18% 91%;
+    --accent-foreground: 24 18% 9%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 5.9% 90%;
-    --input: 240 5.9% 90%;
-    --ring: 240 5.9% 10%;
-    --radius: 0.5rem;
+    --border: 38 14% 86%;
+    --input: 38 14% 86%;
+    --ring: 24 18% 9%;
+    --radius: 0.4rem;
   }
 
   .dark {
-    --background: 240 10% 3.9%;
-    --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 5.9% 10%;
-    --secondary: 240 3.7% 15.9%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
-    --accent-foreground: 0 0% 98%;
+    /* Warm dark — deep charcoal/leather, not cold blue-grey */
+    --background: 24 8% 8%;
+    --foreground: 40 12% 90%;
+    --card: 24 8% 8%;
+    --card-foreground: 40 12% 90%;
+    --popover: 24 8% 10%;
+    --popover-foreground: 40 12% 90%;
+    --primary: 40 12% 90%;
+    --primary-foreground: 24 8% 8%;
+    --secondary: 24 6% 14%;
+    --secondary-foreground: 40 12% 90%;
+    --muted: 24 6% 14%;
+    --muted-foreground: 38 5% 55%;
+    --accent: 24 6% 14%;
+    --accent-foreground: 40 12% 90%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 240 4.9% 83.9%;
+    --border: 24 6% 17%;
+    --input: 24 6% 17%;
+    --ring: 40 10% 76%;
   }
 }
 
@@ -54,7 +56,6 @@
     @apply border-border;
   }
   html {
-    /* Premium serif feel across the whole UI */
     font-family: Georgia, "Times New Roman", serif;
   }
   body {
@@ -62,8 +63,7 @@
     font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
     text-rendering: optimizeLegibility;
   }
-  /* Slightly tighter, more refined small-text */
-  button, input, select, textarea, kbd {
+  button, input, select, textarea {
     font-family: inherit;
   }
   kbd {
@@ -71,27 +71,84 @@
   }
 }
 
-/* Inoreader-ish reading defaults — Georgia serif, user-adjustable via reader controls */
+/* ── Reader ─────────────────────────────────────────────────────────── */
 .prose-reader {
   font-family: var(--reader-font, Georgia), "Times New Roman", serif;
-  font-size: var(--reader-font-size, 18px);
-  line-height: var(--reader-line-height, 1.7);
-  @apply max-w-2xl mx-auto;
+  font-size: var(--reader-font-size, 19px);
+  line-height: var(--reader-line-height, 1.85);
+  @apply max-w-[68ch] mx-auto;
 }
-.prose-reader h1 { @apply text-3xl font-semibold mt-8 mb-4; }
-.prose-reader h2 { @apply text-2xl font-semibold mt-6 mb-3; }
-.prose-reader h3 { @apply text-xl  font-semibold mt-5 mb-2; }
-.prose-reader p  { @apply my-4; }
-.prose-reader a  { @apply underline text-primary; }
-.prose-reader img { @apply my-4 rounded-md max-w-full h-auto; }
-.prose-reader blockquote { @apply border-l-4 border-border pl-4 italic my-4; }
-.prose-reader code { @apply bg-muted px-1 py-0.5 rounded text-sm; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.prose-reader pre  { @apply bg-muted p-4 rounded-md overflow-x-auto my-4; }
-.prose-reader ul   { @apply list-disc pl-6 my-4; }
-.prose-reader ol   { @apply list-decimal pl-6 my-4; }
-.prose-reader figure { @apply my-4; }
-.prose-reader figcaption { @apply text-sm text-muted-foreground text-center mt-1; }
 
-/* Optional reading themes (sepia / serif vs sans) toggled by data-theme on the container */
-[data-reader-theme="sepia"] .prose-reader { color: #4a3e2a; }
-[data-reader-theme="sepia"] { background-color: #f4ecd8; }
+.prose-reader h1 {
+  @apply text-[1.85rem] font-bold mt-10 mb-4;
+  line-height: 1.2;
+  letter-spacing: -0.025em;
+}
+.prose-reader h2 {
+  @apply text-2xl font-semibold mt-8 mb-3;
+  line-height: 1.3;
+  letter-spacing: -0.018em;
+}
+.prose-reader h3 {
+  @apply text-xl font-semibold mt-6 mb-2;
+  letter-spacing: -0.01em;
+}
+.prose-reader p {
+  @apply my-5;
+}
+.prose-reader a {
+  @apply underline underline-offset-2 decoration-border hover:decoration-foreground transition-colors;
+  color: inherit;
+}
+.prose-reader img {
+  @apply my-6 rounded max-w-full h-auto;
+}
+.prose-reader blockquote {
+  @apply border-l-[3px] border-muted-foreground/40 pl-5 italic my-6 text-muted-foreground;
+  font-size: 1.04em;
+}
+.prose-reader code {
+  @apply bg-muted px-1.5 py-0.5 rounded text-[0.85em];
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.prose-reader pre {
+  @apply bg-muted p-4 rounded-md overflow-x-auto my-6 text-sm;
+}
+.prose-reader pre code {
+  @apply bg-transparent p-0;
+}
+.prose-reader ul {
+  @apply list-disc pl-6 my-5;
+}
+.prose-reader ol {
+  @apply list-decimal pl-6 my-5;
+}
+.prose-reader li {
+  @apply my-2;
+}
+.prose-reader figure {
+  @apply my-6;
+}
+.prose-reader figcaption {
+  @apply text-sm text-muted-foreground text-center mt-2 italic;
+}
+.prose-reader hr {
+  @apply border-border my-8;
+}
+.prose-reader table {
+  @apply w-full text-sm border-collapse my-6;
+}
+.prose-reader th {
+  @apply border border-border px-3 py-2 text-left font-semibold bg-muted;
+}
+.prose-reader td {
+  @apply border border-border px-3 py-2;
+}
+
+/* Sepia theme */
+[data-reader-theme="sepia"] {
+  background-color: #f5ead8;
+}
+[data-reader-theme="sepia"] .prose-reader {
+  color: #3d2f1a;
+}

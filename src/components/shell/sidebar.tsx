@@ -29,9 +29,9 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
   return (
     <aside className="hidden w-60 shrink-0 border-r border-border md:flex md:flex-col">
-      <div className="px-4 py-4">
-        <div className="text-sm font-semibold tracking-tight">Second Brain</div>
-        <div className="text-xs text-muted-foreground truncate">{userEmail}</div>
+      <div className="px-4 py-5">
+        <div className="text-base font-semibold tracking-tight leading-none">Second Brain</div>
+        <div className="mt-1 text-[11px] text-muted-foreground truncate">{userEmail}</div>
       </div>
       <Separator />
       <ScrollArea className="flex-1">

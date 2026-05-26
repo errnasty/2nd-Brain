@@ -261,8 +261,11 @@ export function ArticleReader({
           ) : (
             <>
               <h1>{article.title}</h1>
-              <div className="not-prose mb-6 text-xs text-muted-foreground">
-                {article.author && <span>{article.author} · </span>}
+              <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+                {article.author && (
+                  <span className="font-medium text-foreground/75">{article.author}</span>
+                )}
+                {article.author && <span className="text-border">·</span>}
                 <span>{formatRelativeTime(article.publishDate)}</span>
               </div>
               {loadingContent && (

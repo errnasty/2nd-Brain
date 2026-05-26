@@ -112,12 +112,12 @@ export function ArticleList({
                 <button
                   onClick={() => openArticle(item.id)}
                   className={cn(
-                    "block w-full px-3 py-3 text-left transition-colors",
-                    selectedId === item.id ? "bg-accent" : "hover:bg-accent/60",
-                    item.readStatus === "read" && "opacity-60",
+                    "block w-full px-4 py-4 text-left transition-colors",
+                    selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
+                    item.readStatus === "read" && "opacity-55",
                   )}
                 >
-                  <div className="mb-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     {item.feedIconUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={item.feedIconUrl} alt="" className="h-3 w-3 rounded-sm" />
@@ -129,14 +129,14 @@ export function ArticleList({
                   </div>
                   <div
                     className={cn(
-                      "text-sm leading-snug",
-                      item.readStatus === "unread" ? "font-semibold" : "font-normal",
+                      "text-[0.85rem] leading-snug tracking-[-0.005em]",
+                      item.readStatus === "unread" ? "font-semibold" : "font-normal text-foreground/80",
                     )}
                   >
                     {item.title}
                   </div>
                   {item.excerpt && (
-                    <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                    <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
                       {item.excerpt}
                     </div>
                   )}
