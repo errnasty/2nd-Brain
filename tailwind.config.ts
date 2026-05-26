@@ -14,7 +14,7 @@ const config: Config = {
       screens: { "2xl": "1400px" },
     },
     fontFamily: {
-      serif: ['"Times New Roman"', "Times", "Georgia", "serif"],
+      serif: ["Georgia", '"Times New Roman"', "serif"],
       sans: ["ui-sans-serif", "system-ui", "Inter", "sans-serif"],
       mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
     },

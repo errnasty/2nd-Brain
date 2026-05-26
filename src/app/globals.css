@@ -55,7 +55,7 @@
   }
   html {
     /* Premium serif feel across the whole UI */
-    font-family: "Times New Roman", Times, Georgia, serif;
+    font-family: Georgia, "Times New Roman", serif;
   }
   body {
     @apply bg-background text-foreground antialiased;
@@ -71,9 +71,9 @@
   }
 }
 
-/* Inoreader-ish reading defaults — Times New Roman serif, user-adjustable via reader controls */
+/* Inoreader-ish reading defaults — Georgia serif, user-adjustable via reader controls */
 .prose-reader {
-  font-family: var(--reader-font, "Times New Roman"), Times, Georgia, serif;
+  font-family: var(--reader-font, Georgia), "Times New Roman", serif;
   font-size: var(--reader-font-size, 18px);
   line-height: var(--reader-line-height, 1.7);
   @apply max-w-2xl mx-auto;
