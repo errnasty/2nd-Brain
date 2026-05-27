@@ -42,3 +42,6 @@ next-env.d.ts
 
 # drizzle
 drizzle/meta
+
+# scratch
+.git-commit-msg.tmp
