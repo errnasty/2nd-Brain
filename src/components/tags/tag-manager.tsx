@@ -1,11 +1,16 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
-import { Check, Hash, Pencil, Trash2, X } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { Check, Hash, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { deleteTagAction, renameTagAction } from "@/app/(app)/tags/actions";
+import {
+  bulkDeleteTagsAction,
+  deleteTagAction,
+  renameTagAction,
+} from "@/app/(app)/tags/actions";
 import { toast } from "sonner";
 import type { Tag } from "@/lib/db/schema";
 
@@ -21,7 +26,32 @@ export function TagManager({
   const router = useRouter();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
+
+  // Reset selection when the tag list changes (e.g. after a delete)
+  useEffect(() => {
+    setChecked((prev) => {
+      const next = new Set<string>();
+      const valid = new Set(tags.map((t) => t.id));
+      for (const id of prev) if (valid.has(id)) next.add(id);
+      return next;
+    });
+  }, [tags]);
+
+  function toggleChecked(id: string) {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (checked.size === tags.length) setChecked(new Set());
+    else setChecked(new Set(tags.map((t) => t.id)));
+  }
 
   function startEdit(tag: Tag) {
     setEditingId(tag.id);
@@ -53,109 +83,165 @@ export function TagManager({
     });
   }
 
+  function handleBulkDelete() {
+    const ids = Array.from(checked);
+    if (ids.length === 0) return;
+    if (!confirm(`Delete ${ids.length} tag${ids.length === 1 ? "" : "s"}? Links to items will be removed; the items themselves are kept.`))
+      return;
+    startTransition(async () => {
+      const r = await bulkDeleteTagsAction(ids);
+      if (r.ok) {
+        toast.success(`Deleted ${r.count} tag${r.count === 1 ? "" : "s"}`);
+        setChecked(new Set());
+      }
+    });
+  }
+
   function openInDirectory(tag: Tag) {
     router.push(`/directory?tags=${tag.id}`);
   }
 
-  if (tags.length === 0) {
-    return null;
-  }
+  if (tags.length === 0) return null;
+
+  const allChecked = checked.size === tags.length;
+  const someChecked = checked.size > 0 && !allChecked;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-border">
-      <table className="w-full text-sm">
-        <thead className="bg-muted/40 text-left text-xs uppercase tracking-wider text-muted-foreground">
-          <tr>
-            <th className="px-4 py-2 font-semibold">Tag</th>
-            <th className="px-4 py-2 font-semibold">Used by</th>
-            <th className="px-4 py-2 font-semibold">Breakdown</th>
-            <th className="px-4 py-2 text-right font-semibold">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-border">
-          {tags.map((tag) => {
-            const u = usage[tag.id] ?? { total: 0, article: 0, document: 0, directoryItem: 0 };
-            return (
-              <tr key={tag.id} className="hover:bg-accent/30">
-                <td className="px-4 py-3">
-                  {editingId === tag.id ? (
-                    <div className="flex items-center gap-2">
-                      <Hash className="h-3.5 w-3.5 text-muted-foreground" />
-                      <Input
-                        autoFocus
-                        value={editValue}
-                        onChange={(e) => setEditValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitEdit();
-                          if (e.key === "Escape") setEditingId(null);
-                        }}
-                        className="h-7 text-sm"
-                      />
+    <>
+      <div className="overflow-hidden rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/40 text-left text-xs uppercase tracking-wider text-muted-foreground">
+            <tr>
+              <th className="px-3 py-2 w-10">
+                <Checkbox
+                  checked={allChecked ? true : someChecked ? "indeterminate" : false}
+                  onCheckedChange={toggleAll}
+                  aria-label="Select all tags"
+                />
+              </th>
+              <th className="px-4 py-2 font-semibold">Tag</th>
+              <th className="px-4 py-2 font-semibold">Used by</th>
+              <th className="px-4 py-2 font-semibold">Breakdown</th>
+              <th className="px-4 py-2 text-right font-semibold">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {tags.map((tag) => {
+              const u = usage[tag.id] ?? { total: 0, article: 0, document: 0, directoryItem: 0 };
+              const isChecked = checked.has(tag.id);
+              return (
+                <tr key={tag.id} className="hover:bg-accent/30">
+                  <td className="px-3 py-3">
+                    <Checkbox
+                      checked={isChecked}
+                      onCheckedChange={() => toggleChecked(tag.id)}
+                      aria-label={`Select ${tag.name}`}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    {editingId === tag.id ? (
+                      <div className="flex items-center gap-2">
+                        <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          autoFocus
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitEdit();
+                            if (e.key === "Escape") setEditingId(null);
+                          }}
+                          className="h-7 text-sm"
+                        />
+                        <button
+                          onClick={commitEdit}
+                          className="rounded p-1 text-green-600 hover:bg-accent"
+                          title="Save"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => setEditingId(null)}
+                          className="rounded p-1 text-muted-foreground hover:bg-accent"
+                          title="Cancel"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ) : (
                       <button
-                        onClick={commitEdit}
-                        className="rounded p-1 text-green-600 hover:bg-accent"
-                        title="Save"
+                        onClick={() => openInDirectory(tag)}
+                        className="inline-flex items-center gap-1.5 font-medium hover:underline"
+                        title="Filter Directory by this tag"
                       >
-                        <Check className="h-3.5 w-3.5" />
+                        <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+                        {tag.name}
                       </button>
-                      <button
-                        onClick={() => setEditingId(null)}
-                        className="rounded p-1 text-muted-foreground hover:bg-accent"
-                        title="Cancel"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => openInDirectory(tag)}
-                      className="inline-flex items-center gap-1.5 font-medium hover:underline"
-                      title="Filter Directory by this tag"
-                    >
-                      <Hash className="h-3.5 w-3.5 text-muted-foreground" />
-                      {tag.name}
-                    </button>
-                  )}
-                </td>
-                <td className="px-4 py-3 tabular-nums">{u.total}</td>
-                <td className="px-4 py-3 text-xs text-muted-foreground">
-                  {[
-                    u.directoryItem > 0 ? `${u.directoryItem} directory` : null,
-                    u.article > 0 ? `${u.article} article` : null,
-                    u.document > 0 ? `${u.document} document` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "—"}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  {editingId !== tag.id && (
-                    <div className="inline-flex gap-1">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7"
-                        onClick={() => startEdit(tag)}
-                        title="Rename"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="h-7 w-7 text-destructive hover:text-destructive"
-                        onClick={() => handleDelete(tag)}
-                        title="Delete"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 tabular-nums">{u.total}</td>
+                  <td className="px-4 py-3 text-xs text-muted-foreground">
+                    {[
+                      u.directoryItem > 0 ? `${u.directoryItem} directory` : null,
+                      u.article > 0 ? `${u.article} article` : null,
+                      u.document > 0 ? `${u.document} document` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "—"}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {editingId !== tag.id && (
+                      <div className="inline-flex gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={() => startEdit(tag)}
+                          title="Rename"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          onClick={() => handleDelete(tag)}
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {checked.size > 0 && (
+        <div className="pointer-events-auto fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur">
+          <span className="text-sm font-medium">{checked.size} selected</span>
+          <span className="h-4 w-px bg-border" />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-destructive hover:text-destructive"
+            onClick={handleBulkDelete}
+          >
+            <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+            Delete
+          </Button>
+          <span className="h-4 w-px bg-border" />
+          <button
+            onClick={() => setChecked(new Set())}
+            className="rounded-full p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Clear selection"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+    </>
   );
 }

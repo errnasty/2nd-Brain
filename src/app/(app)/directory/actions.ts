@@ -155,12 +155,45 @@ export async function renameDirectoryFolderAction(folderId: string, name: string
   return { ok: true as const };
 }
 
-export async function deleteDirectoryFolderAction(folderId: string) {
+/**
+ * Delete a Directory folder.
+ *  - mode = "unassign" (default): items inside become Unsorted (folder_id = null)
+ *  - mode = "cascade":            items inside are also deleted, along with
+ *                                 their polymorphic item_tags links
+ */
+export async function deleteDirectoryFolderAction(
+  folderId: string,
+  mode: "unassign" | "cascade" = "unassign",
+) {
   const { user } = await requireUser();
-  await db
-    .update(directoryItems)
-    .set({ folderId: null })
-    .where(and(eq(directoryItems.folderId, folderId), eq(directoryItems.userId, user.id)));
+
+  if (mode === "cascade") {
+    const inFolder = await db
+      .select({ id: directoryItems.id })
+      .from(directoryItems)
+      .where(and(eq(directoryItems.folderId, folderId), eq(directoryItems.userId, user.id)));
+    if (inFolder.length > 0) {
+      const ids = inFolder.map((r) => r.id);
+      await db
+        .delete(itemTags)
+        .where(
+          and(
+            eq(itemTags.userId, user.id),
+            eq(itemTags.itemKind, "directory_item"),
+            inArray(itemTags.itemId, ids),
+          ),
+        );
+      await db
+        .delete(directoryItems)
+        .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, ids)));
+    }
+  } else {
+    await db
+      .update(directoryItems)
+      .set({ folderId: null })
+      .where(and(eq(directoryItems.folderId, folderId), eq(directoryItems.userId, user.id)));
+  }
+
   await db
     .delete(directoryFolders)
     .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
@@ -242,6 +275,40 @@ export async function deleteDirectoryItemAction(itemId: string) {
     .delete(directoryItems)
     .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)));
   revalidatePath("/directory");
+}
+
+// ── Bulk actions on directory items ──────────────────────────────────
+
+export async function bulkDeleteDirectoryItemsAction(itemIds: string[]) {
+  const { user } = await requireUser();
+  if (itemIds.length === 0) return { ok: true as const, count: 0 };
+  await db
+    .delete(itemTags)
+    .where(
+      and(
+        eq(itemTags.userId, user.id),
+        eq(itemTags.itemKind, "directory_item"),
+        inArray(itemTags.itemId, itemIds),
+      ),
+    );
+  const result = await db
+    .delete(directoryItems)
+    .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)))
+    .returning({ id: directoryItems.id });
+  revalidatePath("/directory");
+  return { ok: true as const, count: result.length };
+}
+
+export async function bulkMoveDirectoryItemsAction(itemIds: string[], folderId: string | null) {
+  const { user } = await requireUser();
+  if (itemIds.length === 0) return { ok: true as const, count: 0 };
+  const result = await db
+    .update(directoryItems)
+    .set({ folderId, updatedAt: new Date() })
+    .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)))
+    .returning({ id: directoryItems.id });
+  revalidatePath("/directory");
+  return { ok: true as const, count: result.length };
 }
 
 // ── Save an article to the Directory ────────────────────────────────

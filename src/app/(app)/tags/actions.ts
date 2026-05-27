@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -51,4 +51,19 @@ export async function deleteTagAction(tagId: string) {
     .where(and(eq(tags.id, tagId), eq(tags.userId, user.id)));
   revalidatePath("/tags");
   revalidatePath("/directory");
+}
+
+export async function bulkDeleteTagsAction(tagIds: string[]) {
+  if (tagIds.length === 0) return { ok: true as const, count: 0 };
+  const { user } = await requireUser();
+  await db
+    .delete(itemTags)
+    .where(and(eq(itemTags.userId, user.id), inArray(itemTags.tagId, tagIds)));
+  const result = await db
+    .delete(tags)
+    .where(and(eq(tags.userId, user.id), inArray(tags.id, tagIds)))
+    .returning({ id: tags.id });
+  revalidatePath("/tags");
+  revalidatePath("/directory");
+  return { ok: true as const, count: result.length };
 }

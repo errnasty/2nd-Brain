@@ -1,31 +1,58 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FolderClosed, Inbox, Library, Plus, Wand2 } from "lucide-react";
+import { useDroppable } from "@dnd-kit/core";
+import {
+  FolderClosed,
+  Inbox,
+  Library,
+  Loader2,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+  Wand2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   autoOrganizeDirectoryAction,
   createDirectoryFolderAction,
+  deleteDirectoryFolderAction,
+  renameDirectoryFolderAction,
 } from "@/app/(app)/directory/actions";
 import type { DirectoryFolder } from "@/lib/db/schema";
+import { DeleteFolderDialog } from "./delete-folder-dialog";
+
+const UNSORTED = "unsorted";
 
 export function DirectoryNav({
   folders,
   folderCounts,
+  unsortedCount,
 }: {
   folders: DirectoryFolder[];
   folderCounts: Record<string, number>;
+  unsortedCount: number;
 }) {
   const router = useRouter();
   const params = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  const [folderToDelete, setFolderToDelete] = useState<DirectoryFolder | null>(null);
 
   const activeFolder = params.get("folder");
 
@@ -65,7 +92,8 @@ export function DirectoryNav({
     });
   }
 
-  const inbox = folders.find((f) => f.isInbox);
+  // Folders to render in the list. The deprecated [Inbox] (is_inbox=true)
+  // folder is hidden because we now use a virtual "Unsorted" tray instead.
   const regularFolders = folders.filter((f) => !f.isInbox);
 
   return (
@@ -79,9 +107,13 @@ export function DirectoryNav({
             className="h-7 w-7"
             onClick={runAutoOrganize}
             disabled={pending}
-            title="Auto-organize uncategorized items"
+            title={pending ? "Auto-organizing…" : "Auto-organize uncategorized items"}
           >
-            <Wand2 className="h-3.5 w-3.5" />
+            {pending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
           </Button>
         </div>
       </div>
@@ -89,6 +121,15 @@ export function DirectoryNav({
 
       <ScrollArea className="flex-1">
         <nav className="space-y-0.5 p-2 text-sm">
+          {/* Unsorted tray — items not yet placed into a folder.
+              Pinned to the top because it's the staging ground for sorting.
+              Acts as a drop target so items can be dragged back here. */}
+          <DroppableUnsorted
+            active={activeFolder === UNSORTED}
+            count={unsortedCount}
+            onClick={() => setFolder(UNSORTED)}
+          />
+
           <button
             onClick={() => setFolder(null)}
             className={cn(
@@ -101,26 +142,6 @@ export function DirectoryNav({
             <Library className="h-4 w-4" />
             <span className="flex-1 truncate">All items</span>
           </button>
-
-          {inbox && (
-            <button
-              onClick={() => setFolder(inbox.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
-                activeFolder === inbox.id
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/80 hover:bg-accent hover:text-accent-foreground",
-              )}
-            >
-              <Inbox className="h-4 w-4" />
-              <span className="flex-1 truncate">{inbox.name}</span>
-              {(folderCounts[inbox.id] ?? 0) > 0 && (
-                <span className="text-[11px] tabular-nums text-muted-foreground">
-                  {folderCounts[inbox.id]}
-                </span>
-              )}
-            </button>
-          )}
 
           {/* Folders header */}
           <div className="flex items-center justify-between px-3 pb-1 pt-4">
@@ -154,27 +175,178 @@ export function DirectoryNav({
           </div>
 
           {regularFolders.map((folder) => (
-            <button
+            <FolderRow
               key={folder.id}
-              onClick={() => setFolder(folder.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
-                activeFolder === folder.id
-                  ? "bg-accent text-accent-foreground"
-                  : "text-foreground/80 hover:bg-accent hover:text-accent-foreground",
-              )}
-            >
-              <FolderClosed className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1 truncate">{folder.name}</span>
-              {(folderCounts[folder.id] ?? 0) > 0 && (
-                <span className="text-[11px] tabular-nums text-muted-foreground">
-                  {folderCounts[folder.id]}
-                </span>
-              )}
-            </button>
+              folder={folder}
+              count={folderCounts[folder.id] ?? 0}
+              active={activeFolder === folder.id}
+              onSelect={() => setFolder(folder.id)}
+              onRequestDelete={() => setFolderToDelete(folder)}
+            />
           ))}
         </nav>
       </ScrollArea>
+
+      {folderToDelete && (
+        <DeleteFolderDialog
+          folder={folderToDelete}
+          itemCount={folderCounts[folderToDelete.id] ?? 0}
+          open={!!folderToDelete}
+          onOpenChange={(open) => !open && setFolderToDelete(null)}
+          onConfirm={(mode) => {
+            const f = folderToDelete;
+            setFolderToDelete(null);
+            startTransition(async () => {
+              await deleteDirectoryFolderAction(f.id, mode);
+              if (activeFolder === f.id) setFolder(null);
+              toast.success(
+                mode === "cascade"
+                  ? `Deleted "${f.name}" and its contents`
+                  : `Deleted "${f.name}". Items moved to Unsorted.`,
+              );
+            });
+          }}
+        />
+      )}
     </aside>
+  );
+}
+
+// ── Droppable Unsorted tray ───────────────────────────────────────────
+
+function DroppableUnsorted({
+  active,
+  count,
+  onClick,
+}: {
+  active: boolean;
+  count: number;
+  onClick: () => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: "folder:unsorted" });
+  return (
+    <button
+      ref={setNodeRef}
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/80 hover:bg-accent hover:text-accent-foreground",
+        isOver && "ring-2 ring-primary",
+      )}
+    >
+      <Inbox className="h-4 w-4" />
+      <span className="flex-1 truncate">Unsorted</span>
+      {count > 0 && (
+        <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
+      )}
+    </button>
+  );
+}
+
+// ── FolderRow with inline rename + context menu + drop target ────────
+
+function FolderRow({
+  folder,
+  count,
+  active,
+  onSelect,
+  onRequestDelete,
+}: {
+  folder: DirectoryFolder;
+  count: number;
+  active: boolean;
+  onSelect: () => void;
+  onRequestDelete: () => void;
+}) {
+  const [, startTransition] = useTransition();
+  const [renaming, setRenaming] = useState(false);
+  const [value, setValue] = useState(folder.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { setNodeRef, isOver } = useDroppable({ id: `folder:${folder.id}` });
+
+  function startRename() {
+    setValue(folder.name);
+    setRenaming(true);
+    setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 20);
+  }
+
+  function commitRename() {
+    setRenaming(false);
+    const next = value.trim();
+    if (!next || next === folder.name) return;
+    startTransition(async () => {
+      const r = await renameDirectoryFolderAction(folder.id, next);
+      if (!r.ok) toast.error(r.error);
+    });
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          ref={setNodeRef}
+          className={cn(
+            "group flex w-full items-center gap-2 rounded-md px-3 py-1.5 transition-colors",
+            active ? "bg-accent text-accent-foreground" : "text-foreground/80 hover:bg-accent hover:text-accent-foreground",
+            isOver && "ring-2 ring-primary",
+          )}
+        >
+          <button onClick={onSelect} className="flex flex-1 items-center gap-2 text-left min-w-0">
+            <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
+            {renaming ? (
+              <input
+                ref={inputRef}
+                className="flex-1 bg-transparent text-sm outline-none border-b border-primary py-0"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                  if (e.key === "Escape") setRenaming(false);
+                  e.stopPropagation();
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span className="flex-1 truncate">{folder.name}</span>
+            )}
+          </button>
+          {!renaming && count > 0 && (
+            <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>
+          )}
+          {!renaming && (
+            <button
+              onClick={startRename}
+              title="Rename / delete (right-click for menu)"
+              className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-background group-hover:opacity-100"
+              tabIndex={-1}
+            >
+              <MoreHorizontal className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuLabel className="max-w-[200px] truncate">{folder.name}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={startRename}>
+          <Pencil className="mr-2 h-3.5 w-3.5" />
+          Rename folder
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          className="text-destructive focus:text-destructive"
+          onClick={onRequestDelete}
+        >
+          <Trash2 className="mr-2 h-3.5 w-3.5" />
+          Delete folder…
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

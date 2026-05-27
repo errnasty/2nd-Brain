@@ -15,12 +15,14 @@ import { ArticleReader } from "./article-reader";
  */
 export function FeedsShell({
   items,
+  itemTagsById,
   view,
   feedId,
   folderId,
   orderedIds,
 }: {
   items: ArticleListItem[];
+  itemTagsById: Record<string, string[]>;
   view: "unread" | "all" | "starred";
   feedId: string | null;
   folderId: string | null;
@@ -63,6 +65,7 @@ export function FeedsShell({
     <>
       <ArticleList
         items={items}
+        itemTagsById={itemTagsById}
         selectedId={selectedId}
         view={view}
         feedId={feedId}

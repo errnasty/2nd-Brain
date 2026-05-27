@@ -2,13 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FileText, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { useDraggable } from "@dnd-kit/core";
+import { FileText, GripVertical, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { createNoteAction, uploadToDirectoryAction } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
+import { BulkActionBar } from "./bulk-action-bar";
+import type { DirectoryFolder } from "@/lib/db/schema";
 
 export type DirectoryListItem = {
   id: string;
@@ -33,15 +37,36 @@ const KIND_META: Record<DirectoryListItem["kind"], { label: string; icon: React.
 
 export function DirectoryShell({
   items,
+  itemTagsById,
+  folders,
   activeFolder,
   activeTagIds,
 }: {
   items: DirectoryListItem[];
+  itemTagsById: Record<string, string[]>;
+  folders: DirectoryFolder[];
   activeFolder: string | null;
   activeTagIds: string[];
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
+
+  // Clear bulk selection when the visible items list changes (folder/filter switch)
+  useEffect(() => {
+    setCheckedIds(new Set());
+  }, [activeFolder, activeTagIds.join(",")]);
+
+  const toggleChecked = useCallback((id: string) => {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => setCheckedIds(new Set()), []);
 
   // Hydrate selection from URL
   useEffect(() => {
@@ -142,7 +167,10 @@ export function DirectoryShell({
         ) : (
           <VirtualizedDirectoryList
             items={items}
+            itemTagsById={itemTagsById}
             selectedId={selectedId}
+            checkedIds={checkedIds}
+            onCheck={toggleChecked}
             onOpen={selectItem}
           />
         )}
@@ -153,17 +181,29 @@ export function DirectoryShell({
         item={selectedItem}
         onClose={() => selectItem(null)}
       />
+
+      <BulkActionBar
+        selectedIds={Array.from(checkedIds)}
+        folders={folders}
+        onClear={clearSelection}
+      />
     </>
   );
 }
 
 function VirtualizedDirectoryList({
   items,
+  itemTagsById,
   selectedId,
+  checkedIds,
+  onCheck,
   onOpen,
 }: {
   items: DirectoryListItem[];
+  itemTagsById: Record<string, string[]>;
   selectedId: string | null;
+  checkedIds: Set<string>;
+  onCheck: (id: string) => void;
   onOpen: (id: string | null) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -191,32 +231,108 @@ function VirtualizedDirectoryList({
               className="absolute left-0 top-0 w-full"
               style={{ transform: `translateY(${row.start}px)` }}
             >
-              <button
-                onClick={() => onOpen(item.id)}
-                className={cn(
-                  "block w-full px-4 py-3 text-left transition-colors",
-                  selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
-                )}
-              >
-                <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  {KIND_META[item.kind].icon}
-                  <span>{KIND_META[item.kind].label}</span>
-                  <span>·</span>
-                  <span>{formatRelativeTime(item.updatedAt)}</span>
-                </div>
-                <div className="text-[0.9rem] font-medium leading-snug tracking-[-0.005em]">
-                  {item.title}
-                </div>
-                {item.preview && (
-                  <div className="mt-1 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
-                    {item.preview}
-                  </div>
-                )}
-              </button>
+              <DraggableItemRow
+                item={item}
+                tags={itemTagsById[item.id] ?? []}
+                isSelected={selectedId === item.id}
+                isChecked={checkedIds.has(item.id)}
+                showCheckbox={checkedIds.size > 0}
+                onCheck={() => onCheck(item.id)}
+                onOpen={() => onOpen(item.id)}
+              />
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ── DraggableItemRow ─────────────────────────────────────────────────
+// The grip handle on the left is the explicit drag source so the user can
+// still click the row body to open the item without accidentally starting a
+// drag. The checkbox stops propagation so checking doesn't open the item.
+
+function DraggableItemRow({
+  item,
+  tags,
+  isSelected,
+  isChecked,
+  showCheckbox,
+  onCheck,
+  onOpen,
+}: {
+  item: DirectoryListItem;
+  tags: string[];
+  isSelected: boolean;
+  isChecked: boolean;
+  showCheckbox: boolean;
+  onCheck: () => void;
+  onOpen: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "group flex items-start gap-2 px-4 py-3 transition-colors",
+        isSelected ? "bg-accent" : "hover:bg-accent/50",
+        isDragging && "opacity-40",
+      )}
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        aria-label="Drag to move"
+        className="mt-1 cursor-grab text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 active:cursor-grabbing"
+        onClick={(e) => e.preventDefault()}
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+
+      <div
+        className={cn(
+          "mt-1 transition-opacity",
+          isChecked || showCheckbox ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Checkbox
+          checked={isChecked}
+          onCheckedChange={onCheck}
+          aria-label={`Select ${item.title}`}
+        />
+      </div>
+
+      <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          {KIND_META[item.kind].icon}
+          <span>{KIND_META[item.kind].label}</span>
+          <span>·</span>
+          <span>{formatRelativeTime(item.updatedAt)}</span>
+        </div>
+        <div className="text-[0.9rem] font-medium leading-snug tracking-[-0.005em]">
+          {item.title}
+        </div>
+        {item.preview && (
+          <div className="mt-1 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
+            {item.preview}
+          </div>
+        )}
+        {tags.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {tags.slice(0, 5).map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 text-[10px] text-muted-foreground"
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
+      </button>
     </div>
   );
 }

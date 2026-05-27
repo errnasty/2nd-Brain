@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { directoryItems, documents } from "@/lib/db/schema";
+import { directoryFolders, directoryItems, documents } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -24,7 +24,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       folderId: directoryItems.folderId,
       createdAt: directoryItems.createdAt,
       updatedAt: directoryItems.updatedAt,
-      // Join the doc kind so the viewer can choose markdown rendering for .md files
       docKind: documents.kind,
       docFullText: documents.fullText,
     })
@@ -34,5 +33,29 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     .limit(1);
 
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(row);
+
+  // Build a folder breadcrumb by walking up parent_id. Capped at 8 hops to
+  // protect against accidental cycles.
+  const breadcrumb: { id: string; name: string }[] = [];
+  if (row.folderId) {
+    const allFolders = await db
+      .select({
+        id: directoryFolders.id,
+        name: directoryFolders.name,
+        parentId: directoryFolders.parentId,
+      })
+      .from(directoryFolders)
+      .where(eq(directoryFolders.userId, user.id));
+    const byId = new Map(allFolders.map((f) => [f.id, f]));
+    let cur = byId.get(row.folderId) ?? null;
+    let safety = 0;
+    while (cur && safety < 8) {
+      breadcrumb.unshift({ id: cur.id, name: cur.name });
+      if (!cur.parentId) break;
+      cur = byId.get(cur.parentId) ?? null;
+      safety += 1;
+    }
+  }
+
+  return NextResponse.json({ ...row, breadcrumb });
 }

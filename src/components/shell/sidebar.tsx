@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Inbox,
   Library,
   Network,
   Rss,
@@ -20,7 +19,6 @@ const nav = [
   { href: "/directory", label: "Directory", icon: Library },
   { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/tags", label: "Tags", icon: Tag },
-  { href: "/", label: "Inbox", icon: Inbox },
 ];
 
 export function Sidebar({ userEmail }: { userEmail: string }) {

@@ -37,6 +37,7 @@ type OptimisticPatch = { id: string; readStatus?: ArticleListItem["readStatus"];
 
 export function ArticleList({
   items,
+  itemTagsById,
   selectedId,
   view,
   feedId,
@@ -44,6 +45,7 @@ export function ArticleList({
   onSelect,
 }: {
   items: ArticleListItem[];
+  itemTagsById: Record<string, string[]>;
   selectedId: string | null;
   view: "unread" | "all" | "starred";
   feedId: string | null;
@@ -197,6 +199,7 @@ export function ArticleList({
       ) : (
         <VirtualizedArticleList
           items={displayed}
+          itemTagsById={itemTagsById}
           selectedId={selectedId}
           onOpen={openArticle}
         />
@@ -212,10 +215,12 @@ export function ArticleList({
 
 function VirtualizedArticleList({
   items,
+  itemTagsById,
   selectedId,
   onOpen,
 }: {
   items: ArticleListItem[];
+  itemTagsById: Record<string, string[]>;
   selectedId: string | null;
   onOpen: (id: string) => void;
 }) {
@@ -280,6 +285,18 @@ function VirtualizedArticleList({
                   {item.excerpt && (
                     <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
                       {item.excerpt}
+                    </div>
+                  )}
+                  {itemTagsById[item.id] && itemTagsById[item.id].length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {itemTagsById[item.id].slice(0, 5).map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 text-[10px] text-muted-foreground"
+                        >
+                          #{tag}
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>

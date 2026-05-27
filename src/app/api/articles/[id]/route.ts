@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { articles, feeds } from "@/lib/db/schema";
+import { articles, feeds, folders } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -9,11 +9,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/articles/:id
- * Returns the article + its feed metadata.
- *
- * Used by the client-side reader pane so navigating between articles
- * (URL ?article changes) does NOT cause a full server re-render of the
- * article list. Big perf win on slower devices.
+ * Returns the article + its feed metadata + the feed's folder name (if any),
+ * so the article reader can show a "Feeds > Folder > Feed" breadcrumb.
  */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -31,11 +28,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       readStatus: articles.readStatus,
       starred: articles.starred,
       fullText: articles.fullText,
+      feedId: articles.feedId,
       feedTitle: feeds.title,
       feedIconUrl: feeds.iconUrl,
+      feedFolderId: feeds.folderId,
+      feedFolderName: folders.name,
     })
     .from(articles)
     .innerJoin(feeds, eq(feeds.id, articles.feedId))
+    .leftJoin(folders, eq(folders.id, feeds.folderId))
     .where(and(eq(articles.id, id), eq(articles.userId, user.id)))
     .limit(1);
 

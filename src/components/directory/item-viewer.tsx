@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { ExternalLink, Eye, Pencil, Trash2, X } from "lucide-react";
+import { ChevronRight, ExternalLink, Eye, Library, Pencil, Trash2, X } from "lucide-react";
+import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ type FullItem = {
   documentId: string | null;
   docKind: "pdf" | "markdown" | "text" | "epub" | null;
   docFullText: string | null;
+  breadcrumb: { id: string; name: string }[];
 };
 
 type ArticleContent = { fullText: string | null; excerpt: string | null; url: string };
@@ -39,6 +41,7 @@ export function ItemViewer({
   item: DirectoryListItem | null;
   onClose: () => void;
 }) {
+  const router = useRouter();
   const [, startTransition] = useTransition();
   const [mode, setMode] = useState<"preview" | "edit">("preview");
   const [title, setTitle] = useState("");
@@ -207,6 +210,40 @@ export function ItemViewer({
 
       <ScrollArea className="flex-1">
         <div className="mx-auto max-w-[68ch] px-6 py-8">
+          {/* Breadcrumb */}
+          {full && (
+            <nav
+              aria-label="Folder path"
+              className="not-prose mb-3 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+            >
+              <button
+                onClick={() => router.push("/directory")}
+                className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+              >
+                <Library className="h-3 w-3" />
+                Directory
+              </button>
+              {full.breadcrumb.length === 0 ? (
+                <>
+                  <ChevronRight className="h-3 w-3 opacity-50" />
+                  <span className="italic">Unsorted</span>
+                </>
+              ) : (
+                full.breadcrumb.map((b) => (
+                  <span key={b.id} className="inline-flex items-center gap-1">
+                    <ChevronRight className="h-3 w-3 opacity-50" />
+                    <button
+                      onClick={() => router.push(`/directory?folder=${b.id}`)}
+                      className="hover:text-foreground transition-colors"
+                    >
+                      {b.name}
+                    </button>
+                  </span>
+                ))
+              )}
+            </nav>
+          )}
+
           {/* Title */}
           {isNote && mode === "edit" ? (
             <Input

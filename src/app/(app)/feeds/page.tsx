@@ -1,6 +1,6 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { articles, feeds } from "@/lib/db/schema";
+import { articles, feeds, itemTags, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { FeedsShell } from "@/components/feeds/feeds-shell";
 
@@ -45,9 +45,33 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     .orderBy(desc(articles.publishDate))
     .limit(ARTICLE_LIMIT);
 
+  // Fetch tags per visible article. Articles aren't auto-tagged anymore,
+  // so this is usually empty — but if any legacy or manually-applied tags
+  // exist, render them conditionally in the list.
+  let articleTagsById: Record<string, string[]> = {};
+  if (rows.length > 0) {
+    const ids = rows.map((r) => r.id);
+    const tagRows = await db
+      .select({ itemId: itemTags.itemId, name: tags.name })
+      .from(itemTags)
+      .innerJoin(tags, eq(tags.id, itemTags.tagId))
+      .where(
+        and(
+          eq(itemTags.userId, user.id),
+          eq(itemTags.itemKind, "article"),
+          inArray(itemTags.itemId, ids),
+        ),
+      );
+    articleTagsById = tagRows.reduce((acc, r) => {
+      (acc[r.itemId] ??= []).push(r.name);
+      return acc;
+    }, {} as Record<string, string[]>);
+  }
+
   return (
     <FeedsShell
       items={rows}
+      itemTagsById={articleTagsById}
       view={view}
       feedId={sp.feed ?? null}
       folderId={sp.folder ?? null}

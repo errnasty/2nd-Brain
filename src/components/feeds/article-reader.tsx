@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
 import {
   BookmarkPlus,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Rss,
   Star,
   X,
 } from "lucide-react";
@@ -37,6 +39,8 @@ type ArticleData = {
   fullText: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
+  feedFolderId: string | null;
+  feedFolderName: string | null;
 };
 
 export function ArticleReader({
@@ -48,6 +52,7 @@ export function ArticleReader({
   orderedIds: string[];
   onSelect: (id: string | null) => void;
 }) {
+  const router = useRouter();
   const prefs = useReaderPrefs();
 
   const [article, setArticle] = useState<ArticleData | null>(null);
@@ -301,6 +306,35 @@ export function ArticleReader({
             </div>
           ) : (
             <>
+              {/* Folder breadcrumb */}
+              <nav
+                aria-label="Feed path"
+                className="not-prose mb-3 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+              >
+                <button
+                  onClick={() => router.push("/feeds")}
+                  className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                >
+                  <Rss className="h-3 w-3" />
+                  Feeds
+                </button>
+                {article.feedFolderName && article.feedFolderId && (
+                  <>
+                    <ChevronRight className="h-3 w-3 opacity-50" />
+                    <button
+                      onClick={() =>
+                        router.push(`/feeds?folder=${article.feedFolderId}`)
+                      }
+                      className="hover:text-foreground transition-colors"
+                    >
+                      {article.feedFolderName}
+                    </button>
+                  </>
+                )}
+                <ChevronRight className="h-3 w-3 opacity-50" />
+                <span>{article.feedTitle}</span>
+              </nav>
+
               <h1>{article.title}</h1>
               <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                 {article.author && (
