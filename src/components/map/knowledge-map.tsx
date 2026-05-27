@@ -37,7 +37,13 @@ type Detail = {
 export function KnowledgeMap() {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
-  const [data, setData] = useState<{ nodes: MapNode[]; links: MapLink[] } | null>(null);
+  const [data, setData] = useState<{
+    nodes: MapNode[];
+    links: MapLink[];
+    truncated?: boolean;
+    total?: number;
+    shown?: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dims, setDims] = useState({ width: 0, height: 0 });
@@ -45,16 +51,39 @@ export function KnowledgeMap() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  // Fetch graph
+  // Fetch graph with session-storage cache (60s TTL). Avoids the multi-MB
+  // payload on every navigation to /map.
   useEffect(() => {
+    const CACHE_KEY = "knowledgeMap.cache.v1";
+    const CACHE_TTL_MS = 60_000;
+
     let aborted = false;
+    try {
+      const raw = sessionStorage.getItem(CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { at: number; data: typeof data };
+        if (Date.now() - parsed.at < CACHE_TTL_MS && parsed.data) {
+          setData(parsed.data);
+          setLoading(false);
+        }
+      }
+    } catch {
+      // ignore cache errors
+    }
+
     fetch("/api/map", { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then((d) => {
-        if (!aborted) setData(d);
+        if (aborted) return;
+        setData(d);
+        try {
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data: d }));
+        } catch {
+          // quota exceeded — silently ignore
+        }
       })
       .catch((err) => {
         if (!aborted) setError(err.message ?? "Failed to load");
@@ -153,19 +182,27 @@ export function KnowledgeMap() {
             nodeColor={itemNodeColor}
             nodeVal={itemNodeSize}
             nodeLabel={nodeLabel}
-            linkColor={() => "rgba(120,120,120,0.25)"}
-            linkWidth={0.6}
+            linkColor={() => "rgba(120,120,120,0.22)"}
+            linkWidth={0.5}
             backgroundColor="transparent"
-            cooldownTime={3000}
+            cooldownTime={1500}
+            warmupTicks={20}
+            d3AlphaDecay={0.04}
+            d3VelocityDecay={0.35}
             onNodeClick={onNodeClick as (n: object) => void}
-            nodeCanvasObjectMode={() => "after"}
+            nodeCanvasObjectMode={(node) => {
+              // Only paint the custom label layer when the user is zoomed in enough.
+              // At low zoom we let the library's default circle render — that means
+              // labels skip painting entirely on the most-expensive frames.
+              return "after";
+            }}
             nodeCanvasObject={(node, ctx, globalScale) => {
+              if (globalScale < 1.4) return; // bail before any string allocation
               const n = node as MapNode;
-              const label = n.label.length > 40 ? n.label.slice(0, 40) + "…" : n.label;
+              const label = n.label.length > 36 ? n.label.slice(0, 36) + "…" : n.label;
               const fontSize = 11 / globalScale;
-              if (globalScale < 1.2) return; // only show labels when zoomed in enough
-              ctx.font = `${fontSize}px Georgia, 'Times New Roman', serif`;
-              ctx.fillStyle = "rgba(160, 160, 160, 0.9)";
+              ctx.font = `${fontSize}px Georgia, serif`;
+              ctx.fillStyle = "rgba(160, 160, 160, 0.85)";
               ctx.textAlign = "center";
               ctx.textBaseline = "top";
               ctx.fillText(label, n.x ?? 0, (n.y ?? 0) + 6);
@@ -182,6 +219,11 @@ export function KnowledgeMap() {
             <LegendDot color="#10b981" label="Uploaded doc" />
             <LegendDot color="#9ca3af" label="User note" />
           </div>
+          {data?.truncated && (
+            <div className="mt-2 border-t border-border pt-1 text-[10px] text-muted-foreground">
+              Showing top {data.shown} of {data.total} most-connected nodes
+            </div>
+          )}
         </div>
       </div>
 

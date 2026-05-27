@@ -16,6 +16,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { routeToFolder } from "@/lib/ai/routing";
+import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
 
@@ -190,9 +191,8 @@ export async function createNoteAction(input: { title: string; content?: string;
     })
     .returning({ id: directoryItems.id });
 
-  // Auto-tag in the background (best-effort, doesn't block the response).
-  // We await Promise.resolve so the work is scheduled but we still return fast.
-  void autoTagDirectoryItem(user.id, row.id);
+  // Notes are NOT auto-tagged — the user controls their own taxonomy here.
+  // Use the manual "Tag with AI" action on a note to trigger tagging on demand.
 
   revalidatePath("/directory");
   return { ok: true as const, itemId: row.id };
@@ -374,7 +374,29 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
 // directory_folder via Claude. Anything without a confident match goes to
 // the [Inbox] folder (lazily created).
 
-export async function autoOrganizeDirectoryAction() {
+export type OrganizeResult = {
+  ok: true;
+  routed: number;
+  total: number;
+  foldersCreated: string[];
+};
+
+/**
+ * Smart Auto-Organize.
+ *
+ * One Claude call (Haiku) that sees ALL uncategorized items at once plus the
+ * user's existing folder list, then returns commands:
+ *   - `assign`        — place an existing item into an existing folder
+ *   - `create_folder` — create a NEW folder for a cluster of items sharing a
+ *                       distinct topic that no existing folder covers
+ *
+ * Steps:
+ *   1. Run Claude once on the full batch.
+ *   2. Execute `create_folder` commands first (so the folder rows exist).
+ *   3. Resolve assign + create_folder destinations, then update items in batch.
+ *   4. Items the model didn't return commands for are simply left unsorted.
+ */
+export async function autoOrganizeDirectoryAction(): Promise<OrganizeResult> {
   const { user } = await requireUser();
 
   const [unsorted, allFolders] = await Promise.all([
@@ -382,63 +404,104 @@ export async function autoOrganizeDirectoryAction() {
       .select({
         id: directoryItems.id,
         title: directoryItems.title,
-        content: directoryItems.content,
+        kind: directoryItems.kind,
+        // Truncated preview only — keeps the prompt cheap
+        preview: sql<string | null>`substring(${directoryItems.content}, 1, 400)`.as("preview"),
       })
       .from(directoryItems)
       .where(and(eq(directoryItems.userId, user.id), sql`${directoryItems.folderId} is null`))
-      .limit(200),
+      .limit(80),
     db.select().from(directoryFolders).where(eq(directoryFolders.userId, user.id)),
   ]);
 
-  if (unsorted.length === 0) return { ok: true as const, routed: 0, total: 0 };
+  if (unsorted.length === 0)
+    return { ok: true, routed: 0, total: 0, foldersCreated: [] };
 
-  // Ensure [Inbox] exists
-  let inbox = allFolders.find((f) => f.isInbox);
-  if (!inbox) {
-    const [created] = await db
-      .insert(directoryFolders)
-      .values({ userId: user.id, name: "[Inbox]", isInbox: true })
-      .onConflictDoNothing({ target: [directoryFolders.userId, directoryFolders.name] })
-      .returning();
-    inbox =
-      created ??
-      (
-        await db
+  const existingFolderNames = allFolders.filter((f) => !f.isInbox).map((f) => f.name);
+
+  const aiItems: OrganizeItem[] = unsorted.map((u) => ({
+    id: u.id,
+    title: u.title,
+    preview: u.preview ?? "",
+    kind: u.kind,
+  }));
+
+  const commands = await organizeItems(aiItems, existingFolderNames);
+
+  // ── 1. Create any new folders the model requested ──────────────────
+  const folderNameToId = new Map<string, string>();
+  for (const f of allFolders) folderNameToId.set(f.name, f.id);
+
+  const foldersCreated: string[] = [];
+  for (const cmd of commands) {
+    if (cmd.action !== "create_folder") continue;
+    if (folderNameToId.has(cmd.folderName)) continue; // race / dup
+    try {
+      const [created] = await db
+        .insert(directoryFolders)
+        .values({ userId: user.id, name: cmd.folderName })
+        .onConflictDoNothing({ target: [directoryFolders.userId, directoryFolders.name] })
+        .returning();
+      if (created) {
+        folderNameToId.set(cmd.folderName, created.id);
+        foldersCreated.push(cmd.folderName);
+      } else {
+        // Folder already existed under that name — fetch it
+        const [existing] = await db
           .select()
           .from(directoryFolders)
-          .where(and(eq(directoryFolders.userId, user.id), eq(directoryFolders.isInbox, true)))
-          .limit(1)
-      )[0];
+          .where(
+            and(eq(directoryFolders.userId, user.id), eq(directoryFolders.name, cmd.folderName)),
+          )
+          .limit(1);
+        if (existing) folderNameToId.set(existing.name, existing.id);
+      }
+    } catch {
+      // ignore individual folder creation failures
+    }
   }
-  const inboxId = inbox?.id;
 
-  const candidateFolderNames = allFolders.filter((f) => !f.isInbox).map((f) => f.name);
+  // ── 2. Build the itemId → folderId routing map ─────────────────────
+  const validIds = new Set(unsorted.map((u) => u.id));
+  const itemToFolder = new Map<string, string>();
 
-  let routedCount = 0;
-  // Sequential to avoid hitting Claude rate limits; small batch size is fine
-  for (const item of unsorted) {
-    const routing = await routeToFolder(
-      item.title,
-      (item.content ?? "").slice(0, 800),
-      candidateFolderNames,
-    );
-    let targetId: string | null = null;
-    if (routing.folderName) {
-      const match = allFolders.find((f) => f.name === routing.folderName);
-      if (match) targetId = match.id;
+  for (const cmd of commands) {
+    if (cmd.action === "assign") {
+      const folderId = folderNameToId.get(cmd.folderName);
+      if (folderId && validIds.has(cmd.itemId)) {
+        itemToFolder.set(cmd.itemId, folderId);
+      }
+    } else if (cmd.action === "create_folder") {
+      const folderId = folderNameToId.get(cmd.folderName);
+      if (!folderId) continue;
+      for (const itemId of cmd.itemIds) {
+        if (validIds.has(itemId)) itemToFolder.set(itemId, folderId);
+      }
     }
-    if (!targetId && inboxId) targetId = inboxId;
-    if (targetId) {
-      await db
-        .update(directoryItems)
-        .set({ folderId: targetId })
-        .where(and(eq(directoryItems.id, item.id), eq(directoryItems.userId, user.id)));
-      routedCount += 1;
-    }
+  }
+
+  // ── 3. Apply the routing — one UPDATE per destination folder ──────
+  const byDest = new Map<string, string[]>();
+  for (const [itemId, folderId] of itemToFolder) {
+    const list = byDest.get(folderId) ?? [];
+    list.push(itemId);
+    byDest.set(folderId, list);
+  }
+
+  for (const [folderId, itemIds] of byDest) {
+    await db
+      .update(directoryItems)
+      .set({ folderId })
+      .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)));
   }
 
   revalidatePath("/directory");
-  return { ok: true as const, routed: routedCount, total: unsorted.length };
+  return {
+    ok: true,
+    routed: itemToFolder.size,
+    total: unsorted.length,
+    foldersCreated,
+  };
 }
 
 // ── Tag filtering ────────────────────────────────────────────────────

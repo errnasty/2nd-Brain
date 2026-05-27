@@ -9,12 +9,26 @@ import { toast } from "sonner";
 
 const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
 
-const DEFAULT_PROMPT_PLACEHOLDER = `Leave blank to use the default editor prompt.
+const DEFAULT_PROMPT_PLACEHOLDER = `You are my personal Second Brain curator. I already receive a highly detailed daily news summary via email, so your goal here is NOT to summarize everything. Your goal is rapid triage and discovery.
 
-Examples:
-• "Brief in the style of Stratechery — focus on strategy and competitive dynamics."
-• "Highlight only AI safety and policy stories. Skip product launches."
-• "Write in bullet points only. Maximum 200 words total."`;
+Review the provided JSON list of my unread articles and newly uploaded documents from the last 24 hours. Generate a short, punchy dashboard using the following strict format:
+
+### 🎯 High-Priority (Read Now)
+Identify the 1-3 most substantial, unique, or high-signal pieces. 
+* Provide the title (linked).
+* Write a 1-sentence hook explaining exactly *why* it's worth my time. 
+* List its primary tag.
+
+### 🗂️ Thematic Clusters (For Batch Reading)
+Group the remaining worthwhile articles into broad themes (e.g., "4 items on AI Tools", "2 items on Macroeconomics"). 
+* Do not summarize the individual articles. 
+* Just list the theme, the article count, and a 1-sentence summary of the overarching trend across those articles.
+
+### 🗑️ Quick Clear (Low Signal / Skip)
+Identify any articles that appear to be clickbait, standard PR announcements, highly repetitive news, or low-value fluff. 
+* List their titles so I can confidently mark them as read or delete them without opening them.
+
+Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
 
 export function DailyBrief() {
   const [content, setContent] = useState("");

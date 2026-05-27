@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { directoryItems, itemTags, tags } from "@/lib/db/schema";
+import { directoryItems, itemTags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { DirectoryShell } from "@/components/directory/directory-shell";
 
@@ -37,7 +37,6 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
       return (
         <DirectoryShell
           items={[]}
-          itemTagsById={{}}
           activeFolder={sp.folder ?? null}
           activeTagIds={tagIds}
         />
@@ -49,11 +48,13 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
   if (sp.folder) conds.push(eq(directoryItems.folderId, sp.folder));
   if (tagFilteredIds) conds.push(inArray(directoryItems.id, tagFilteredIds));
 
+  // List view doesn't need full content — fetch only a short preview.
+  // The viewer pulls full content on demand via /api/directory/:id.
   const items = await db
     .select({
       id: directoryItems.id,
       title: directoryItems.title,
-      content: directoryItems.content,
+      preview: sql<string | null>`substring(${directoryItems.content}, 1, 240)`.as("preview"),
       kind: directoryItems.kind,
       folderId: directoryItems.folderId,
       sourceUrl: directoryItems.sourceUrl,
@@ -67,35 +68,9 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
     .orderBy(desc(directoryItems.updatedAt))
     .limit(ITEM_LIMIT);
 
-  // Fetch tags per item — keyed map
-  let itemTagsById: Record<string, string[]> = {};
-  if (items.length > 0) {
-    const ids = items.map((i) => i.id);
-    const tagJoin = await db
-      .select({
-        itemId: itemTags.itemId,
-        tagName: tags.name,
-      })
-      .from(itemTags)
-      .innerJoin(tags, eq(tags.id, itemTags.tagId))
-      .where(
-        and(
-          eq(itemTags.userId, user.id),
-          eq(itemTags.itemKind, "directory_item"),
-          inArray(itemTags.itemId, ids),
-        ),
-      );
-
-    itemTagsById = tagJoin.reduce((acc, row) => {
-      (acc[row.itemId] ??= []).push(row.tagName);
-      return acc;
-    }, {} as Record<string, string[]>);
-  }
-
   return (
     <DirectoryShell
       items={items}
-      itemTagsById={itemTagsById}
       activeFolder={sp.folder ?? null}
       activeTagIds={tagIds}
     />

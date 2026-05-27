@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { directoryItems } from "@/lib/db/schema";
+import { directoryItems, documents } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -24,8 +24,12 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       folderId: directoryItems.folderId,
       createdAt: directoryItems.createdAt,
       updatedAt: directoryItems.updatedAt,
+      // Join the doc kind so the viewer can choose markdown rendering for .md files
+      docKind: documents.kind,
+      docFullText: documents.fullText,
     })
     .from(directoryItems)
+    .leftJoin(documents, eq(documents.id, directoryItems.documentId))
     .where(and(eq(directoryItems.id, id), eq(directoryItems.userId, user.id)))
     .limit(1);
 

@@ -3,11 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { CheckCheck, Loader2, Search, Star, X } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   markAllReadAction,
@@ -186,78 +186,122 @@ export function ArticleList({
       </div>
       <Separator />
 
-      <ScrollArea className="flex-1">
-        {displayed.length === 0 ? (
-          <div className="p-6 text-sm text-muted-foreground">
-            {showingSearch ? (
-              <>No articles match &ldquo;{query}&rdquo;.</>
-            ) : (
-              <>No articles. Try syncing your feeds.</>
-            )}
-          </div>
-        ) : (
-          <ul className="divide-y divide-border">
-            {displayed.map((item) => (
-              <li key={item.id}>
-                <button
-                  onClick={() => openArticle(item.id)}
-                  className={cn(
-                    "flex w-full gap-3 px-4 py-4 text-left transition-colors",
-                    selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
-                    item.readStatus === "read" && "opacity-55",
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      {item.feedIconUrl ? (
-                        <Image
-                          src={item.feedIconUrl}
-                          alt=""
-                          width={12}
-                          height={12}
-                          className="rounded-sm"
-                          unoptimized
-                        />
-                      ) : null}
-                      <span className="truncate">{item.feedTitle}</span>
-                      <span>·</span>
-                      <span className="shrink-0">{formatRelativeTime(item.publishDate)}</span>
-                      {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
-                    </div>
-                    <div
-                      className={cn(
-                        "text-[0.85rem] leading-snug tracking-[-0.005em]",
-                        item.readStatus === "unread" ? "font-semibold" : "font-normal text-foreground/80",
-                      )}
-                    >
-                      {item.title}
-                    </div>
-                    {item.excerpt && (
-                      <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
-                        {item.excerpt}
-                      </div>
-                    )}
-                  </div>
-                  {item.imageUrl && (
-                    <Image
-                      src={item.imageUrl}
-                      alt=""
-                      width={64}
-                      height={64}
-                      sizes="64px"
-                      className="h-16 w-16 shrink-0 rounded object-cover"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).style.display = "none";
-                      }}
-                    />
-                  )}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </ScrollArea>
+      {displayed.length === 0 ? (
+        <div className="p-6 text-sm text-muted-foreground">
+          {showingSearch ? (
+            <>No articles match &ldquo;{query}&rdquo;.</>
+          ) : (
+            <>No articles. Try syncing your feeds.</>
+          )}
+        </div>
+      ) : (
+        <VirtualizedArticleList
+          items={displayed}
+          selectedId={selectedId}
+          onOpen={openArticle}
+        />
+      )}
     </section>
+  );
+}
+
+// ── Virtualized rows ──────────────────────────────────────────────────
+// Renders only the rows in view + a small overscan buffer. Items vary in
+// height because some have excerpts/images, so we use dynamic measurement
+// via measureElement instead of a fixed estimate.
+
+function VirtualizedArticleList({
+  items,
+  selectedId,
+  onOpen,
+}: {
+  items: ArticleListItem[];
+  selectedId: string | null;
+  onOpen: (id: string) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 112,
+    overscan: 6,
+    measureElement: (el) => el.getBoundingClientRect().height,
+  });
+
+  return (
+    <div ref={parentRef} className="flex-1 overflow-y-auto">
+      <div
+        className="relative w-full divide-y divide-border"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        {virtualizer.getVirtualItems().map((row) => {
+          const item = items[row.index];
+          return (
+            <div
+              key={item.id}
+              data-index={row.index}
+              ref={virtualizer.measureElement}
+              className="absolute left-0 top-0 w-full"
+              style={{ transform: `translateY(${row.start}px)` }}
+            >
+              <button
+                onClick={() => onOpen(item.id)}
+                className={cn(
+                  "flex w-full gap-3 px-4 py-4 text-left transition-colors",
+                  selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
+                  item.readStatus === "read" && "opacity-55",
+                )}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    {item.feedIconUrl ? (
+                      <Image
+                        src={item.feedIconUrl}
+                        alt=""
+                        width={12}
+                        height={12}
+                        className="rounded-sm"
+                        unoptimized
+                      />
+                    ) : null}
+                    <span className="truncate">{item.feedTitle}</span>
+                    <span>·</span>
+                    <span className="shrink-0">{formatRelativeTime(item.publishDate)}</span>
+                    {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
+                  </div>
+                  <div
+                    className={cn(
+                      "text-[0.85rem] leading-snug tracking-[-0.005em]",
+                      item.readStatus === "unread" ? "font-semibold" : "font-normal text-foreground/80",
+                    )}
+                  >
+                    {item.title}
+                  </div>
+                  {item.excerpt && (
+                    <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
+                      {item.excerpt}
+                    </div>
+                  )}
+                </div>
+                {item.imageUrl && (
+                  <Image
+                    src={item.imageUrl}
+                    alt=""
+                    width={64}
+                    height={64}
+                    sizes="64px"
+                    className="h-16 w-16 shrink-0 rounded object-cover"
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = "none";
+                    }}
+                  />
+                )}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

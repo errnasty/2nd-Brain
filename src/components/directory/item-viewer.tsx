@@ -18,16 +18,25 @@ import {
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
 
+type FullItem = {
+  id: string;
+  title: string;
+  kind: "saved_article" | "uploaded_document" | "user_note";
+  content: string | null;
+  sourceUrl: string | null;
+  articleId: string | null;
+  documentId: string | null;
+  docKind: "pdf" | "markdown" | "text" | "epub" | null;
+  docFullText: string | null;
+};
+
 type ArticleContent = { fullText: string | null; excerpt: string | null; url: string };
-type DocumentContent = { fullText: string | null };
 
 export function ItemViewer({
   item,
-  initialTags,
   onClose,
 }: {
   item: DirectoryListItem | null;
-  initialTags: string[];
   onClose: () => void;
 }) {
   const [, startTransition] = useTransition();
@@ -35,59 +44,71 @@ export function ItemViewer({
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [full, setFull] = useState<FullItem | null>(null);
+  const [fullLoading, setFullLoading] = useState(false);
   const [articleData, setArticleData] = useState<ArticleContent | null>(null);
-  const [docData, setDocData] = useState<DocumentContent | null>(null);
-  const [externalLoading, setExternalLoading] = useState(false);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
 
-  // Hydrate from item
+  // Fetch full content from /api/directory/:id whenever the selected item changes.
   useEffect(() => {
-    if (!item) return;
+    if (!item) {
+      setFull(null);
+      setArticleData(null);
+      return;
+    }
     setTitle(item.title);
-    setContent(item.content ?? "");
+    setContent("");
     setDirty(false);
     setMode(item.kind === "user_note" ? "edit" : "preview");
-    lastSavedRef.current = { title: item.title, content: item.content ?? "" };
     setArticleData(null);
-    setDocData(null);
+    setFullLoading(true);
 
-    // Fetch external content for saved articles / uploaded docs
-    if (item.kind === "saved_article" && item.articleId) {
-      let aborted = false;
-      setExternalLoading(true);
-      fetch(`/api/articles/${item.articleId}`, { cache: "no-store" })
-        .then(async (res) => (res.ok ? res.json() : null))
-        .then((data) => {
-          if (aborted || !data) return;
-          setArticleData({
-            fullText: data.fullText ?? null,
-            excerpt: data.excerpt ?? null,
-            url: data.url,
-          });
-          // Trigger extraction if missing
-          if (!data.fullText) {
-            fetch(`/api/articles/${item.articleId}/full-text`, { method: "POST" })
-              .then((r) => (r.ok ? r.json() : null))
-              .then((res) => {
-                if (aborted || !res?.content) return;
-                setArticleData((prev) => (prev ? { ...prev, fullText: res.content } : prev));
-              });
-          }
-        })
-        .finally(() => !aborted && setExternalLoading(false));
-      return () => {
-        aborted = true;
-      };
-    }
+    let aborted = false;
+    fetch(`/api/directory/${item.id}`, { cache: "no-store" })
+      .then(async (r) => (r.ok ? ((await r.json()) as FullItem) : null))
+      .then((data) => {
+        if (aborted || !data) return;
+        setFull(data);
+        if (data.kind === "user_note") {
+          setContent(data.content ?? "");
+          lastSavedRef.current = { title: data.title, content: data.content ?? "" };
+        }
+      })
+      .finally(() => !aborted && setFullLoading(false));
 
-    if (item.kind === "uploaded_document" && item.documentId) {
-      // Document content already pasted into directory_items.content (first 10k chars).
-      // For full content, we could fetch from /api/documents/:id later if needed.
-      setDocData({ fullText: item.content });
-    }
+    return () => {
+      aborted = true;
+    };
   }, [item?.id]);
 
-  // Debounced save for notes
+  // For saved articles, hit the existing article endpoints for the rendered body.
+  useEffect(() => {
+    if (!full || full.kind !== "saved_article" || !full.articleId) return;
+    let aborted = false;
+    fetch(`/api/articles/${full.articleId}`, { cache: "no-store" })
+      .then(async (res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (aborted || !data) return;
+        setArticleData({
+          fullText: data.fullText ?? null,
+          excerpt: data.excerpt ?? null,
+          url: data.url,
+        });
+        if (!data.fullText) {
+          fetch(`/api/articles/${full.articleId}/full-text`, { method: "POST" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((res) => {
+              if (aborted || !res?.content) return;
+              setArticleData((prev) => (prev ? { ...prev, fullText: res.content } : prev));
+            });
+        }
+      });
+    return () => {
+      aborted = true;
+    };
+  }, [full?.id, full?.kind, full?.articleId]);
+
+  // Debounced autosave for notes
   useEffect(() => {
     if (!item || item.kind !== "user_note") return;
     if (!dirty) return;
@@ -127,6 +148,8 @@ export function ItemViewer({
   const isNote = item.kind === "user_note";
   const isArticle = item.kind === "saved_article";
   const isDoc = item.kind === "uploaded_document";
+  const isMarkdownDoc = isDoc && full?.docKind === "markdown";
+  const docBody = full?.docFullText ?? full?.content ?? "";
 
   return (
     <section className="flex flex-1 flex-col overflow-hidden">
@@ -196,23 +219,17 @@ export function ItemViewer({
             <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
           )}
 
-          {/* Tags */}
-          {initialTags.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {initialTags.map((tag) => (
-                <span
-                  key={tag}
-                  className="inline-flex items-center rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-medium text-accent-foreground"
-                >
-                  #{tag}
-                </span>
-              ))}
-            </div>
-          )}
-
           <Separator className="my-6" />
 
           {/* Body */}
+          {fullLoading && !isNote && (
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-5/6" />
+            </div>
+          )}
+
           {isNote && mode === "edit" && (
             <Textarea
               value={content}
@@ -232,15 +249,9 @@ export function ItemViewer({
             </div>
           )}
 
-          {isArticle && (
+          {isArticle && !fullLoading && (
             <div className="prose-reader">
-              {externalLoading && !articleData ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-4 w-3/4" />
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-5/6" />
-                </div>
-              ) : articleData?.fullText ? (
+              {articleData?.fullText ? (
                 <div dangerouslySetInnerHTML={{ __html: articleData.fullText }} />
               ) : articleData?.excerpt ? (
                 <p>{articleData.excerpt}</p>
@@ -250,11 +261,13 @@ export function ItemViewer({
             </div>
           )}
 
-          {isDoc && (
+          {isDoc && !fullLoading && (
             <div className="prose-reader">
-              {docData?.fullText ? (
+              {isMarkdownDoc && docBody ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{docBody}</ReactMarkdown>
+              ) : docBody ? (
                 <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
-                  {docData.fullText}
+                  {docBody}
                 </div>
               ) : (
                 <p className="text-muted-foreground italic">No text extracted from this document.</p>

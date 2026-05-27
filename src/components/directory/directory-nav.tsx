@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { FolderClosed, Hash, Inbox, Library, Plus, Wand2, X } from "lucide-react";
+import { FolderClosed, Inbox, Library, Plus, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -12,19 +12,13 @@ import {
   autoOrganizeDirectoryAction,
   createDirectoryFolderAction,
 } from "@/app/(app)/directory/actions";
-import type { DirectoryFolder, Tag as TagRow } from "@/lib/db/schema";
-
-const ACTIVE_TAGS_KEY = "directory.activeTags.v1";
+import type { DirectoryFolder } from "@/lib/db/schema";
 
 export function DirectoryNav({
   folders,
-  tags,
-  tagCounts,
   folderCounts,
 }: {
   folders: DirectoryFolder[];
-  tags: TagRow[];
-  tagCounts: Record<string, number>;
   folderCounts: Record<string, number>;
 }) {
   const router = useRouter();
@@ -34,31 +28,11 @@ export function DirectoryNav({
   const [newFolderName, setNewFolderName] = useState("");
 
   const activeFolder = params.get("folder");
-  const activeTagsParam = params.get("tags") ?? "";
-  const activeTags = new Set(activeTagsParam.split(",").filter(Boolean));
 
   function setFolder(folderId: string | null) {
     const sp = new URLSearchParams(params.toString());
     if (folderId) sp.set("folder", folderId);
     else sp.delete("folder");
-    sp.delete("item");
-    router.push(`/directory?${sp.toString()}`);
-  }
-
-  function toggleTag(tagId: string) {
-    const next = new Set(activeTags);
-    if (next.has(tagId)) next.delete(tagId);
-    else next.add(tagId);
-    const sp = new URLSearchParams(params.toString());
-    if (next.size > 0) sp.set("tags", Array.from(next).join(","));
-    else sp.delete("tags");
-    sp.delete("item");
-    router.push(`/directory?${sp.toString()}`);
-  }
-
-  function clearTags() {
-    const sp = new URLSearchParams(params.toString());
-    sp.delete("tags");
     sp.delete("item");
     router.push(`/directory?${sp.toString()}`);
   }
@@ -78,9 +52,15 @@ export function DirectoryNav({
   function runAutoOrganize() {
     startTransition(async () => {
       const r = await autoOrganizeDirectoryAction();
-      if (r.ok) {
-        if (r.total === 0) toast.success("Nothing to organize — every item is already in a folder");
-        else toast.success(`Auto-organized ${r.routed} of ${r.total} items`);
+      if (!r.ok) return;
+      if (r.total === 0) {
+        toast.success("Nothing to organize — every item is already in a folder");
+      } else {
+        const folderMsg =
+          r.foldersCreated.length > 0
+            ? ` · created ${r.foldersCreated.length} folder${r.foldersCreated.length === 1 ? "" : "s"}: ${r.foldersCreated.join(", ")}`
+            : "";
+        toast.success(`Auto-organized ${r.routed} of ${r.total} items${folderMsg}`);
       }
     });
   }
@@ -193,51 +173,6 @@ export function DirectoryNav({
               )}
             </button>
           ))}
-
-          {/* Tag filter */}
-          {tags.length > 0 && (
-            <>
-              <div className="flex items-center justify-between px-3 pb-1 pt-5">
-                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Tags
-                </span>
-                {activeTags.size > 0 && (
-                  <button
-                    onClick={clearTags}
-                    className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-                    title="Clear tag filter"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-              <div className="space-y-0.5">
-                {tags.map((tag) => {
-                  const active = activeTags.has(tag.id);
-                  const count = tagCounts[tag.id] ?? 0;
-                  if (count === 0 && !active) return null;
-                  return (
-                    <button
-                      key={tag.id}
-                      onClick={() => toggleTag(tag.id)}
-                      className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-3 py-1 text-left transition-colors",
-                        active
-                          ? "bg-accent text-accent-foreground"
-                          : "text-foreground/70 hover:bg-accent/60 hover:text-foreground",
-                      )}
-                    >
-                      <Hash className="h-3 w-3 text-muted-foreground" />
-                      <span className="flex-1 truncate text-[13px]">{tag.name}</span>
-                      <span className="text-[11px] tabular-nums text-muted-foreground">
-                        {count}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
         </nav>
       </ScrollArea>
     </aside>
