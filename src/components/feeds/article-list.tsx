@@ -112,33 +112,44 @@ export function ArticleList({
                 <button
                   onClick={() => openArticle(item.id)}
                   className={cn(
-                    "block w-full px-4 py-4 text-left transition-colors",
+                    "flex w-full gap-3 px-4 py-4 text-left transition-colors",
                     selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
                     item.readStatus === "read" && "opacity-55",
                   )}
                 >
-                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    {item.feedIconUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={item.feedIconUrl} alt="" className="h-3 w-3 rounded-sm" />
-                    ) : null}
-                    <span className="truncate">{item.feedTitle}</span>
-                    <span>·</span>
-                    <span>{formatRelativeTime(item.publishDate)}</span>
-                    {item.starred && <Star className="h-3 w-3 fill-current text-yellow-500" />}
-                  </div>
-                  <div
-                    className={cn(
-                      "text-[0.85rem] leading-snug tracking-[-0.005em]",
-                      item.readStatus === "unread" ? "font-semibold" : "font-normal text-foreground/80",
-                    )}
-                  >
-                    {item.title}
-                  </div>
-                  {item.excerpt && (
-                    <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
-                      {item.excerpt}
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      {item.feedIconUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={item.feedIconUrl} alt="" className="h-3 w-3 rounded-sm" />
+                      ) : null}
+                      <span className="truncate">{item.feedTitle}</span>
+                      <span>·</span>
+                      <span className="shrink-0">{formatRelativeTime(item.publishDate)}</span>
+                      {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
                     </div>
+                    <div
+                      className={cn(
+                        "text-[0.85rem] leading-snug tracking-[-0.005em]",
+                        item.readStatus === "unread" ? "font-semibold" : "font-normal text-foreground/80",
+                      )}
+                    >
+                      {item.title}
+                    </div>
+                    {item.excerpt && (
+                      <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
+                        {item.excerpt}
+                      </div>
+                    )}
+                  </div>
+                  {item.imageUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={item.imageUrl}
+                      alt=""
+                      className="h-16 w-16 shrink-0 rounded object-cover"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                    />
                   )}
                 </button>
               </li>

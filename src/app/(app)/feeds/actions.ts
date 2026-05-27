@@ -148,6 +148,58 @@ export async function moveFeedToFolderAction(feedId: string, folderId: string | 
   revalidatePath("/feeds");
 }
 
+export async function renameFeedAction(feedId: string, title: string) {
+  const trimmed = title.trim();
+  if (!trimmed) return { ok: false as const, error: "Name required" };
+  const { user } = await requireUser();
+  await db
+    .update(feeds)
+    .set({ title: trimmed })
+    .where(and(eq(feeds.id, feedId), eq(feeds.userId, user.id)));
+  revalidatePath("/feeds");
+  return { ok: true as const };
+}
+
+export async function renameFolderAction(folderId: string, name: string) {
+  const trimmed = name.trim();
+  if (!trimmed) return { ok: false as const, error: "Name required" };
+  const { user } = await requireUser();
+  await db
+    .update(folders)
+    .set({ name: trimmed })
+    .where(and(eq(folders.id, folderId), eq(folders.userId, user.id)));
+  revalidatePath("/feeds");
+  return { ok: true as const };
+}
+
+export async function deleteFolderAction(folderId: string) {
+  const { user } = await requireUser();
+  await db
+    .update(feeds)
+    .set({ folderId: null })
+    .where(and(eq(feeds.folderId, folderId), eq(feeds.userId, user.id)));
+  await db
+    .delete(folders)
+    .where(and(eq(folders.id, folderId), eq(folders.userId, user.id)));
+  revalidatePath("/feeds");
+}
+
+export async function markFolderReadAction(folderId: string) {
+  const { user } = await requireUser();
+  const folderFeedIds = (
+    await db
+      .select({ id: feeds.id })
+      .from(feeds)
+      .where(and(eq(feeds.folderId, folderId), eq(feeds.userId, user.id)))
+  ).map((f) => f.id);
+  if (folderFeedIds.length === 0) return;
+  await db
+    .update(articles)
+    .set({ readStatus: "read" })
+    .where(and(eq(articles.userId, user.id), inArray(articles.feedId, folderFeedIds)));
+  revalidatePath("/feeds");
+}
+
 export type OpmlImportResult = {
   ok: boolean;
   error?: string;

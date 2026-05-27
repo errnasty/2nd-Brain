@@ -1,13 +1,17 @@
 "use client";
 
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
 import {
+  CheckCheck,
   ChevronDown,
   ChevronRight,
+  Compass,
   Download,
+  ExternalLink,
   FolderClosed,
   Inbox,
+  Pencil,
   Plus,
   RefreshCw,
   Rss,
@@ -18,11 +22,28 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { AddFeedDialog } from "./add-feed-dialog";
 import { ImportOpmlDialog } from "./import-opml-dialog";
+import { FeedDiscoveryDialog } from "./feed-discovery-dialog";
 import {
+  createFolderAction,
   deleteFeedAction,
+  deleteFolderAction,
+  markFolderReadAction,
   moveFeedToFolderAction,
+  renameFeedAction,
+  renameFolderAction,
   syncAllAction,
   syncFeedAction,
 } from "@/app/(app)/feeds/actions";
@@ -50,11 +71,14 @@ export function FeedsNav({
   const [pending, startTransition] = useTransition();
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [discoverOpen, setDiscoverOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [draggingFeed, setDraggingFeed] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<string | "uncategorized" | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const newFolderRef = useRef<HTMLInputElement>(null);
 
-  // Persist collapse state
   useEffect(() => {
     try {
       const raw = localStorage.getItem(COLLAPSE_KEY);
@@ -98,11 +122,29 @@ export function FeedsNav({
     });
   }
 
+  function startCreateFolder() {
+    setNewFolderName("");
+    setCreatingFolder(true);
+    setTimeout(() => newFolderRef.current?.focus(), 20);
+  }
+
+  function commitCreateFolder() {
+    setCreatingFolder(false);
+    if (!newFolderName.trim()) return;
+    const name = newFolderName.trim();
+    startTransition(async () => {
+      const r = await createFolderAction(name);
+      if (r.ok) toast.success(`Folder "${name}" created`);
+      else toast.error(r.error);
+    });
+  }
+
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border md:flex">
+      {/* Header */}
       <div className="flex items-center justify-between px-3 py-3">
         <div className="text-sm font-semibold">Feeds</div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
           <Button
             size="icon"
             variant="ghost"
@@ -111,12 +153,21 @@ export function FeedsNav({
             onClick={() =>
               startTransition(async () => {
                 await syncAllAction();
-                toast.success("Synced all feeds");
+                toast.success("All feeds synced");
               })
             }
             title="Sync all"
           >
             <RefreshCw className={cn("h-3.5 w-3.5", pending && "animate-spin")} />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
+            onClick={() => setDiscoverOpen(true)}
+            title="Discover feeds"
+          >
+            <Compass className="h-3.5 w-3.5" />
           </Button>
           <Button
             size="icon"
@@ -141,7 +192,7 @@ export function FeedsNav({
       <Separator />
 
       <ScrollArea className="flex-1">
-        <nav className="p-2 space-y-0.5 text-sm">
+        <nav className="space-y-0.5 p-2 text-sm">
           <NavRow
             label="All unread"
             icon={<Inbox className="h-4 w-4" />}
@@ -157,118 +208,96 @@ export function FeedsNav({
             onClick={() => setQuery({ feed: null, folder: null, view: "starred" })}
           />
 
-          {folders.length > 0 && (
-            <div className="px-3 pt-4 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-              Folders
-            </div>
-          )}
-
-          {folders.map((folder) => {
-            const isCollapsed = collapsed[folder.id];
-            const folderFeeds = feeds.filter((f) => f.folderId === folder.id);
-            const isDropTarget = dropTarget === folder.id;
-            return (
-              <div key={folder.id}>
-                <div
-                  onDragOver={(e) => {
-                    if (draggingFeed) {
-                      e.preventDefault();
-                      setDropTarget(folder.id);
-                    }
-                  }}
-                  onDragLeave={() => isDropTarget && setDropTarget(null)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    onDropToFolder(folder.id);
-                  }}
-                  className={cn(
-                    "group flex items-center gap-1 rounded-md transition-colors",
-                    activeFolder === folder.id && "bg-accent",
-                    isDropTarget && "ring-2 ring-primary",
-                  )}
+          {/* Folders section header */}
+          <div className="flex items-center justify-between px-3 pb-1 pt-4">
+            {creatingFolder ? (
+              <input
+                ref={newFolderRef}
+                className="flex-1 bg-transparent text-[10px] uppercase tracking-wider outline-none border-b border-primary py-0.5"
+                placeholder="Folder name…"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onBlur={commitCreateFolder}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitCreateFolder(); }
+                  if (e.key === "Escape") setCreatingFolder(false);
+                }}
+              />
+            ) : (
+              <>
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                  {folders.length > 0 ? "Folders" : ""}
+                </span>
+                <button
+                  onClick={startCreateFolder}
+                  title="New folder"
+                  className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                 >
-                  <button
-                    onClick={() => toggleFolder(folder.id)}
-                    className="rounded p-1 text-muted-foreground hover:bg-background"
-                    title={isCollapsed ? "Expand" : "Collapse"}
-                  >
-                    {isCollapsed ? (
-                      <ChevronRight className="h-3 w-3" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3" />
-                    )}
-                  </button>
-                  <button
-                    onClick={() => setQuery({ feed: null, folder: folder.id, view: "unread" })}
-                    className="flex flex-1 items-center gap-2 px-1 py-1.5 text-left"
-                  >
-                    <FolderClosed className="h-4 w-4 text-muted-foreground" />
-                    <span className="flex-1 truncate">{folder.name}</span>
-                    {unread.perFolder[folder.id] > 0 && (
-                      <span className="text-[11px] tabular-nums text-muted-foreground">
-                        {unread.perFolder[folder.id]}
-                      </span>
-                    )}
-                  </button>
-                </div>
+                  <Plus className="h-3 w-3" />
+                </button>
+              </>
+            )}
+          </div>
 
-                {!isCollapsed && (
-                  <div className="ml-4 border-l border-border/50 pl-1">
-                    {folderFeeds.length === 0 && (
-                      <div className="px-3 py-1 text-xs text-muted-foreground italic">
-                        Empty — drop a feed here
-                      </div>
-                    )}
-                    {folderFeeds.map((feed) => (
-                      <FeedRow
-                        key={feed.id}
-                        feed={feed}
-                        count={unread.perFeed[feed.id] ?? 0}
-                        active={activeFeed === feed.id}
-                        dragging={draggingFeed === feed.id}
-                        onDragStart={() => setDraggingFeed(feed.id)}
-                        onDragEnd={() => {
-                          setDraggingFeed(null);
-                          setDropTarget(null);
-                        }}
-                        onClick={() => setQuery({ feed: feed.id, folder: null, view: "unread" })}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {/* Folder rows */}
+          {folders.map((folder) => (
+            <FolderSection
+              key={folder.id}
+              folder={folder}
+              folderFeeds={feeds.filter((f) => f.folderId === folder.id)}
+              allFolders={folders}
+              unread={unread}
+              collapsed={!!collapsed[folder.id]}
+              onToggle={() => toggleFolder(folder.id)}
+              isDropTarget={dropTarget === folder.id}
+              draggingFeed={draggingFeed}
+              activeFeed={activeFeed}
+              activeFolder={activeFolder}
+              onDragOver={(e) => {
+                if (draggingFeed) { e.preventDefault(); setDropTarget(folder.id); }
+              }}
+              onDragLeave={() => dropTarget === folder.id && setDropTarget(null)}
+              onDrop={(e) => { e.preventDefault(); onDropToFolder(folder.id); }}
+              onSelectFolder={() => setQuery({ feed: null, folder: folder.id, view: "unread" })}
+              onSelectFeed={(feedId) => setQuery({ feed: feedId, folder: null, view: "unread" })}
+              onFeedDragStart={(feedId) => setDraggingFeed(feedId)}
+              onFeedDragEnd={() => { setDraggingFeed(null); setDropTarget(null); }}
+            />
+          ))}
 
+          {/* Uncategorized */}
           <div
             onDragOver={(e) => {
-              if (draggingFeed) {
-                e.preventDefault();
-                setDropTarget("uncategorized");
-              }
+              if (draggingFeed) { e.preventDefault(); setDropTarget("uncategorized"); }
             }}
             onDragLeave={() => dropTarget === "uncategorized" && setDropTarget(null)}
-            onDrop={(e) => {
-              e.preventDefault();
-              onDropToFolder(null);
-            }}
+            onDrop={(e) => { e.preventDefault(); onDropToFolder(null); }}
             className={cn(
-              "mt-2 rounded-md transition-colors",
+              "mt-1 rounded-md transition-colors",
               dropTarget === "uncategorized" && "ring-2 ring-primary",
             )}
           >
-            <div className="px-3 pt-3 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
-              {folders.length > 0 ? "Uncategorized" : "Feeds"}
-            </div>
+            {(uncategorizedFeeds.length > 0 || feeds.length === 0) && (
+              <div className="px-3 pb-1 pt-3 text-[10px] uppercase tracking-wider text-muted-foreground">
+                {folders.length > 0 ? "Uncategorized" : "Feeds"}
+              </div>
+            )}
 
             {uncategorizedFeeds.length === 0 && feeds.length === 0 && (
               <div className="px-3 py-2 text-xs text-muted-foreground">
-                No feeds yet. Click + to add one, or ↓ to import from Inoreader.
+                No feeds yet.{" "}
+                <button
+                  className="underline hover:text-foreground"
+                  onClick={() => setDiscoverOpen(true)}
+                >
+                  Discover feeds
+                </button>{" "}
+                or click + to add one.
               </div>
             )}
             {uncategorizedFeeds.length === 0 && feeds.length > 0 && folders.length > 0 && (
-              <div className="px-3 py-1 text-xs text-muted-foreground italic">
-                Drop a feed here to remove it from its folder
+              <div className="px-3 py-1 text-xs italic text-muted-foreground">
+                Drop a feed here to remove from folder
               </div>
             )}
             {uncategorizedFeeds.map((feed) => (
@@ -279,11 +308,9 @@ export function FeedsNav({
                 active={activeFeed === feed.id}
                 dragging={draggingFeed === feed.id}
                 onDragStart={() => setDraggingFeed(feed.id)}
-                onDragEnd={() => {
-                  setDraggingFeed(null);
-                  setDropTarget(null);
-                }}
+                onDragEnd={() => { setDraggingFeed(null); setDropTarget(null); }}
                 onClick={() => setQuery({ feed: feed.id, folder: null, view: "unread" })}
+                folders={folders}
               />
             ))}
           </div>
@@ -292,9 +319,357 @@ export function FeedsNav({
 
       <AddFeedDialog open={addOpen} onOpenChange={setAddOpen} folders={folders} />
       <ImportOpmlDialog open={importOpen} onOpenChange={setImportOpen} />
+      <FeedDiscoveryDialog open={discoverOpen} onOpenChange={setDiscoverOpen} />
     </aside>
   );
 }
+
+// ── Folder section ────────────────────────────────────────────────────
+
+function FolderSection({
+  folder,
+  folderFeeds,
+  allFolders,
+  unread,
+  collapsed,
+  onToggle,
+  isDropTarget,
+  draggingFeed,
+  activeFeed,
+  activeFolder,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onSelectFolder,
+  onSelectFeed,
+  onFeedDragStart,
+  onFeedDragEnd,
+}: {
+  folder: Folder;
+  folderFeeds: Feed[];
+  allFolders: Folder[];
+  unread: UnreadCounts;
+  collapsed: boolean;
+  onToggle: () => void;
+  isDropTarget: boolean;
+  draggingFeed: string | null;
+  activeFeed: string | null;
+  activeFolder: string | null;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
+  onSelectFolder: () => void;
+  onSelectFeed: (feedId: string) => void;
+  onFeedDragStart: (feedId: string) => void;
+  onFeedDragEnd: () => void;
+}) {
+  const [, startTransition] = useTransition();
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(folder.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startRename() {
+    setRenameValue(folder.name);
+    setRenaming(true);
+    setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 20);
+  }
+
+  function commitRename() {
+    setRenaming(false);
+    if (renameValue.trim() && renameValue.trim() !== folder.name) {
+      const name = renameValue.trim();
+      startTransition(async () => {
+        const r = await renameFolderAction(folder.id, name);
+        if (!r.ok) toast.error(r.error);
+      });
+    }
+  }
+
+  return (
+    <div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            className={cn(
+              "group flex items-center gap-1 rounded-md transition-colors",
+              activeFolder === folder.id && "bg-accent",
+              isDropTarget && "ring-2 ring-primary",
+            )}
+          >
+            <button
+              onClick={onToggle}
+              className="rounded p-1 text-muted-foreground hover:bg-background transition-colors"
+              title={collapsed ? "Expand" : "Collapse"}
+            >
+              {collapsed ? (
+                <ChevronRight className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+            </button>
+            <button
+              onClick={onSelectFolder}
+              className="flex flex-1 items-center gap-2 px-1 py-1.5 text-left"
+            >
+              <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
+              {renaming ? (
+                <input
+                  ref={inputRef}
+                  className="flex-1 bg-transparent border-b border-primary outline-none text-sm py-0"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                    if (e.key === "Escape") setRenaming(false);
+                    e.stopPropagation();
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <span className="flex-1 truncate">{folder.name}</span>
+              )}
+              {!renaming && (unread.perFolder[folder.id] ?? 0) > 0 && (
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {unread.perFolder[folder.id]}
+                </span>
+              )}
+            </button>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuLabel className="max-w-[180px] truncate">{folder.name}</ContextMenuLabel>
+          <ContextMenuSeparator />
+          <ContextMenuItem onClick={startRename}>
+            <Pencil className="mr-2 h-3.5 w-3.5" />
+            Rename folder
+          </ContextMenuItem>
+          <ContextMenuItem
+            onClick={() =>
+              startTransition(async () => {
+                await markFolderReadAction(folder.id);
+                toast.success("Marked all as read");
+              })
+            }
+          >
+            <CheckCheck className="mr-2 h-3.5 w-3.5" />
+            Mark all as read
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            className="text-destructive focus:text-destructive"
+            onClick={() => {
+              if (!confirm(`Delete folder "${folder.name}"?\n\nFeeds inside will be moved to Uncategorized.`)) return;
+              startTransition(async () => {
+                await deleteFolderAction(folder.id);
+                toast.success("Folder deleted");
+              });
+            }}
+          >
+            <Trash2 className="mr-2 h-3.5 w-3.5" />
+            Delete folder
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+
+      {!collapsed && (
+        <div className="ml-4 border-l border-border/50 pl-1">
+          {folderFeeds.length === 0 && (
+            <div className="px-3 py-1 text-xs italic text-muted-foreground">
+              Empty — drag a feed here
+            </div>
+          )}
+          {folderFeeds.map((feed) => (
+            <FeedRow
+              key={feed.id}
+              feed={feed}
+              count={unread.perFeed[feed.id] ?? 0}
+              active={activeFeed === feed.id}
+              dragging={draggingFeed === feed.id}
+              onDragStart={() => onFeedDragStart(feed.id)}
+              onDragEnd={onFeedDragEnd}
+              onClick={() => onSelectFeed(feed.id)}
+              folders={allFolders}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Feed row ──────────────────────────────────────────────────────────
+
+function FeedRow({
+  feed,
+  count,
+  active,
+  dragging,
+  onDragStart,
+  onDragEnd,
+  onClick,
+  folders,
+}: {
+  feed: Feed;
+  count: number;
+  active: boolean;
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onClick: () => void;
+  folders: Folder[];
+}) {
+  const [pending, startTransition] = useTransition();
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(feed.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startRename() {
+    setRenameValue(feed.title);
+    setRenaming(true);
+    setTimeout(() => { inputRef.current?.focus(); inputRef.current?.select(); }, 20);
+  }
+
+  function commitRename() {
+    setRenaming(false);
+    if (renameValue.trim() && renameValue.trim() !== feed.title) {
+      const title = renameValue.trim();
+      startTransition(async () => {
+        const r = await renameFeedAction(feed.id, title);
+        if (!r.ok) toast.error(r.error);
+      });
+    }
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", feed.id);
+            onDragStart();
+          }}
+          onDragEnd={onDragEnd}
+          className={cn(
+            "group flex items-center gap-2 rounded-md pr-1 transition-colors",
+            active ? "bg-accent" : "hover:bg-accent/60",
+            dragging && "opacity-40",
+          )}
+        >
+          <button onClick={onClick} className="flex flex-1 items-center gap-2 px-2 py-1.5 text-left min-w-0">
+            {feed.iconUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={feed.iconUrl} alt="" className="h-4 w-4 shrink-0 rounded-sm" />
+            ) : (
+              <Rss className="h-4 w-4 shrink-0 text-muted-foreground" />
+            )}
+            {renaming ? (
+              <input
+                ref={inputRef}
+                className="flex-1 bg-transparent border-b border-primary outline-none text-sm py-0 min-w-0"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                  if (e.key === "Escape") setRenaming(false);
+                  e.stopPropagation();
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <span className="flex-1 truncate text-sm">{feed.title}</span>
+            )}
+            {!renaming && count > 0 && (
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                {count}
+              </span>
+            )}
+          </button>
+        </div>
+      </ContextMenuTrigger>
+
+      <ContextMenuContent>
+        <ContextMenuLabel className="max-w-[200px] truncate">{feed.title}</ContextMenuLabel>
+        <ContextMenuSeparator />
+        {feed.siteUrl && (
+          <ContextMenuItem onClick={() => window.open(feed.siteUrl!, "_blank")}>
+            <ExternalLink className="mr-2 h-3.5 w-3.5" />
+            Open website
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem
+          disabled={pending}
+          onClick={() =>
+            startTransition(async () => {
+              const r = await syncFeedAction(feed.id);
+              if (r.errored) toast.error(`Sync failed: ${r.error}`);
+              else toast.success(`Synced — ${r.inserted} new article${r.inserted === 1 ? "" : "s"}`);
+            })
+          }
+        >
+          <RefreshCw className={cn("mr-2 h-3.5 w-3.5", pending && "animate-spin")} />
+          Sync feed
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onClick={startRename}>
+          <Pencil className="mr-2 h-3.5 w-3.5" />
+          Rename
+        </ContextMenuItem>
+        {folders.length > 0 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <FolderClosed className="mr-2 h-3.5 w-3.5" />
+              Move to folder
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              <ContextMenuItem
+                onClick={() =>
+                  startTransition(() => moveFeedToFolderAction(feed.id, null))
+                }
+              >
+                <span className="text-muted-foreground">— Uncategorized</span>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              {folders.map((folder) => (
+                <ContextMenuItem
+                  key={folder.id}
+                  onClick={() =>
+                    startTransition(() => moveFeedToFolderAction(feed.id, folder.id))
+                  }
+                >
+                  <FolderClosed className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
+                  {folder.name}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem
+          className="text-destructive focus:text-destructive"
+          onClick={() => {
+            if (!confirm(`Remove "${feed.title}"? Articles will also be deleted.`)) return;
+            startTransition(async () => {
+              await deleteFeedAction(feed.id);
+              toast.success("Feed removed");
+            });
+          }}
+        >
+          <Trash2 className="mr-2 h-3.5 w-3.5" />
+          Remove feed
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+// ── Nav row ───────────────────────────────────────────────────────────
 
 function NavRow({
   label,
@@ -327,81 +702,5 @@ function NavRow({
         </span>
       )}
     </button>
-  );
-}
-
-function FeedRow({
-  feed,
-  count,
-  active,
-  dragging,
-  onDragStart,
-  onDragEnd,
-  onClick,
-}: {
-  feed: Feed;
-  count: number;
-  active: boolean;
-  dragging: boolean;
-  onDragStart: () => void;
-  onDragEnd: () => void;
-  onClick: () => void;
-}) {
-  const [pending, startTransition] = useTransition();
-  return (
-    <div
-      draggable
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", feed.id);
-        onDragStart();
-      }}
-      onDragEnd={onDragEnd}
-      className={cn(
-        "group flex items-center gap-2 rounded-md pr-1 transition-colors",
-        active ? "bg-accent" : "hover:bg-accent",
-        dragging && "opacity-40",
-      )}
-    >
-      <button onClick={onClick} className="flex flex-1 items-center gap-2 px-2 py-1.5 text-left">
-        {feed.iconUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={feed.iconUrl} alt="" className="h-4 w-4 rounded-sm" />
-        ) : (
-          <Rss className="h-4 w-4 text-muted-foreground" />
-        )}
-        <span className="flex-1 truncate text-sm">{feed.title}</span>
-        {count > 0 && <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>}
-      </button>
-      <button
-        title="Sync"
-        disabled={pending}
-        className="opacity-0 group-hover:opacity-100 rounded p-1 hover:bg-background"
-        onClick={(e) => {
-          e.stopPropagation();
-          startTransition(async () => {
-            const r = await syncFeedAction(feed.id);
-            if (r.errored) toast.error(`Sync failed: ${r.error}`);
-            else toast.success(`+${r.inserted} new`);
-          });
-        }}
-      >
-        <RefreshCw className={cn("h-3 w-3", pending && "animate-spin")} />
-      </button>
-      <button
-        title="Remove"
-        className="opacity-0 group-hover:opacity-100 rounded p-1 hover:bg-background"
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!confirm(`Remove "${feed.title}"?`)) return;
-          startTransition(async () => {
-            await deleteFeedAction(feed.id);
-            toast.success("Feed removed");
-          });
-        }}
-      >
-        <Trash2 className="h-3 w-3" />
-      </button>
-    </div>
   );
 }
