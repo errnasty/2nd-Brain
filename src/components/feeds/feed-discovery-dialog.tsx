@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import Image from "next/image";
 import { Loader2, Plus, Search, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -189,14 +190,17 @@ export function FeedDiscoveryDialog({
                   className="flex items-center gap-3 rounded-lg p-3 transition-colors hover:bg-accent/40"
                 >
                   {feed.iconUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    <Image
                       src={feed.iconUrl}
                       alt=""
+                      width={32}
+                      height={32}
+                      sizes="32px"
                       className="h-8 w-8 shrink-0 rounded object-cover"
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.visibility = "hidden";
                       }}
+                      unoptimized
                     />
                   ) : null}
                   <div className="min-w-0 flex-1">

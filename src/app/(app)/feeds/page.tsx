@@ -2,14 +2,14 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
-import { ArticleList } from "@/components/feeds/article-list";
-import { ArticleReader } from "@/components/feeds/article-reader";
+import { FeedsShell } from "@/components/feeds/feeds-shell";
 
 type Search = Promise<{
   feed?: string;
   folder?: string;
   view?: "unread" | "all" | "starred";
-  article?: string;
+  // `article` is intentionally NOT read here — selection lives in client state
+  // (FeedsShell) so opening an article doesn't trigger a server re-render.
 }>;
 
 const ARTICLE_LIMIT = 100;
@@ -46,18 +46,12 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     .limit(ARTICLE_LIMIT);
 
   return (
-    <>
-      <ArticleList
-        items={rows}
-        selectedId={sp.article ?? null}
-        view={view}
-        feedId={sp.feed ?? null}
-        folderId={sp.folder ?? null}
-      />
-      <ArticleReader
-        selectedId={sp.article ?? null}
-        orderedIds={rows.map((r) => r.id)}
-      />
-    </>
+    <FeedsShell
+      items={rows}
+      view={view}
+      feedId={sp.feed ?? null}
+      folderId={sp.folder ?? null}
+      orderedIds={rows.map((r) => r.id)}
+    />
   );
 }

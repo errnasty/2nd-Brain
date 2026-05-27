@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import Image from "next/image";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   CheckCheck,
@@ -567,8 +568,14 @@ function FeedRow({
         >
           <button onClick={onClick} className="flex flex-1 items-center gap-2 px-2 py-1.5 text-left min-w-0">
             {feed.iconUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={feed.iconUrl} alt="" className="h-4 w-4 shrink-0 rounded-sm" />
+              <Image
+                src={feed.iconUrl}
+                alt=""
+                width={16}
+                height={16}
+                className="shrink-0 rounded-sm"
+                unoptimized
+              />
             ) : (
               <Rss className="h-4 w-4 shrink-0 text-muted-foreground" />
             )}

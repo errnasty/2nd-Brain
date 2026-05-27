@@ -17,6 +17,7 @@ import {
 } from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
+import Image from "next/image";
 
 export type ArticleListItem = {
   id: string;
@@ -40,15 +41,16 @@ export function ArticleList({
   view,
   feedId,
   folderId,
+  onSelect,
 }: {
   items: ArticleListItem[];
   selectedId: string | null;
   view: "unread" | "all" | "starred";
   feedId: string | null;
   folderId: string | null;
+  onSelect: (id: string | null) => void;
 }) {
   const router = useRouter();
-  const params = useSearchParams();
   const [, startTransition] = useTransition();
 
   // Search state
@@ -88,9 +90,7 @@ export function ArticleList({
   }, [results, optimistic]);
 
   function openArticle(id: string) {
-    const sp = new URLSearchParams(params.toString());
-    sp.set("article", id);
-    router.replace(`/feeds?${sp.toString()}`, { scroll: false });
+    onSelect(id);
     const target = displayed.find((i) => i.id === id);
     if (target && target.readStatus !== "read") {
       startTransition(async () => {
@@ -210,8 +210,14 @@ export function ArticleList({
                   <div className="min-w-0 flex-1">
                     <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                       {item.feedIconUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={item.feedIconUrl} alt="" className="h-3 w-3 rounded-sm" />
+                        <Image
+                          src={item.feedIconUrl}
+                          alt=""
+                          width={12}
+                          height={12}
+                          className="rounded-sm"
+                          unoptimized
+                        />
                       ) : null}
                       <span className="truncate">{item.feedTitle}</span>
                       <span>·</span>
@@ -233,10 +239,12 @@ export function ArticleList({
                     )}
                   </div>
                   {item.imageUrl && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    <Image
                       src={item.imageUrl}
                       alt=""
+                      width={64}
+                      height={64}
+                      sizes="64px"
                       className="h-16 w-16 shrink-0 rounded object-cover"
                       onError={(e) => {
                         (e.target as HTMLImageElement).style.display = "none";
