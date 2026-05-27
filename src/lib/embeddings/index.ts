@@ -22,7 +22,8 @@ export function getEmbeddingsProvider(): EmbeddingsProvider {
 }
 
 // ── OpenAI ───────────────────────────────────────────────────────────
-// text-embedding-3-small returns 1536 dims, matches our pgvector column.
+// text-embedding-3-small natively returns 1536 dims but supports `dimensions`
+// truncation to match our 1024-dim pgvector column (which matches Voyage native).
 
 function openaiEmbeddings(): EmbeddingsProvider {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -40,7 +41,7 @@ function openaiEmbeddings(): EmbeddingsProvider {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
-        body: JSON.stringify({ model, input: texts }),
+        body: JSON.stringify({ model, input: texts, dimensions: EMBEDDING_DIMS }),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => "");
@@ -53,12 +54,12 @@ function openaiEmbeddings(): EmbeddingsProvider {
 }
 
 // ── Voyage AI ────────────────────────────────────────────────────────
-// Anthropic's documented embeddings partner. voyage-3 is 1024 dims by default,
-// but the matryoshka models support output_dimension=1536 to match the schema.
+// Anthropic's documented embeddings partner. voyage-3-large is their best model;
+// 1024 dims native, matches our schema exactly. No output_dimension override needed.
 
 function voyageEmbeddings(): EmbeddingsProvider {
   const apiKey = process.env.VOYAGE_API_KEY;
-  const model = process.env.EMBEDDINGS_MODEL ?? "voyage-3";
+  const model = process.env.EMBEDDINGS_MODEL ?? "voyage-3-large";
   return {
     name: "voyage",
     model,
@@ -76,7 +77,6 @@ function voyageEmbeddings(): EmbeddingsProvider {
           model,
           input: texts,
           input_type: "document",
-          output_dimension: EMBEDDING_DIMS,
         }),
       });
       if (!res.ok) {

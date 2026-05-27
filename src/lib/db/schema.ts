@@ -15,7 +15,7 @@ import {
   vector,
 } from "drizzle-orm/pg-core";
 
-const EMBEDDING_DIMS = 1536;
+const EMBEDDING_DIMS = 1024;
 
 export const readStatusEnum = pgEnum("read_status", ["unread", "read", "archived"]);
 export const itemKindEnum = pgEnum("item_kind", ["article", "document"]);
