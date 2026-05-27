@@ -4,6 +4,7 @@ import { feeds, folders } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { getUnreadCounts } from "@/lib/rss/sync";
 import { FeedsNav } from "@/components/feeds/feeds-nav";
+import { UnreadTitle } from "@/components/feeds/unread-title";
 
 export default async function FeedsLayout({ children }: { children: React.ReactNode }) {
   const { user } = await requireUser();
@@ -14,8 +15,11 @@ export default async function FeedsLayout({ children }: { children: React.ReactN
     getUnreadCounts(user.id),
   ]);
 
+  const totalUnread = Object.values(unread.perFeed).reduce((a, b) => a + b, 0);
+
   return (
     <div className="flex h-full w-full overflow-hidden">
+      <UnreadTitle count={totalUnread} />
       <FeedsNav folders={foldersList} feeds={feedsList} unread={unread} />
       <div className="flex flex-1 overflow-hidden">{children}</div>
     </div>

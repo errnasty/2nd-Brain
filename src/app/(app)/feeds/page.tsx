@@ -47,7 +47,13 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
 
   return (
     <>
-      <ArticleList items={rows} selectedId={sp.article ?? null} view={view} />
+      <ArticleList
+        items={rows}
+        selectedId={sp.article ?? null}
+        view={view}
+        feedId={sp.feed ?? null}
+        folderId={sp.folder ?? null}
+      />
       <ArticleReader
         selectedId={sp.article ?? null}
         orderedIds={rows.map((r) => r.id)}

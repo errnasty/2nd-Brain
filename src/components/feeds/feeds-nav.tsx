@@ -319,7 +319,11 @@ export function FeedsNav({
 
       <AddFeedDialog open={addOpen} onOpenChange={setAddOpen} folders={folders} />
       <ImportOpmlDialog open={importOpen} onOpenChange={setImportOpen} />
-      <FeedDiscoveryDialog open={discoverOpen} onOpenChange={setDiscoverOpen} />
+      <FeedDiscoveryDialog
+        open={discoverOpen}
+        onOpenChange={setDiscoverOpen}
+        followedUrls={feeds.map((f) => f.url)}
+      />
     </aside>
   );
 }

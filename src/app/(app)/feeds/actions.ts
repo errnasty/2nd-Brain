@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -198,6 +198,173 @@ export async function markFolderReadAction(folderId: string) {
     .set({ readStatus: "read" })
     .where(and(eq(articles.userId, user.id), inArray(articles.feedId, folderFeedIds)));
   revalidatePath("/feeds");
+}
+
+// ── Mark all read for the current view (entire scope, not just visible) ──
+
+const MarkAllReadSchema = z.object({
+  view: z.enum(["unread", "all", "starred"]),
+  feedId: z.string().uuid().nullish(),
+  folderId: z.string().uuid().nullish(),
+});
+
+export async function markAllReadAction(input: {
+  view: "unread" | "all" | "starred";
+  feedId?: string | null;
+  folderId?: string | null;
+}): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const parsed = MarkAllReadSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: "Invalid input" };
+
+  const { user } = await requireUser();
+  const conds: SQL[] = [eq(articles.userId, user.id), eq(articles.readStatus, "unread")];
+
+  if (parsed.data.feedId) {
+    conds.push(eq(articles.feedId, parsed.data.feedId));
+  } else if (parsed.data.folderId) {
+    const ids = (
+      await db
+        .select({ id: feeds.id })
+        .from(feeds)
+        .where(and(eq(feeds.folderId, parsed.data.folderId), eq(feeds.userId, user.id)))
+    ).map((f) => f.id);
+    if (ids.length === 0) return { ok: true, count: 0 };
+    conds.push(inArray(articles.feedId, ids));
+  }
+  if (parsed.data.view === "starred") {
+    conds.push(eq(articles.starred, true));
+  }
+
+  const result = await db
+    .update(articles)
+    .set({ readStatus: "read" })
+    .where(and(...conds))
+    .returning({ id: articles.id });
+
+  revalidatePath("/feeds");
+  return { ok: true, count: result.length };
+}
+
+// ── Article search (title + excerpt, scoped to current view) ──
+
+export type ArticleSearchResult = {
+  id: string;
+  title: string;
+  excerpt: string | null;
+  author: string | null;
+  url: string;
+  publishDate: Date | null;
+  readStatus: "unread" | "read" | "archived";
+  starred: boolean;
+  imageUrl: string | null;
+  feedTitle: string;
+  feedIconUrl: string | null;
+};
+
+export async function searchArticlesAction(input: {
+  query: string;
+  view: "unread" | "all" | "starred";
+  feedId?: string | null;
+  folderId?: string | null;
+}): Promise<ArticleSearchResult[]> {
+  const q = input.query.trim();
+  if (!q) return [];
+  const { user } = await requireUser();
+
+  const conds: SQL[] = [eq(articles.userId, user.id)];
+  if (input.view === "starred") conds.push(eq(articles.starred, true));
+  if (input.feedId) conds.push(eq(articles.feedId, input.feedId));
+  else if (input.folderId) {
+    const ids = (
+      await db
+        .select({ id: feeds.id })
+        .from(feeds)
+        .where(and(eq(feeds.folderId, input.folderId), eq(feeds.userId, user.id)))
+    ).map((f) => f.id);
+    if (ids.length === 0) return [];
+    conds.push(inArray(articles.feedId, ids));
+  }
+
+  const pattern = `%${q.replace(/[%_]/g, "\\$&")}%`;
+  const titleOrExcerpt = or(ilike(articles.title, pattern), ilike(articles.excerpt, pattern));
+  if (titleOrExcerpt) conds.push(titleOrExcerpt);
+
+  return db
+    .select({
+      id: articles.id,
+      title: articles.title,
+      excerpt: articles.excerpt,
+      author: articles.author,
+      url: articles.url,
+      publishDate: articles.publishDate,
+      readStatus: articles.readStatus,
+      starred: articles.starred,
+      imageUrl: articles.imageUrl,
+      feedTitle: feeds.title,
+      feedIconUrl: feeds.iconUrl,
+    })
+    .from(articles)
+    .innerJoin(feeds, eq(feeds.id, articles.feedId))
+    .where(and(...conds))
+    .orderBy(desc(articles.publishDate))
+    .limit(80);
+}
+
+// ── Live feed discovery via Feedly's public search ──
+// https://blog.feedly.com/feedly-cloud-api - the /v3/search/feeds endpoint is
+// publicly callable without auth and returns ranked feed matches.
+
+export type FeedSearchResult = {
+  title: string;
+  url: string;
+  description: string;
+  siteUrl: string | null;
+  iconUrl: string | null;
+  subscribers: number;
+};
+
+export async function searchFeedsAction(query: string): Promise<FeedSearchResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+
+  const { user } = await requireUser();
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://cloud.feedly.com/v3/search/feeds?query=${encodeURIComponent(q)}&count=30`,
+      { headers: { Accept: "application/json" }, cache: "no-store" },
+    );
+  } catch {
+    return [];
+  }
+  if (!res.ok) return [];
+  const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
+  const items = data.results ?? [];
+
+  const existing = await db
+    .select({ url: feeds.url })
+    .from(feeds)
+    .where(eq(feeds.userId, user.id));
+  const followed = new Set(existing.map((f) => f.url));
+
+  const results: FeedSearchResult[] = [];
+  for (const item of items) {
+    const feedId = typeof item.feedId === "string" ? item.feedId : "";
+    const url = feedId.startsWith("feed/") ? feedId.slice(5) : "";
+    if (!url || followed.has(url)) continue;
+    results.push({
+      title: typeof item.title === "string" ? item.title : "Untitled",
+      url,
+      description: typeof item.description === "string" ? item.description : "",
+      siteUrl: typeof item.website === "string" ? item.website : null,
+      iconUrl:
+        (typeof item.iconUrl === "string" ? item.iconUrl : null) ??
+        (typeof item.visualUrl === "string" ? item.visualUrl : null),
+      subscribers: typeof item.subscribers === "number" ? item.subscribers : 0,
+    });
+  }
+  return results;
 }
 
 export type OpmlImportResult = {

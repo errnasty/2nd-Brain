@@ -1,14 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useOptimistic, useTransition } from "react";
+import { useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { CheckCheck, Star } from "lucide-react";
+import { CheckCheck, Loader2, Search, Star, X } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { setReadStatusAction } from "@/app/(app)/feeds/actions";
+import {
+  markAllReadAction,
+  searchArticlesAction,
+  setReadStatusAction,
+  type ArticleSearchResult,
+} from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 
@@ -32,14 +38,24 @@ export function ArticleList({
   items,
   selectedId,
   view,
+  feedId,
+  folderId,
 }: {
   items: ArticleListItem[];
   selectedId: string | null;
   view: "unread" | "all" | "starred";
+  feedId: string | null;
+  folderId: string | null;
 }) {
   const router = useRouter();
   const params = useSearchParams();
   const [, startTransition] = useTransition();
+
+  // Search state
+  const [query, setQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<ArticleSearchResult[] | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const [optimistic, applyOptimistic] = useOptimistic(
     items,
@@ -47,15 +63,38 @@ export function ArticleList({
       state.map((it) => (it.id === patch.id ? { ...it, ...patch } : it)),
   );
 
+  // Debounced search
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const handle = setTimeout(async () => {
+      const res = await searchArticlesAction({ query: q, view, feedId, folderId });
+      setResults(res);
+      setSearching(false);
+    }, 250);
+    return () => clearTimeout(handle);
+  }, [query, view, feedId, folderId]);
+
+  const displayed: ArticleListItem[] = useMemo(() => {
+    if (results !== null) {
+      return results.map((r) => ({ ...r }));
+    }
+    return optimistic;
+  }, [results, optimistic]);
+
   function openArticle(id: string) {
     const sp = new URLSearchParams(params.toString());
     sp.set("article", id);
     router.replace(`/feeds?${sp.toString()}`, { scroll: false });
-    const target = optimistic.find((i) => i.id === id);
+    const target = displayed.find((i) => i.id === id);
     if (target && target.readStatus !== "read") {
       startTransition(async () => {
         applyOptimistic({ id, readStatus: "read" });
-        // Fire-and-forget; no revalidate (the action is optimistic on the server too)
         await setReadStatusAction({ articleIds: [id], status: "read" });
       });
     }
@@ -64,50 +103,101 @@ export function ArticleList({
   useShortcuts(
     {
       j: () => {
-        if (selectedId) return; // reader-pane handles it when an article is open
-        if (optimistic[0]) openArticle(optimistic[0].id);
+        if (selectedId) return;
+        if (displayed[0]) openArticle(displayed[0].id);
       },
       k: () => {
         if (selectedId) return;
+      },
+      "/": () => {
+        searchInputRef.current?.focus();
       },
     },
     !selectedId,
   );
 
   function markAllRead() {
-    const unread = optimistic.filter((i) => i.readStatus === "unread");
-    if (unread.length === 0) return;
     startTransition(async () => {
+      // Optimistically clear unread state for currently-visible items
+      const unread = displayed.filter((i) => i.readStatus === "unread");
       unread.forEach((i) => applyOptimistic({ id: i.id, readStatus: "read" }));
-      const res = await setReadStatusAction({
-        articleIds: unread.map((i) => i.id),
-        status: "read",
-      });
-      if (res.ok) toast.success(`Marked ${unread.length} as read`);
+
+      const res = await markAllReadAction({ view, feedId, folderId });
+      if (res.ok) {
+        toast.success(`Marked ${res.count} as read`);
+        router.refresh();
+      } else {
+        toast.error(res.error);
+      }
     });
   }
 
+  const showingSearch = results !== null;
+
   return (
     <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border md:flex">
+      {/* Search */}
+      <div className="px-3 pt-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            ref={searchInputRef}
+            className="h-8 pl-8 pr-8 text-[13px]"
+            placeholder="Search articles… (/)"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setQuery("");
+                searchInputRef.current?.blur();
+              }
+            }}
+          />
+          {(searching || query) && (
+            <button
+              onClick={() => setQuery("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              title="Clear"
+            >
+              {searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* View tabs + mark-all-read */}
       <div className="flex items-center justify-between px-3 py-3">
         <div className="flex items-center gap-2 text-sm">
           <ViewLink view="unread" current={view} label="Unread" />
           <ViewLink view="all" current={view} label="All" />
           <ViewLink view="starred" current={view} label="Starred" />
         </div>
-        <Button size="sm" variant="ghost" onClick={markAllRead} title="Mark all as read">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={markAllRead}
+          title={`Mark all as read (${
+            feedId ? "this feed" : folderId ? "this folder" : view === "starred" ? "starred" : "everywhere"
+          })`}
+          disabled={showingSearch}
+        >
           <CheckCheck className="h-4 w-4" />
         </Button>
       </div>
       <Separator />
+
       <ScrollArea className="flex-1">
-        {optimistic.length === 0 ? (
+        {displayed.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">
-            No articles. Try syncing your feeds.
+            {showingSearch ? (
+              <>No articles match &ldquo;{query}&rdquo;.</>
+            ) : (
+              <>No articles. Try syncing your feeds.</>
+            )}
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {optimistic.map((item) => (
+            {displayed.map((item) => (
               <li key={item.id}>
                 <button
                   onClick={() => openArticle(item.id)}
@@ -148,7 +238,9 @@ export function ArticleList({
                       src={item.imageUrl}
                       alt=""
                       className="h-16 w-16 shrink-0 rounded object-cover"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
                     />
                   )}
                 </button>
