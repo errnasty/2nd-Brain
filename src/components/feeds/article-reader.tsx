@@ -12,6 +12,7 @@ import { formatRelativeTime } from "@/lib/utils";
 import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
+import { RelatedPanel } from "@/components/reader/related-panel";
 
 type ArticleData = {
   id: string;
@@ -284,6 +285,7 @@ export function ArticleReader({
               {content && !loadingContent && (
                 <div dangerouslySetInnerHTML={{ __html: content }} />
               )}
+              {article && !loadingContent && <RelatedPanel articleId={article.id} />}
             </>
           )}
         </article>
