@@ -7,7 +7,11 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { setReadStatusAction, toggleStarredAction } from "@/app/(app)/feeds/actions";
+import {
+  processArticleAction,
+  setReadStatusAction,
+  toggleStarredAction,
+} from "@/app/(app)/feeds/actions";
 import { formatRelativeTime } from "@/lib/utils";
 import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
@@ -44,6 +48,8 @@ export function ArticleReader({
   const [content, setContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
+  const [articleTags, setArticleTags] = useState<string[]>([]);
+  const [tagsLoading, setTagsLoading] = useState(false);
   const [, startTransition] = useTransition();
 
   const currentIdx = useMemo(
@@ -98,6 +104,8 @@ export function ArticleReader({
   useEffect(() => {
     setExtractError(null);
     setContent(null);
+    setArticleTags([]);
+    setTagsLoading(false);
 
     if (!selectedId) {
       setArticle(null);
@@ -176,6 +184,29 @@ export function ArticleReader({
     }, 500);
     return () => clearTimeout(handle);
   }, [article?.id]);
+
+  // Auto-tag + smart-route once content is available. Idempotent — already-
+  // processed articles return their stored tags without an LLM call.
+  useEffect(() => {
+    if (!article || !content) return;
+    let aborted = false;
+    setTagsLoading(true);
+    processArticleAction(article.id)
+      .then((res) => {
+        if (aborted) return;
+        if (res.ok) setArticleTags(res.tags);
+        if (res.ok && res.routedTo && !res.alreadyProcessed) {
+          toast.success(`Routed to "${res.routedTo}"`);
+        }
+      })
+      .catch(() => {
+        // Silent failure — feature is best-effort
+      })
+      .finally(() => !aborted && setTagsLoading(false));
+    return () => {
+      aborted = true;
+    };
+  }, [article?.id, content]);
 
   if (!selectedId) {
     return (
@@ -266,13 +297,31 @@ export function ArticleReader({
           ) : (
             <>
               <h1>{article.title}</h1>
-              <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <div className="not-prose mt-3 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                 {article.author && (
                   <span className="font-medium text-foreground/75">{article.author}</span>
                 )}
                 {article.author && <span className="text-border">·</span>}
                 <span>{formatRelativeTime(article.publishDate)}</span>
               </div>
+              {(articleTags.length > 0 || tagsLoading) && (
+                <div className="not-prose mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-1.5">
+                  {articleTags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="inline-flex items-center rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-medium text-accent-foreground"
+                    >
+                      #{tag}
+                    </span>
+                  ))}
+                  {tagsLoading && articleTags.length === 0 && (
+                    <span className="text-[11px] text-muted-foreground italic">Generating tags…</span>
+                  )}
+                </div>
+              )}
+              {articleTags.length === 0 && !tagsLoading && (
+                <div className="not-prose mb-8 pb-6 border-b border-border" />
+              )}
               {loadingContent && !content && (
                 <div className="space-y-3">
                   <Skeleton className="h-4 w-3/4" />

@@ -8,14 +8,14 @@ import { requireUser } from "@/lib/auth";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const SYSTEM_PROMPT = `You are an editor for a daily news briefing.
-The user is reading from RSS feeds. Below is the set of unread articles from the last 24 hours.
+const DEFAULT_SYSTEM_PROMPT = `You are an editor for a daily news briefing.
+The user is reading from RSS feeds. Below is the set of unread articles for the period indicated.
 
 Your job:
-1. Group related articles into 3–6 thematic clusters (e.g. "AI safety", "Semiconductor industry", "Markets").
-2. For each cluster, write 1–2 tight sentences explaining what's happening — synthesize, do not just list.
+1. Group related articles into 3-6 thematic clusters (e.g. "AI safety", "Semiconductor industry", "Markets").
+2. For each cluster, write 1-2 tight sentences synthesizing what's happening — do not just list the articles.
 3. After each cluster, list the contributing articles as a short bulleted list with the format "- [Source] Title".
-4. End with a one-paragraph "What's notable" that picks out the 1–2 stories that matter most and why.
+4. End with a one-paragraph "What's notable" that picks out the 1-2 stories that matter most and why.
 
 Tone: confident, terse, like an FT or Economist editor's morning note. No filler, no preamble, no headings like "Here's your brief". Start straight in with the first cluster heading.`;
 
@@ -23,19 +23,32 @@ type ArticleForBrief = {
   id: string;
   title: string;
   excerpt: string | null;
+  fullText: string | null;
   feedTitle: string;
 };
 
+const MAX_BODY_CHARS = 1500;
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildArticleBlock(rows: ArticleForBrief[]): string {
   return rows
-    .map(
-      (r, i) =>
-        `[${i + 1}] (${r.feedTitle}) ${r.title}\n${(r.excerpt ?? "").slice(0, 280)}`.trim(),
-    )
+    .map((r, i) => {
+      const body = r.fullText ? stripHtml(r.fullText) : r.excerpt ?? "";
+      const trimmed = body.length > MAX_BODY_CHARS ? body.slice(0, MAX_BODY_CHARS) + "…" : body;
+      return `[${i + 1}] (${r.feedTitle}) ${r.title}\n${trimmed}`.trim();
+    })
     .join("\n\n");
 }
 
-export async function GET() {
+export async function POST(req: Request) {
   let auth;
   try {
     auth = await requireUser();
@@ -50,6 +63,18 @@ export async function GET() {
       { status: 503 },
     );
   }
+
+  // Optional user-customized system prompt
+  let customPrompt: string | null = null;
+  try {
+    const body = (await req.json()) as { systemPrompt?: string };
+    if (typeof body.systemPrompt === "string" && body.systemPrompt.trim().length > 0) {
+      customPrompt = body.systemPrompt.trim();
+    }
+  } catch {
+    // No body or invalid JSON — use default
+  }
+  const systemPrompt = customPrompt ?? DEFAULT_SYSTEM_PROMPT;
 
   // Try last 24h first, then widen the window so the brief still works even if
   // the user hasn't synced today.
@@ -67,6 +92,7 @@ export async function GET() {
         id: articles.id,
         title: articles.title,
         excerpt: articles.excerpt,
+        fullText: articles.fullText,
         feedTitle: feeds.title,
       })
       .from(articles)
@@ -98,7 +124,7 @@ export async function GET() {
   // re-generations within the same conversation window) reuse the same tokens.
   const result = streamText({
     model: anthropic("claude-sonnet-4-6"),
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: [
       {
         role: "user",

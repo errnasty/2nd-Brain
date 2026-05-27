@@ -4,11 +4,13 @@ import { and, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { articles, feeds, folders } from "@/lib/db/schema";
+import { articles, feeds, folders, itemTags, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
 import { syncFeed } from "@/lib/rss/sync";
 import { parseOpml } from "@/lib/opml/import";
+import { generateTags, tagSlug } from "@/lib/ai/tagging";
+import { routeToFolder } from "@/lib/ai/routing";
 
 const AddFeedSchema = z.object({
   url: z.string().url(),
@@ -308,6 +310,184 @@ export async function searchArticlesAction(input: {
     .where(and(...conds))
     .orderBy(desc(articles.publishDate))
     .limit(80);
+}
+
+// ── AI auto-tagging + smart folder routing ─────────────────────────────
+// Called by the article reader once full text is loaded. Idempotent — if the
+// article already has tags, it just returns them without calling the LLM.
+
+export type ProcessArticleResult = {
+  ok: boolean;
+  tags: string[];
+  routedTo: string | null;
+  alreadyProcessed: boolean;
+  error?: string;
+};
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export async function processArticleAction(articleId: string): Promise<ProcessArticleResult> {
+  const { user } = await requireUser();
+
+  const [article] = await db
+    .select()
+    .from(articles)
+    .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)))
+    .limit(1);
+
+  if (!article) return { ok: false, tags: [], routedTo: null, alreadyProcessed: false, error: "Not found" };
+
+  // Already processed?
+  const existingItemTags = await db
+    .select({ tagId: itemTags.tagId })
+    .from(itemTags)
+    .where(
+      and(
+        eq(itemTags.itemId, articleId),
+        eq(itemTags.itemKind, "article"),
+        eq(itemTags.userId, user.id),
+      ),
+    );
+
+  if (existingItemTags.length > 0) {
+    const tagRows = await db
+      .select({ name: tags.name })
+      .from(tags)
+      .where(
+        and(
+          eq(tags.userId, user.id),
+          inArray(
+            tags.id,
+            existingItemTags.map((t) => t.tagId),
+          ),
+        ),
+      );
+    return {
+      ok: true,
+      tags: tagRows.map((t) => t.name),
+      routedTo: null,
+      alreadyProcessed: true,
+    };
+  }
+
+  // Fetch existing tags + folders in parallel
+  const [allUserTags, allUserFolders] = await Promise.all([
+    db.select().from(tags).where(eq(tags.userId, user.id)),
+    db.select().from(folders).where(eq(folders.userId, user.id)),
+  ]);
+
+  const content = article.fullText ? stripHtml(article.fullText) : (article.excerpt ?? "");
+
+  // Tagging + routing in parallel
+  const [generatedTags, routing] = await Promise.all([
+    generateTags(article.title, content, allUserTags.map((t) => t.name)),
+    article.folderId
+      ? Promise.resolve({ folderName: null as string | null, confidence: 0 })
+      : routeToFolder(
+          article.title,
+          article.excerpt ?? "",
+          allUserFolders.filter((f) => !f.isInbox).map((f) => f.name),
+        ),
+  ]);
+
+  // Persist tags — get-or-create each tag, then link to article via itemTags
+  const finalTagNames: string[] = [];
+  for (const name of generatedTags) {
+    const slug = tagSlug(name);
+    if (!slug) continue;
+
+    let tag = allUserTags.find((t) => t.slug === slug);
+    if (!tag) {
+      const [inserted] = await db
+        .insert(tags)
+        .values({ userId: user.id, name, slug })
+        .onConflictDoNothing({ target: [tags.userId, tags.slug] })
+        .returning();
+      if (inserted) {
+        tag = inserted;
+        allUserTags.push(inserted);
+      } else {
+        // Lost the race — fetch the existing row
+        const [existing] = await db
+          .select()
+          .from(tags)
+          .where(and(eq(tags.userId, user.id), eq(tags.slug, slug)))
+          .limit(1);
+        tag = existing;
+      }
+    }
+
+    if (tag) {
+      await db
+        .insert(itemTags)
+        .values({
+          tagId: tag.id,
+          itemKind: "article",
+          itemId: articleId,
+          userId: user.id,
+          source: "ai",
+        })
+        .onConflictDoNothing();
+      finalTagNames.push(tag.name);
+    }
+  }
+
+  // Folder routing
+  let routedTo: string | null = null;
+  if (!article.folderId) {
+    let targetFolderId: string | null = null;
+    let targetFolderName: string | null = null;
+
+    if (routing.folderName) {
+      const match = allUserFolders.find((f) => f.name === routing.folderName);
+      if (match) {
+        targetFolderId = match.id;
+        targetFolderName = match.name;
+      }
+    }
+
+    if (!targetFolderId) {
+      // Fall back to [Inbox] — create lazily if missing
+      let inbox = allUserFolders.find((f) => f.isInbox);
+      if (!inbox) {
+        const [created] = await db
+          .insert(folders)
+          .values({ userId: user.id, name: "[Inbox]", isInbox: true })
+          .onConflictDoNothing({ target: [folders.userId, folders.name] })
+          .returning();
+        inbox =
+          created ??
+          (
+            await db
+              .select()
+              .from(folders)
+              .where(and(eq(folders.userId, user.id), eq(folders.isInbox, true)))
+              .limit(1)
+          )[0];
+      }
+      if (inbox) {
+        targetFolderId = inbox.id;
+        targetFolderName = inbox.name;
+      }
+    }
+
+    if (targetFolderId) {
+      await db
+        .update(articles)
+        .set({ folderId: targetFolderId })
+        .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)));
+      routedTo = targetFolderName;
+    }
+  }
+
+  return { ok: true, tags: finalTagNames, routedTo, alreadyProcessed: false };
 }
 
 // ── Live feed discovery via Feedly's public search ──
