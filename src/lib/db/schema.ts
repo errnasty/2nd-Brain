@@ -19,7 +19,7 @@ const EMBEDDING_DIMS = 1024;
 
 export const readStatusEnum = pgEnum("read_status", ["unread", "read", "archived"]);
 export const itemKindEnum = pgEnum("item_kind", ["article", "document", "directory_item"]);
-export const docKindEnum = pgEnum("doc_kind", ["pdf", "markdown", "text", "epub"]);
+export const docKindEnum = pgEnum("doc_kind", ["pdf", "markdown", "text", "epub", "docx", "pptx"]);
 export const directoryItemKindEnum = pgEnum("directory_item_kind", [
   "saved_article",
   "uploaded_document",

@@ -2,7 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useDroppable } from "@dnd-kit/core";
+import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
   FolderClosed,
   Inbox,
@@ -96,8 +96,11 @@ export function DirectoryNav({
   // folder is hidden because we now use a virtual "Unsorted" tray instead.
   const regularFolders = folders.filter((f) => !f.isInbox);
 
+  // Build a tree from the flat list so nested folders render indented.
+  const folderTree = buildFolderTree(regularFolders);
+
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-border md:flex">
+    <aside className="flex h-full w-full flex-col">
       <div className="flex items-center justify-between px-3 py-3">
         <div className="text-sm font-semibold">Directory</div>
         <div className="flex items-center gap-0.5">
@@ -174,14 +177,15 @@ export function DirectoryNav({
             )}
           </div>
 
-          {regularFolders.map((folder) => (
-            <FolderRow
-              key={folder.id}
-              folder={folder}
-              count={folderCounts[folder.id] ?? 0}
-              active={activeFolder === folder.id}
-              onSelect={() => setFolder(folder.id)}
-              onRequestDelete={() => setFolderToDelete(folder)}
+          {folderTree.map((node) => (
+            <FolderTreeNode
+              key={node.folder.id}
+              node={node}
+              depth={0}
+              folderCounts={folderCounts}
+              activeFolder={activeFolder}
+              onSelect={setFolder}
+              onRequestDelete={(f) => setFolderToDelete(f)}
             />
           ))}
         </nav>
@@ -209,6 +213,67 @@ export function DirectoryNav({
         />
       )}
     </aside>
+  );
+}
+
+// ── Folder tree (nested) ──────────────────────────────────────────────
+
+type FolderNode = { folder: DirectoryFolder; children: FolderNode[] };
+
+function buildFolderTree(folders: DirectoryFolder[]): FolderNode[] {
+  const byId = new Map<string, FolderNode>();
+  folders.forEach((f) => byId.set(f.id, { folder: f, children: [] }));
+  const roots: FolderNode[] = [];
+  for (const node of byId.values()) {
+    const parent = node.folder.parentId ? byId.get(node.folder.parentId) : null;
+    if (parent) parent.children.push(node);
+    else roots.push(node);
+  }
+  return roots;
+}
+
+function FolderTreeNode({
+  node,
+  depth,
+  folderCounts,
+  activeFolder,
+  onSelect,
+  onRequestDelete,
+}: {
+  node: FolderNode;
+  depth: number;
+  folderCounts: Record<string, number>;
+  activeFolder: string | null;
+  onSelect: (id: string) => void;
+  onRequestDelete: (f: DirectoryFolder) => void;
+}) {
+  return (
+    <div>
+      <div style={{ paddingLeft: depth * 12 }}>
+        <FolderRow
+          folder={node.folder}
+          count={folderCounts[node.folder.id] ?? 0}
+          active={activeFolder === node.folder.id}
+          onSelect={() => onSelect(node.folder.id)}
+          onRequestDelete={() => onRequestDelete(node.folder)}
+        />
+      </div>
+      {node.children.length > 0 && (
+        <div>
+          {node.children.map((child) => (
+            <FolderTreeNode
+              key={child.folder.id}
+              node={child}
+              depth={depth + 1}
+              folderCounts={folderCounts}
+              activeFolder={activeFolder}
+              onSelect={onSelect}
+              onRequestDelete={onRequestDelete}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -264,7 +329,20 @@ function FolderRow({
   const [renaming, setRenaming] = useState(false);
   const [value, setValue] = useState(folder.name);
   const inputRef = useRef<HTMLInputElement>(null);
-  const { setNodeRef, isOver } = useDroppable({ id: `folder:${folder.id}` });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `folder:${folder.id}` });
+  const {
+    attributes: dragAttrs,
+    listeners: dragListeners,
+    setNodeRef: setDragRef,
+    isDragging,
+  } = useDraggable({ id: `folder-drag:${folder.id}` });
+
+  // Combine the two refs onto the same element — it's both a drag source and
+  // a drop target at the same time.
+  function setNodeRef(node: HTMLDivElement | null) {
+    setDragRef(node);
+    setDropRef(node);
+  }
 
   function startRename() {
     setValue(folder.name);
@@ -294,10 +372,20 @@ function FolderRow({
             "group flex w-full items-center gap-2 rounded-md px-3 py-1.5 transition-colors",
             active ? "bg-accent text-accent-foreground" : "text-foreground/80 hover:bg-accent hover:text-accent-foreground",
             isOver && "ring-2 ring-primary",
+            isDragging && "opacity-40",
           )}
         >
           <button onClick={onSelect} className="flex flex-1 items-center gap-2 text-left min-w-0">
-            <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
+            {/* The folder icon is the drag handle — click anywhere else still opens the folder. */}
+            <span
+              {...dragAttrs}
+              {...dragListeners}
+              className="cursor-grab shrink-0 active:cursor-grabbing"
+              onClick={(e) => e.preventDefault()}
+              aria-label="Drag to nest folder"
+            >
+              <FolderClosed className="h-4 w-4 text-muted-foreground" />
+            </span>
             {renaming ? (
               <input
                 ref={inputRef}

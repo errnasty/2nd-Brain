@@ -2,7 +2,6 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
-import { embedArticle } from "@/lib/embeddings/backfill";
 
 export type SyncResult = {
   feedId: string;
@@ -49,18 +48,15 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
         .insert(articles)
         .values(rows)
         .onConflictDoNothing({ target: [articles.feedId, articles.guid] })
-        .returning({ id: articles.id, title: articles.title, excerpt: articles.excerpt });
+        .returning({ id: articles.id });
 
       inserted = result.length;
       skipped = rows.length - inserted;
 
-      // Embed new articles in the background. Failures here don't affect the sync result;
-      // backfillEmbeddings() can sweep up anything that didn't get embedded.
-      if (process.env.OPENAI_API_KEY || process.env.VOYAGE_API_KEY) {
-        await Promise.allSettled(
-          result.map((row) => embedArticle(row.id, userId, row.title, row.excerpt)),
-        );
-      }
+      // NOTE: auto-embedding on sync was removed — it caused the server action
+      // to time out when syncing many feeds (hundreds of parallel Voyage calls).
+      // Run POST /api/embeddings/backfill periodically (or from the Ask UI) to
+      // populate embeddings for new content.
     }
 
     await db

@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { getUnreadCounts } from "@/lib/rss/sync";
 import { FeedsNav } from "@/components/feeds/feeds-nav";
 import { UnreadTitle } from "@/components/feeds/unread-title";
+import { ResizableShell } from "@/components/shell/resizable-shell";
 
 export default async function FeedsLayout({ children }: { children: React.ReactNode }) {
   const { user } = await requireUser();
@@ -18,10 +19,14 @@ export default async function FeedsLayout({ children }: { children: React.ReactN
   const totalUnread = Object.values(unread.perFeed).reduce((a, b) => a + b, 0);
 
   return (
-    <div className="flex h-full w-full overflow-hidden">
+    <>
       <UnreadTitle count={totalUnread} />
-      <FeedsNav folders={foldersList} feeds={feedsList} unread={unread} />
-      <div className="flex flex-1 overflow-hidden">{children}</div>
-    </div>
+      <ResizableShell
+        storageId="feeds-shell"
+        nav={<FeedsNav folders={foldersList} feeds={feedsList} unread={unread} />}
+      >
+        <div className="flex h-full overflow-hidden">{children}</div>
+      </ResizableShell>
+    </>
   );
 }

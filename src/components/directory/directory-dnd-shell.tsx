@@ -10,7 +10,10 @@ import {
 } from "@dnd-kit/core";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { bulkMoveDirectoryItemsAction } from "@/app/(app)/directory/actions";
+import {
+  bulkMoveDirectoryItemsAction,
+  moveDirectoryFolderToParentAction,
+} from "@/app/(app)/directory/actions";
 
 /**
  * Owns the DnD context for the entire Directory route so an item dragged out
@@ -28,19 +31,39 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
 
   function handleDragEnd(event: DragEndEvent) {
     setActiveItemId(null);
-    const itemId = String(event.active.id);
+    const activeId = String(event.active.id);
     const targetId = event.over?.id;
     if (!targetId) return;
-
-    // Drop targets register their id as `folder:<uuid>` or `folder:unsorted`.
     const target = String(targetId);
     if (!target.startsWith("folder:")) return;
-    const folderId: string | null = target === "folder:unsorted" ? null : target.slice("folder:".length);
 
+    // Two kinds of drag sources:
+    //   "folder-drag:<id>" — a folder is being dragged (to nest under another)
+    //   "<itemUUID>"       — an item is being dragged (to move into a folder)
+    const isFolderDrag = activeId.startsWith("folder-drag:");
+    const folderTargetId: string | null =
+      target === "folder:unsorted" ? null : target.slice("folder:".length);
+
+    if (isFolderDrag) {
+      const folderId = activeId.slice("folder-drag:".length);
+      if (folderId === folderTargetId) return;
+      startTransition(async () => {
+        const r = await moveDirectoryFolderToParentAction(folderId, folderTargetId);
+        if (r.ok) {
+          toast.success(folderTargetId ? "Folder nested" : "Folder moved to root");
+          router.refresh();
+        } else {
+          toast.error(r.error);
+        }
+      });
+      return;
+    }
+
+    // Item drag onto a folder (or Unsorted)
     startTransition(async () => {
-      const r = await bulkMoveDirectoryItemsAction([itemId], folderId);
+      const r = await bulkMoveDirectoryItemsAction([activeId], folderTargetId);
       if (r.ok) {
-        toast.success(folderId ? "Moved" : "Moved to Unsorted");
+        toast.success(folderTargetId ? "Moved" : "Moved to Unsorted");
         router.refresh();
       }
     });

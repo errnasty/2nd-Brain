@@ -345,7 +345,7 @@ function UploadButton({ onPick }: { onPick: (files: FileList) => void }) {
         id={inputId}
         type="file"
         multiple
-        accept=".pdf,.md,.markdown,.txt,.epub"
+        accept=".pdf,.md,.markdown,.txt,.epub,.docx,.pptx"
         className="hidden"
         onChange={(e) => {
           if (e.target.files) onPick(e.target.files);
@@ -356,7 +356,7 @@ function UploadButton({ onPick }: { onPick: (files: FileList) => void }) {
         size="icon"
         variant="ghost"
         className="h-7 w-7"
-        title="Upload PDF / Markdown / Text / ePub"
+        title="Upload PDF / DOCX / PPTX / Markdown / Text / ePub"
         onClick={() => document.getElementById(inputId)?.click()}
       >
         <Upload className="h-3.5 w-3.5" />

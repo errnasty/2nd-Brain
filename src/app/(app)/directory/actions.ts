@@ -143,6 +143,45 @@ export async function createDirectoryFolderAction(name: string) {
   }
 }
 
+/**
+ * Move a directory folder to be a child of another folder (or root if
+ * parentId is null). Refuses moves that would create a cycle.
+ */
+export async function moveDirectoryFolderToParentAction(
+  folderId: string,
+  parentId: string | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (folderId === parentId) return { ok: false, error: "Can't drop a folder onto itself" };
+  const { user } = await requireUser();
+
+  if (parentId) {
+    // Walk up from the target parent. If we hit `folderId`, we'd be making a
+    // cycle (dropping a folder into one of its own descendants).
+    const all = await db
+      .select({ id: directoryFolders.id, parentId: directoryFolders.parentId })
+      .from(directoryFolders)
+      .where(eq(directoryFolders.userId, user.id));
+    const byId = new Map(all.map((f) => [f.id, f]));
+    let cursor: { id: string; parentId: string | null } | undefined = byId.get(parentId);
+    let safety = 0;
+    while (cursor && safety < 32) {
+      if (cursor.id === folderId) {
+        return { ok: false, error: "Can't drop a folder into its own subtree" };
+      }
+      if (!cursor.parentId) break;
+      cursor = byId.get(cursor.parentId);
+      safety += 1;
+    }
+  }
+
+  await db
+    .update(directoryFolders)
+    .set({ parentId })
+    .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
+  revalidatePath("/directory");
+  return { ok: true };
+}
+
 export async function renameDirectoryFolderAction(folderId: string, name: string) {
   const parsed = FolderNameSchema.safeParse({ name });
   if (!parsed.success) return { ok: false as const, error: "Name required" };

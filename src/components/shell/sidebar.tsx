@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Library,
+  MessageCircle,
   Network,
   Rss,
   Sparkles,
@@ -15,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 
 const nav = [
   { href: "/today", label: "Today", icon: Sparkles },
+  { href: "/ask", label: "Ask", icon: MessageCircle },
   { href: "/feeds", label: "Feeds", icon: Rss },
   { href: "/directory", label: "Directory", icon: Library },
   { href: "/map", label: "Knowledge Map", icon: Network },

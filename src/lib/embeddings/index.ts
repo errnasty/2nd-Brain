@@ -1,11 +1,13 @@
 import { EMBEDDING_DIMS } from "@/lib/db/schema";
 
+export type EmbeddingInputType = "document" | "query";
+
 export interface EmbeddingsProvider {
   name: string;
   model: string;
   dims: number;
   /** Embed a batch of strings. Inputs are truncated to a safe per-item budget by the caller. */
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], inputType?: EmbeddingInputType): Promise<number[][]>;
 }
 
 /** Lazily resolve the provider so missing keys don't crash unrelated code paths. */
@@ -32,7 +34,7 @@ function openaiEmbeddings(): EmbeddingsProvider {
     name: "openai",
     model,
     dims: EMBEDDING_DIMS,
-    async embed(texts) {
+    async embed(texts /* inputType is ignored — OpenAI's space is symmetric */) {
       if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
       if (texts.length === 0) return [];
       const res = await fetch("https://api.openai.com/v1/embeddings", {
@@ -64,7 +66,7 @@ function voyageEmbeddings(): EmbeddingsProvider {
     name: "voyage",
     model,
     dims: EMBEDDING_DIMS,
-    async embed(texts) {
+    async embed(texts, inputType = "document") {
       if (!apiKey) throw new Error("VOYAGE_API_KEY not configured");
       if (texts.length === 0) return [];
       const res = await fetch("https://api.voyageai.com/v1/embeddings", {
@@ -76,7 +78,7 @@ function voyageEmbeddings(): EmbeddingsProvider {
         body: JSON.stringify({
           model,
           input: texts,
-          input_type: "document",
+          input_type: inputType,
         }),
       });
       if (!res.ok) {

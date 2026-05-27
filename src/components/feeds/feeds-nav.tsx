@@ -141,7 +141,7 @@ export function FeedsNav({
   }
 
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-border md:flex">
+    <aside className="flex h-full w-full flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3">
         <div className="text-sm font-semibold">Feeds</div>
@@ -153,8 +153,14 @@ export function FeedsNav({
             disabled={pending}
             onClick={() =>
               startTransition(async () => {
-                await syncAllAction();
-                toast.success("All feeds synced");
+                try {
+                  await syncAllAction();
+                  toast.success("All feeds synced");
+                } catch (err) {
+                  toast.error(
+                    `Sync failed: ${err instanceof Error ? err.message : "unknown error"}. Some feeds may have synced.`,
+                  );
+                }
               })
             }
             title="Sync all"
@@ -618,9 +624,15 @@ function FeedRow({
           disabled={pending}
           onClick={() =>
             startTransition(async () => {
-              const r = await syncFeedAction(feed.id);
-              if (r.errored) toast.error(`Sync failed: ${r.error}`);
-              else toast.success(`Synced — ${r.inserted} new article${r.inserted === 1 ? "" : "s"}`);
+              try {
+                const r = await syncFeedAction(feed.id);
+                if (r.errored) toast.error(`Sync failed: ${r.error}`);
+                else toast.success(`Synced — ${r.inserted} new article${r.inserted === 1 ? "" : "s"}`);
+              } catch (err) {
+                toast.error(
+                  `Sync failed: ${err instanceof Error ? err.message : "unknown error"}`,
+                );
+              }
             })
           }
         >

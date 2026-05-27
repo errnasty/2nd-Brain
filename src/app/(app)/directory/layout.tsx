@@ -4,6 +4,7 @@ import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { DirectoryNav } from "@/components/directory/directory-nav";
 import { DirectoryDndShell } from "@/components/directory/directory-dnd-shell";
+import { ResizableShell } from "@/components/shell/resizable-shell";
 
 export default async function DirectoryLayout({ children }: { children: React.ReactNode }) {
   const { user } = await requireUser();
@@ -36,14 +37,18 @@ export default async function DirectoryLayout({ children }: { children: React.Re
 
   return (
     <DirectoryDndShell>
-      <div className="flex h-full w-full overflow-hidden">
-        <DirectoryNav
-          folders={folders}
-          folderCounts={folderCountMap}
-          unsortedCount={unsortedCount}
-        />
-        <div className="flex flex-1 overflow-hidden">{children}</div>
-      </div>
+      <ResizableShell
+        storageId="directory-shell"
+        nav={
+          <DirectoryNav
+            folders={folders}
+            folderCounts={folderCountMap}
+            unsortedCount={unsortedCount}
+          />
+        }
+      >
+        <div className="flex h-full overflow-hidden">{children}</div>
+      </ResizableShell>
     </DirectoryDndShell>
   );
 }
