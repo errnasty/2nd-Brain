@@ -107,30 +107,23 @@ export async function syncAllFeeds(): Promise<{ total: number; ok: number; faile
   };
 }
 
-/** Returns unread counts per feed and per folder for the given user, in one round trip each. */
+/** Returns unread counts per feed and per folder for the given user in a single round trip. */
 export async function getUnreadCounts(userId: string) {
-  const perFeed = await db
-    .select({
-      feedId: articles.feedId,
-      count: sql<number>`count(*)::int`.as("count"),
-    })
-    .from(articles)
-    .where(and(eq(articles.userId, userId), eq(articles.readStatus, "unread")))
-    .groupBy(articles.feedId);
+  // One scan, two groupings — postgres-js returns the result as the array directly.
+  type Row = { feed_id: string; folder_id: string | null; count: number };
+  const rows = (await db.execute(sql`
+    select feed_id, folder_id, count(*)::int as count
+    from articles
+    where user_id = ${userId} and read_status = 'unread'
+    group by feed_id, folder_id
+  `)) as unknown as Row[];
 
-  const perFolder = await db
-    .select({
-      folderId: articles.folderId,
-      count: sql<number>`count(*)::int`.as("count"),
-    })
-    .from(articles)
-    .where(and(eq(articles.userId, userId), eq(articles.readStatus, "unread")))
-    .groupBy(articles.folderId);
-
-  return {
-    perFeed: Object.fromEntries(perFeed.map((r) => [r.feedId, r.count])) as Record<string, number>,
-    perFolder: Object.fromEntries(
-      perFolder.map((r) => [r.folderId ?? "__inbox__", r.count]),
-    ) as Record<string, number>,
-  };
+  const perFeed: Record<string, number> = {};
+  const perFolder: Record<string, number> = {};
+  for (const r of rows) {
+    perFeed[r.feed_id] = (perFeed[r.feed_id] ?? 0) + r.count;
+    const folderKey = r.folder_id ?? "__inbox__";
+    perFolder[folderKey] = (perFolder[folderKey] ?? 0) + r.count;
+  }
+  return { perFeed, perFolder };
 }
