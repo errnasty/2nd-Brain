@@ -18,8 +18,13 @@ import {
 const EMBEDDING_DIMS = 1024;
 
 export const readStatusEnum = pgEnum("read_status", ["unread", "read", "archived"]);
-export const itemKindEnum = pgEnum("item_kind", ["article", "document"]);
+export const itemKindEnum = pgEnum("item_kind", ["article", "document", "directory_item"]);
 export const docKindEnum = pgEnum("doc_kind", ["pdf", "markdown", "text", "epub"]);
+export const directoryItemKindEnum = pgEnum("directory_item_kind", [
+  "saved_article",
+  "uploaded_document",
+  "user_note",
+]);
 
 export const profiles = pgTable("profiles", {
   id: uuid("id").primaryKey().notNull(),
@@ -184,6 +189,55 @@ export const articleEmbeddings = pgTable(
   }),
 );
 
+// ── Directory: unified permanent storage ────────────────────────────────
+// `folders` continues to be used for *feed* organization. The Directory uses
+// its own folder tree so renames/moves on one side don't affect the other.
+
+export const directoryFolders = pgTable(
+  "directory_folders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    parentId: uuid("parent_id"),
+    position: integer("position").default(0).notNull(),
+    isInbox: boolean("is_inbox").default(false).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userNameUnique: uniqueIndex("directory_folders_user_name_unique").on(t.userId, t.name),
+    userIdx: index("directory_folders_user_idx").on(t.userId),
+  }),
+);
+
+export const directoryItems = pgTable(
+  "directory_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    folderId: uuid("folder_id").references(() => directoryFolders.id, { onDelete: "set null" }),
+    kind: directoryItemKindEnum("kind").notNull(),
+    title: text("title").notNull(),
+    content: text("content"),
+    sourceUrl: text("source_url"),
+    articleId: uuid("article_id").references(() => articles.id, { onDelete: "set null" }),
+    documentId: uuid("document_id").references(() => documents.id, { onDelete: "set null" }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userKindUpdatedIdx: index("directory_items_user_idx").on(t.userId, t.kind, t.updatedAt),
+    folderIdx: index("directory_items_folder_idx").on(t.folderId),
+    articleIdx: index("directory_items_article_idx").on(t.articleId),
+    documentIdx: index("directory_items_document_idx").on(t.documentId),
+  }),
+);
+
 export const tags = pgTable(
   "tags",
   {
@@ -229,6 +283,8 @@ export type Feed = typeof feeds.$inferSelect;
 export type Article = typeof articles.$inferSelect;
 export type Document = typeof documents.$inferSelect;
 export type DocumentChunk = typeof documentChunks.$inferSelect;
+export type DirectoryFolder = typeof directoryFolders.$inferSelect;
+export type DirectoryItem = typeof directoryItems.$inferSelect;
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 

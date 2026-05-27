@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  BookOpen,
-  FileText,
-  FolderClosed,
   Inbox,
+  Library,
+  Network,
   Rss,
   Sparkles,
   Tag,
@@ -16,13 +15,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
 const nav = [
-  { href: "/", label: "Inbox", icon: Inbox },
   { href: "/today", label: "Today", icon: Sparkles },
   { href: "/feeds", label: "Feeds", icon: Rss },
-  { href: "/library", label: "Library", icon: BookOpen },
-  { href: "/documents", label: "Documents", icon: FileText },
-  { href: "/folders", label: "Folders", icon: FolderClosed },
+  { href: "/directory", label: "Directory", icon: Library },
+  { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/tags", label: "Tags", icon: Tag },
+  { href: "/", label: "Inbox", icon: Inbox },
 ];
 
 export function Sidebar({ userEmail }: { userEmail: string }) {

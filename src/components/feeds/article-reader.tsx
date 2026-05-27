@@ -2,16 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Image from "next/image";
-import { ChevronLeft, ChevronRight, ExternalLink, Star, X } from "lucide-react";
+import {
+  BookmarkPlus,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Star,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  processArticleAction,
   setReadStatusAction,
   toggleStarredAction,
 } from "@/app/(app)/feeds/actions";
+import { saveArticleToDirectoryAction } from "@/app/(app)/directory/actions";
 import { formatRelativeTime } from "@/lib/utils";
 import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
@@ -48,8 +55,6 @@ export function ArticleReader({
   const [content, setContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
-  const [articleTags, setArticleTags] = useState<string[]>([]);
-  const [tagsLoading, setTagsLoading] = useState(false);
   const [, startTransition] = useTransition();
 
   const currentIdx = useMemo(
@@ -68,6 +73,18 @@ export function ArticleReader({
     const next = !article.starred;
     setArticle({ ...article, starred: next });
     startTransition(() => toggleStarredAction(article.id, next));
+  }
+
+  function saveToDirectory() {
+    if (!article) return;
+    startTransition(async () => {
+      const r = await saveArticleToDirectoryAction(article.id);
+      if (r.ok) {
+        toast.success(r.alreadySaved ? "Already in your Directory" : "Saved to Directory");
+      } else {
+        toast.error(r.error);
+      }
+    });
   }
 
   function toggleRead() {
@@ -104,8 +121,6 @@ export function ArticleReader({
   useEffect(() => {
     setExtractError(null);
     setContent(null);
-    setArticleTags([]);
-    setTagsLoading(false);
 
     if (!selectedId) {
       setArticle(null);
@@ -185,28 +200,9 @@ export function ArticleReader({
     return () => clearTimeout(handle);
   }, [article?.id]);
 
-  // Auto-tag + smart-route once content is available. Idempotent — already-
-  // processed articles return their stored tags without an LLM call.
-  useEffect(() => {
-    if (!article || !content) return;
-    let aborted = false;
-    setTagsLoading(true);
-    processArticleAction(article.id)
-      .then((res) => {
-        if (aborted) return;
-        if (res.ok) setArticleTags(res.tags);
-        if (res.ok && res.routedTo && !res.alreadyProcessed) {
-          toast.success(`Routed to "${res.routedTo}"`);
-        }
-      })
-      .catch(() => {
-        // Silent failure — feature is best-effort
-      })
-      .finally(() => !aborted && setTagsLoading(false));
-    return () => {
-      aborted = true;
-    };
-  }, [article?.id, content]);
+  // Note: RSS articles are NOT auto-tagged anymore — tagging is the Directory's
+  // job. Save the article to your Directory (bookmark icon) to get tags +
+  // routing. This makes article-open instant.
 
   if (!selectedId) {
     return (
@@ -266,6 +262,15 @@ export function ArticleReader({
           <span className="truncate">{article?.feedTitle ?? ""}</span>
           {readingMinutes && <span className="hidden sm:inline">· ~{readingMinutes} min</span>}
         </div>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={saveToDirectory}
+          title="Save to Directory"
+          disabled={!article}
+        >
+          <BookmarkPlus className="h-4 w-4" />
+        </Button>
         <Button size="icon" variant="ghost" onClick={toggleStar} title="Star (s)" disabled={!article}>
           <Star className={article?.starred ? "fill-yellow-500 text-yellow-500" : ""} />
         </Button>
@@ -297,31 +302,13 @@ export function ArticleReader({
           ) : (
             <>
               <h1>{article.title}</h1>
-              <div className="not-prose mt-3 mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                 {article.author && (
                   <span className="font-medium text-foreground/75">{article.author}</span>
                 )}
                 {article.author && <span className="text-border">·</span>}
                 <span>{formatRelativeTime(article.publishDate)}</span>
               </div>
-              {(articleTags.length > 0 || tagsLoading) && (
-                <div className="not-prose mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-1.5">
-                  {articleTags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="inline-flex items-center rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-medium text-accent-foreground"
-                    >
-                      #{tag}
-                    </span>
-                  ))}
-                  {tagsLoading && articleTags.length === 0 && (
-                    <span className="text-[11px] text-muted-foreground italic">Generating tags…</span>
-                  )}
-                </div>
-              )}
-              {articleTags.length === 0 && !tagsLoading && (
-                <div className="not-prose mb-8 pb-6 border-b border-border" />
-              )}
               {loadingContent && !content && (
                 <div className="space-y-3">
                   <Skeleton className="h-4 w-3/4" />

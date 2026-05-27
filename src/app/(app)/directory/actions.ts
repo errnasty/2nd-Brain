@@ -1,0 +1,481 @@
+"use server";
+
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { db } from "@/lib/db";
+import {
+  articles,
+  directoryFolders,
+  directoryItems,
+  documentChunks,
+  documents,
+  itemTags,
+  tags,
+} from "@/lib/db/schema";
+import { requireUser } from "@/lib/auth";
+import { generateTags, tagSlug } from "@/lib/ai/tagging";
+import { routeToFolder } from "@/lib/ai/routing";
+import { detectKind, extractByKind } from "@/lib/documents/extract";
+import { chunkText } from "@/lib/documents/chunker";
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Auto-tag any directory item. Idempotent — items already tagged are not re-tagged.
+ * Called inline after item creation; safe to call again later for re-processing.
+ */
+async function autoTagDirectoryItem(userId: string, itemId: string) {
+  const [item] = await db
+    .select()
+    .from(directoryItems)
+    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, userId)))
+    .limit(1);
+  if (!item) return [];
+
+  // Already tagged?
+  const existing = await db
+    .select({ tagId: itemTags.tagId })
+    .from(itemTags)
+    .where(
+      and(
+        eq(itemTags.itemId, itemId),
+        eq(itemTags.itemKind, "directory_item"),
+        eq(itemTags.userId, userId),
+      ),
+    );
+  if (existing.length > 0) {
+    const rows = await db
+      .select({ name: tags.name })
+      .from(tags)
+      .where(and(eq(tags.userId, userId), inArray(tags.id, existing.map((t) => t.tagId))));
+    return rows.map((r) => r.name);
+  }
+
+  // Build text for tagging: title + content (or stripped HTML for articles/docs)
+  let body = item.content ?? "";
+  if (item.kind === "saved_article" && item.articleId) {
+    const [art] = await db
+      .select({ excerpt: articles.excerpt, fullText: articles.fullText })
+      .from(articles)
+      .where(eq(articles.id, item.articleId))
+      .limit(1);
+    if (art) body = art.fullText ? stripHtml(art.fullText) : art.excerpt ?? "";
+  } else if (item.kind === "uploaded_document" && item.documentId) {
+    const [doc] = await db
+      .select({ fullText: documents.fullText })
+      .from(documents)
+      .where(eq(documents.id, item.documentId))
+      .limit(1);
+    if (doc?.fullText) body = doc.fullText;
+  }
+
+  const allUserTags = await db.select().from(tags).where(eq(tags.userId, userId));
+  const generated = await generateTags(item.title, body, allUserTags.map((t) => t.name));
+  if (generated.length === 0) return [];
+
+  const persisted: string[] = [];
+  for (const name of generated) {
+    const slug = tagSlug(name);
+    if (!slug) continue;
+    let tag = allUserTags.find((t) => t.slug === slug);
+    if (!tag) {
+      const [inserted] = await db
+        .insert(tags)
+        .values({ userId, name, slug })
+        .onConflictDoNothing({ target: [tags.userId, tags.slug] })
+        .returning();
+      if (inserted) {
+        tag = inserted;
+        allUserTags.push(inserted);
+      } else {
+        const [existingRow] = await db
+          .select()
+          .from(tags)
+          .where(and(eq(tags.userId, userId), eq(tags.slug, slug)))
+          .limit(1);
+        tag = existingRow;
+      }
+    }
+    if (!tag) continue;
+    await db
+      .insert(itemTags)
+      .values({
+        tagId: tag.id,
+        itemKind: "directory_item",
+        itemId: itemId,
+        userId,
+        source: "ai",
+      })
+      .onConflictDoNothing();
+    persisted.push(tag.name);
+  }
+  return persisted;
+}
+
+// ── Folder CRUD ──────────────────────────────────────────────────────
+
+const FolderNameSchema = z.object({ name: z.string().trim().min(1).max(60) });
+
+export async function createDirectoryFolderAction(name: string) {
+  const parsed = FolderNameSchema.safeParse({ name });
+  if (!parsed.success) return { ok: false as const, error: "Name required" };
+  const { user } = await requireUser();
+  try {
+    const [row] = await db
+      .insert(directoryFolders)
+      .values({ userId: user.id, name: parsed.data.name })
+      .returning({ id: directoryFolders.id });
+    revalidatePath("/directory");
+    return { ok: true as const, folderId: row.id };
+  } catch {
+    return { ok: false as const, error: "Folder already exists" };
+  }
+}
+
+export async function renameDirectoryFolderAction(folderId: string, name: string) {
+  const parsed = FolderNameSchema.safeParse({ name });
+  if (!parsed.success) return { ok: false as const, error: "Name required" };
+  const { user } = await requireUser();
+  await db
+    .update(directoryFolders)
+    .set({ name: parsed.data.name })
+    .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
+  revalidatePath("/directory");
+  return { ok: true as const };
+}
+
+export async function deleteDirectoryFolderAction(folderId: string) {
+  const { user } = await requireUser();
+  await db
+    .update(directoryItems)
+    .set({ folderId: null })
+    .where(and(eq(directoryItems.folderId, folderId), eq(directoryItems.userId, user.id)));
+  await db
+    .delete(directoryFolders)
+    .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
+  revalidatePath("/directory");
+}
+
+// ── Note CRUD ────────────────────────────────────────────────────────
+
+const NoteSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  content: z.string().max(200_000).optional(),
+  folderId: z.string().uuid().nullish(),
+});
+
+export async function createNoteAction(input: { title: string; content?: string; folderId?: string | null }) {
+  const parsed = NoteSchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid input" };
+  const { user } = await requireUser();
+  const [row] = await db
+    .insert(directoryItems)
+    .values({
+      userId: user.id,
+      folderId: parsed.data.folderId ?? null,
+      kind: "user_note",
+      title: parsed.data.title,
+      content: parsed.data.content ?? "",
+      updatedAt: new Date(),
+    })
+    .returning({ id: directoryItems.id });
+
+  // Auto-tag in the background (best-effort, doesn't block the response).
+  // We await Promise.resolve so the work is scheduled but we still return fast.
+  void autoTagDirectoryItem(user.id, row.id);
+
+  revalidatePath("/directory");
+  return { ok: true as const, itemId: row.id };
+}
+
+const UpdateNoteSchema = z.object({
+  id: z.string().uuid(),
+  title: z.string().trim().min(1).max(300).optional(),
+  content: z.string().max(200_000).optional(),
+  folderId: z.string().uuid().nullable().optional(),
+});
+
+export async function updateNoteAction(input: {
+  id: string;
+  title?: string;
+  content?: string;
+  folderId?: string | null;
+}) {
+  const parsed = UpdateNoteSchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid input" };
+  const { user } = await requireUser();
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (parsed.data.title !== undefined) patch.title = parsed.data.title;
+  if (parsed.data.content !== undefined) patch.content = parsed.data.content;
+  if (parsed.data.folderId !== undefined) patch.folderId = parsed.data.folderId;
+  await db
+    .update(directoryItems)
+    .set(patch)
+    .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)));
+  revalidatePath("/directory");
+  return { ok: true as const };
+}
+
+export async function deleteDirectoryItemAction(itemId: string) {
+  const { user } = await requireUser();
+  // Clean up item_tags first (CASCADE doesn't apply for polymorphic FK)
+  await db
+    .delete(itemTags)
+    .where(
+      and(
+        eq(itemTags.itemId, itemId),
+        eq(itemTags.itemKind, "directory_item"),
+        eq(itemTags.userId, user.id),
+      ),
+    );
+  await db
+    .delete(directoryItems)
+    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)));
+  revalidatePath("/directory");
+}
+
+// ── Save an article to the Directory ────────────────────────────────
+
+export async function saveArticleToDirectoryAction(articleId: string, folderId?: string | null) {
+  const { user } = await requireUser();
+  const [article] = await db
+    .select()
+    .from(articles)
+    .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)))
+    .limit(1);
+  if (!article) return { ok: false as const, error: "Article not found" };
+
+  // Dedup: if this article was already saved, return that id
+  const [existing] = await db
+    .select({ id: directoryItems.id })
+    .from(directoryItems)
+    .where(
+      and(
+        eq(directoryItems.userId, user.id),
+        eq(directoryItems.articleId, articleId),
+        eq(directoryItems.kind, "saved_article"),
+      ),
+    )
+    .limit(1);
+  if (existing) return { ok: true as const, itemId: existing.id, alreadySaved: true };
+
+  const [row] = await db
+    .insert(directoryItems)
+    .values({
+      userId: user.id,
+      folderId: folderId ?? null,
+      kind: "saved_article",
+      title: article.title,
+      sourceUrl: article.url,
+      articleId: article.id,
+      updatedAt: new Date(),
+    })
+    .returning({ id: directoryItems.id });
+
+  void autoTagDirectoryItem(user.id, row.id);
+  revalidatePath("/directory");
+  return { ok: true as const, itemId: row.id, alreadySaved: false };
+}
+
+// ── Upload a file as a directory item ────────────────────────────────
+
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+export type DirectoryUploadResult =
+  | { ok: true; itemId: string; chunkCount: number }
+  | { ok: false; error: string };
+
+export async function uploadToDirectoryAction(formData: FormData): Promise<DirectoryUploadResult> {
+  const file = formData.get("file");
+  const folderId = (formData.get("folderId") as string | null) || null;
+
+  if (!file || !(file instanceof File)) return { ok: false, error: "No file provided" };
+  if (file.size > MAX_UPLOAD_BYTES)
+    return { ok: false, error: `File exceeds ${MAX_UPLOAD_BYTES / 1024 / 1024}MB` };
+
+  const kind = detectKind(file.name, file.type);
+  if (!kind) return { ok: false, error: "Unsupported file type. Allowed: .pdf, .md, .txt, .epub" };
+
+  const { user } = await requireUser();
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const { text, pageCount } = await extractByKind(kind, buffer);
+    if (!text || text.trim().length === 0)
+      return { ok: false, error: "No text could be extracted from this file" };
+
+    const title = file.name.replace(/\.[^.]+$/, "");
+
+    // 1) Underlying document row (file storage layer)
+    const [doc] = await db
+      .insert(documents)
+      .values({
+        userId: user.id,
+        folderId: null,
+        title,
+        kind,
+        sizeBytes: file.size,
+        pageCount,
+        fullText: text,
+        metadata: { originalName: file.name, mimeType: file.type },
+      })
+      .returning({ id: documents.id });
+
+    // 2) Chunks for embeddings (Phase 4 backfill embeds them later)
+    const chunks = chunkText(text);
+    if (chunks.length > 0) {
+      await db.insert(documentChunks).values(
+        chunks.map((c) => ({
+          documentId: doc.id,
+          userId: user.id,
+          chunkIndex: c.index,
+          content: c.text,
+          tokenCount: c.approxTokens,
+        })),
+      );
+    }
+
+    // 3) Directory item that references the document
+    const [item] = await db
+      .insert(directoryItems)
+      .values({
+        userId: user.id,
+        folderId,
+        kind: "uploaded_document",
+        title,
+        documentId: doc.id,
+        sourceUrl: null,
+        content: text.length > 10_000 ? text.slice(0, 10_000) : text,
+        metadata: { originalName: file.name, mimeType: file.type, sizeBytes: file.size },
+        updatedAt: new Date(),
+      })
+      .returning({ id: directoryItems.id });
+
+    void autoTagDirectoryItem(user.id, item.id);
+
+    revalidatePath("/directory");
+    return { ok: true, itemId: item.id, chunkCount: chunks.length };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
+  }
+}
+
+// ── Auto-Organize ───────────────────────────────────────────────────
+// Routes every directory_item with folder_id IS NULL into the best-matching
+// directory_folder via Claude. Anything without a confident match goes to
+// the [Inbox] folder (lazily created).
+
+export async function autoOrganizeDirectoryAction() {
+  const { user } = await requireUser();
+
+  const [unsorted, allFolders] = await Promise.all([
+    db
+      .select({
+        id: directoryItems.id,
+        title: directoryItems.title,
+        content: directoryItems.content,
+      })
+      .from(directoryItems)
+      .where(and(eq(directoryItems.userId, user.id), sql`${directoryItems.folderId} is null`))
+      .limit(200),
+    db.select().from(directoryFolders).where(eq(directoryFolders.userId, user.id)),
+  ]);
+
+  if (unsorted.length === 0) return { ok: true as const, routed: 0, total: 0 };
+
+  // Ensure [Inbox] exists
+  let inbox = allFolders.find((f) => f.isInbox);
+  if (!inbox) {
+    const [created] = await db
+      .insert(directoryFolders)
+      .values({ userId: user.id, name: "[Inbox]", isInbox: true })
+      .onConflictDoNothing({ target: [directoryFolders.userId, directoryFolders.name] })
+      .returning();
+    inbox =
+      created ??
+      (
+        await db
+          .select()
+          .from(directoryFolders)
+          .where(and(eq(directoryFolders.userId, user.id), eq(directoryFolders.isInbox, true)))
+          .limit(1)
+      )[0];
+  }
+  const inboxId = inbox?.id;
+
+  const candidateFolderNames = allFolders.filter((f) => !f.isInbox).map((f) => f.name);
+
+  let routedCount = 0;
+  // Sequential to avoid hitting Claude rate limits; small batch size is fine
+  for (const item of unsorted) {
+    const routing = await routeToFolder(
+      item.title,
+      (item.content ?? "").slice(0, 800),
+      candidateFolderNames,
+    );
+    let targetId: string | null = null;
+    if (routing.folderName) {
+      const match = allFolders.find((f) => f.name === routing.folderName);
+      if (match) targetId = match.id;
+    }
+    if (!targetId && inboxId) targetId = inboxId;
+    if (targetId) {
+      await db
+        .update(directoryItems)
+        .set({ folderId: targetId })
+        .where(and(eq(directoryItems.id, item.id), eq(directoryItems.userId, user.id)));
+      routedCount += 1;
+    }
+  }
+
+  revalidatePath("/directory");
+  return { ok: true as const, routed: routedCount, total: unsorted.length };
+}
+
+// ── Tag filtering ────────────────────────────────────────────────────
+
+export async function getDirectoryItemsByTagsAction(tagIds: string[]) {
+  const { user } = await requireUser();
+  if (tagIds.length === 0) return [];
+
+  // Items that match ALL of the selected tag ids (AND semantics): group by
+  // itemId and require the matched-tag count to equal the requested count.
+  const matchedRows = await db
+    .select({ itemId: itemTags.itemId })
+    .from(itemTags)
+    .where(
+      and(
+        eq(itemTags.userId, user.id),
+        eq(itemTags.itemKind, "directory_item"),
+        inArray(itemTags.tagId, tagIds),
+      ),
+    )
+    .groupBy(itemTags.itemId)
+    .having(sql`count(distinct ${itemTags.tagId}) = ${tagIds.length}`);
+
+  if (matchedRows.length === 0) return [];
+  const ids = matchedRows.map((r) => r.itemId);
+
+  return db
+    .select({
+      id: directoryItems.id,
+      title: directoryItems.title,
+      kind: directoryItems.kind,
+      folderId: directoryItems.folderId,
+      createdAt: directoryItems.createdAt,
+      updatedAt: directoryItems.updatedAt,
+    })
+    .from(directoryItems)
+    .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, ids)))
+    .orderBy(desc(directoryItems.updatedAt))
+    .limit(200);
+}
