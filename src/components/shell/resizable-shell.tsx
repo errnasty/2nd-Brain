@@ -7,13 +7,18 @@ import {
   PanelResizeHandle,
   type ImperativePanelHandle,
 } from "react-resizable-panels";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
- * Two-pane horizontal split with a draggable handle. Panel widths are saved
- * to localStorage via `autoSaveId`. The left panel collapses to zero with a
- * floating toggle button.
+ * Two-pane horizontal split with a draggable handle. Panel widths persist via
+ * `autoSaveId` (localStorage). To collapse the nav, drag the handle all the
+ * way to the left or use the keyboard ([) when focused on the handle.
+ *
+ * When collapsed, a small floating "Show sidebar" button appears at the left
+ * edge of the content area. We don't render a "Hide sidebar" button while the
+ * nav is open because it would overlap the nav's own header text — users can
+ * just drag the divider.
  */
 export function ResizableShell({
   nav,
@@ -32,15 +37,6 @@ export function ResizableShell({
 }) {
   const panelRef = useRef<ImperativePanelHandle>(null);
   const [collapsed, setCollapsed] = useState(false);
-
-  function toggle() {
-    if (!panelRef.current) return;
-    if (collapsed) {
-      panelRef.current.expand();
-    } else {
-      panelRef.current.collapse();
-    }
-  }
 
   return (
     <div className="relative flex h-full w-full overflow-hidden">
@@ -66,20 +62,20 @@ export function ResizableShell({
         </Panel>
       </PanelGroup>
 
-      {/* Floating collapse / expand toggle, anchored to the divider area */}
-      <Button
-        onClick={toggle}
-        size="icon"
-        variant="ghost"
-        className="absolute left-2 top-2 z-10 h-7 w-7"
-        title={collapsed ? "Show sidebar" : "Hide sidebar"}
-      >
-        {collapsed ? (
+      {/* Show "Expand" only when the nav is collapsed — clicking the handle is
+          enough to collapse, and a button here would otherwise sit on top of
+          the nav header text. */}
+      {collapsed && (
+        <Button
+          onClick={() => panelRef.current?.expand()}
+          size="icon"
+          variant="ghost"
+          className="absolute left-2 top-2 z-10 h-7 w-7 rounded-full bg-card/90 shadow-sm backdrop-blur"
+          title="Show sidebar"
+        >
           <PanelLeftOpen className="h-3.5 w-3.5" />
-        ) : (
-          <PanelLeftClose className="h-3.5 w-3.5" />
-        )}
-      </Button>
+        </Button>
+      )}
     </div>
   );
 }

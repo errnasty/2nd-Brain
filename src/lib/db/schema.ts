@@ -227,6 +227,10 @@ export const directoryItems = pgTable(
     articleId: uuid("article_id").references(() => articles.id, { onDelete: "set null" }),
     documentId: uuid("document_id").references(() => documents.id, { onDelete: "set null" }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    // For user_note rows we store the embedding directly here (notes have no
+    // separate documents row). For saved_article + uploaded_document this is
+    // left null — their embeddings live on article_embeddings / document_chunks.
+    embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -235,6 +239,10 @@ export const directoryItems = pgTable(
     folderIdx: index("directory_items_folder_idx").on(t.folderId),
     articleIdx: index("directory_items_article_idx").on(t.articleId),
     documentIdx: index("directory_items_document_idx").on(t.documentId),
+    embeddingIdx: index("directory_items_embedding_idx").using(
+      "hnsw",
+      t.embedding.op("vector_cosine_ops"),
+    ),
   }),
 );
 

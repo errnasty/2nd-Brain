@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 
 const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
+const BRIEF_CACHE_KEY = "brief.cache.v1";
 
 const DEFAULT_PROMPT_PLACEHOLDER = `You are my personal Second Brain curator. I already receive a highly detailed daily news summary via email, so your goal here is NOT to summarize everything. Your goal is rapid triage and discovery.
 
@@ -40,7 +41,9 @@ export function DailyBrief() {
   const [savedPrompt, setSavedPrompt] = useState("");
   const hasMounted = useRef(false);
 
-  // Load saved prompt from localStorage on mount
+  // Load saved prompt + cached brief on mount. If a cached brief exists we
+  // show it immediately; otherwise we kick off a fresh stream below.
+  const [hydratedFromCache, setHydratedFromCache] = useState(false);
   useEffect(() => {
     if (hasMounted.current) return;
     hasMounted.current = true;
@@ -50,6 +53,20 @@ export function DailyBrief() {
       setCustomPrompt(saved);
     } catch {
       // ignore
+    }
+    try {
+      const raw = localStorage.getItem(BRIEF_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { content: string; generatedAt: string };
+        if (parsed.content) {
+          setContent(parsed.content);
+          setGeneratedAt(new Date(parsed.generatedAt));
+          setLoading(false);
+          setHydratedFromCache(true);
+        }
+      }
+    } catch {
+      // ignore parse errors
     }
   }, []);
 
@@ -78,12 +95,25 @@ export function DailyBrief() {
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+      let acc = "";
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        setContent((prev) => prev + decoder.decode(value, { stream: true }));
+        const chunk = decoder.decode(value, { stream: true });
+        acc += chunk;
+        setContent((prev) => prev + chunk);
       }
-      setGeneratedAt(new Date());
+      const finishedAt = new Date();
+      setGeneratedAt(finishedAt);
+      // Persist the completed brief so the page hydrates instantly next visit
+      try {
+        localStorage.setItem(
+          BRIEF_CACHE_KEY,
+          JSON.stringify({ content: acc, generatedAt: finishedAt.toISOString() }),
+        );
+      } catch {
+        // quota errors — silently ignore
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load brief");
     } finally {
@@ -91,15 +121,18 @@ export function DailyBrief() {
     }
   }, [savedPrompt]);
 
+  // Only auto-stream on mount if we don't already have a cached brief.
   useEffect(() => {
+    if (hydratedFromCache) return;
     stream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [hydratedFromCache]);
 
   function savePrompt() {
     try {
       const trimmed = customPrompt.trim();
       localStorage.setItem(PROMPT_STORAGE_KEY, trimmed);
+      localStorage.removeItem(BRIEF_CACHE_KEY); // prompt changed; old brief is stale
       setSavedPrompt(trimmed);
       setSettingsOpen(false);
       toast.success(trimmed ? "Custom prompt saved" : "Reset to default prompt");

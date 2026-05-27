@@ -19,6 +19,7 @@ import { routeToFolder } from "@/lib/ai/routing";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
+import { embedNote } from "@/lib/embeddings/backfill";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -265,6 +266,8 @@ export async function createNoteAction(input: { title: string; content?: string;
 
   // Notes are NOT auto-tagged — the user controls their own taxonomy here.
   // Use the manual "Tag with AI" action on a note to trigger tagging on demand.
+  // Embed the note in the background so Ask can find it (no await).
+  void embedNote(row.id, user.id, parsed.data.title, parsed.data.content ?? null);
 
   revalidatePath("/directory");
   return { ok: true as const, itemId: row.id };
@@ -290,10 +293,31 @@ export async function updateNoteAction(input: {
   if (parsed.data.title !== undefined) patch.title = parsed.data.title;
   if (parsed.data.content !== undefined) patch.content = parsed.data.content;
   if (parsed.data.folderId !== undefined) patch.folderId = parsed.data.folderId;
+  // If the note text changed, clear the embedding so the next backfill (or
+  // embedNote below) re-embeds the new content. Stale embeddings would make
+  // Ask retrieve based on outdated text.
+  if (parsed.data.title !== undefined || parsed.data.content !== undefined) {
+    patch.embedding = null;
+  }
   await db
     .update(directoryItems)
     .set(patch)
     .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)));
+
+  // Re-embed with the new text (fire-and-forget). Only relevant for notes;
+  // for other kinds the embedding column stays null and they're searched via
+  // their related tables anyway.
+  if (parsed.data.title !== undefined || parsed.data.content !== undefined) {
+    const [row] = await db
+      .select({ kind: directoryItems.kind, title: directoryItems.title, content: directoryItems.content })
+      .from(directoryItems)
+      .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)))
+      .limit(1);
+    if (row?.kind === "user_note") {
+      void embedNote(parsed.data.id, user.id, row.title, row.content);
+    }
+  }
+
   revalidatePath("/directory");
   return { ok: true as const };
 }

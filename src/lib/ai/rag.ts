@@ -8,7 +8,7 @@ export type RagSource = {
   kind: "saved_article" | "uploaded_document" | "user_note";
   snippet: string;
   similarity: number;
-  sourceKind: "article" | "chunk";
+  sourceKind: "article" | "chunk" | "note";
 };
 
 /**
@@ -18,9 +18,8 @@ export type RagSource = {
  *   - document chunks of UPLOADED DOCUMENTS that have a directory_items row
  *   - article_embeddings of SAVED ARTICLES that have a directory_items row
  *
- * Note: notes (kind = 'user_note') aren't searched yet because they don't have
- * embeddings (no documents row to chunk). They appear in the Directory but
- * the user must look at them directly.
+ * Notes (kind = 'user_note') are embedded directly on directory_items.embedding
+ * (no underlying document row to chunk).
  *
  * Results are deduplicated by directoryItemId (an item with many chunks only
  * yields one entry, using its best-matching chunk).
@@ -79,6 +78,27 @@ export async function retrieveFromDirectory(
     limit ${limit * 2}
   `)) as unknown as ArticleHit[];
 
+  // ── User notes (embedded directly on directory_items) ──────────
+  type NoteHit = {
+    directory_item_id: string;
+    title: string;
+    snippet: string;
+    similarity: number;
+  };
+  const noteHits = (await db.execute(sql`
+    select
+      id as directory_item_id,
+      title,
+      coalesce(substring(content, 1, 400), '') as snippet,
+      1 - (embedding <=> ${lit}::vector) as similarity
+    from directory_items
+    where user_id = ${userId}
+      and kind = 'user_note'
+      and embedding is not null
+    order by embedding <=> ${lit}::vector
+    limit ${limit * 2}
+  `)) as unknown as NoteHit[];
+
   // Combine, dedupe by directoryItemId (keep best score), take top N
   const byItem = new Map<string, RagSource>();
 
@@ -107,6 +127,21 @@ export async function retrieveFromDirectory(
         snippet: (h.snippet ?? "").trim(),
         similarity: sim,
         sourceKind: "article",
+      });
+    }
+  }
+
+  for (const h of noteHits) {
+    const existing = byItem.get(h.directory_item_id);
+    const sim = Number(h.similarity);
+    if (!existing || sim > existing.similarity) {
+      byItem.set(h.directory_item_id, {
+        directoryItemId: h.directory_item_id,
+        title: h.title,
+        kind: "user_note",
+        snippet: (h.snippet ?? "").trim(),
+        similarity: sim,
+        sourceKind: "note",
       });
     }
   }

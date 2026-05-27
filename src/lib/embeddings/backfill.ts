@@ -9,6 +9,7 @@ const CHUNK_BATCH = 16;
 export type BackfillResult = {
   articlesEmbedded: number;
   chunksEmbedded: number;
+  notesEmbedded: number;
   failed: number;
 };
 
@@ -20,10 +21,13 @@ export type BackfillResult = {
  * This keeps the per-item cost low and matches what the Daily Brief / related-knowledge
  * sidebar will compare against at query time.
  */
+const NOTE_BATCH = 16;
+
 export async function backfillEmbeddings(userId: string, limit = 500): Promise<BackfillResult> {
   const provider = getEmbeddingsProvider();
   let articlesEmbedded = 0;
   let chunksEmbedded = 0;
+  let notesEmbedded = 0;
   let failed = 0;
 
   // ── Articles ─────────────────────────────────────────────────────
@@ -91,7 +95,67 @@ export async function backfillEmbeddings(userId: string, limit = 500): Promise<B
     }
   }
 
-  return { articlesEmbedded, chunksEmbedded, failed };
+  // ── User notes (in directory_items) ─────────────────────────────
+  // Notes have no underlying document/article row, so their embedding lives
+  // directly on directory_items.embedding.
+  type NoteRow = { id: string; title: string; content: string | null };
+  const missingNotes = (await db.execute(sql`
+    select id, title, content
+    from directory_items
+    where user_id = ${userId}
+      and kind = 'user_note'
+      and embedding is null
+    order by updated_at desc
+    limit ${limit}
+  `)) as unknown as NoteRow[];
+
+  for (let i = 0; i < missingNotes.length; i += NOTE_BATCH) {
+    const batch = missingNotes.slice(i, i + NOTE_BATCH);
+    const texts = batch.map((n) =>
+      clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()),
+    );
+    try {
+      const vectors = await provider.embed(texts);
+      for (let j = 0; j < batch.length; j += 1) {
+        const row = batch[j];
+        const vector = toVectorLiteral(vectors[j]);
+        await db.execute(sql`
+          update directory_items
+          set embedding = ${vector}::vector
+          where id = ${row.id} and user_id = ${userId}
+        `);
+        notesEmbedded += 1;
+      }
+    } catch (err) {
+      failed += batch.length;
+      console.error("Note embedding batch failed:", err);
+    }
+  }
+
+  return { articlesEmbedded, chunksEmbedded, notesEmbedded, failed };
+}
+
+/** Embed a single user note inline (fire-and-forget after note save). */
+export async function embedNote(
+  noteId: string,
+  userId: string,
+  title: string,
+  content: string | null,
+): Promise<void> {
+  try {
+    const provider = getEmbeddingsProvider();
+    const text = clampForEmbedding(`${title}\n\n${content ?? ""}`.trim());
+    if (!text) return;
+    const [vector] = await provider.embed([text]);
+    const literal = toVectorLiteral(vector);
+    await db.execute(sql`
+      update directory_items
+      set embedding = ${literal}::vector
+      where id = ${noteId} and user_id = ${userId}
+    `);
+  } catch (err) {
+    console.warn("embedNote skipped:", err instanceof Error ? err.message : err);
+  }
 }
 
 /** Embed a single article (used inline when a feed sync inserts new items). */
