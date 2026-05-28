@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { itemTags, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { TagManager } from "@/components/tags/tag-manager";
+import { ExportMemoryButton } from "@/components/tags/export-memory-button";
 
 export default async function TagsPage() {
   const { user } = await requireUser();
@@ -37,13 +38,16 @@ export default async function TagsPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-4xl px-6 py-10">
-        <header className="mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight">Tags</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {allTags.length === 0
-              ? "No tags yet. Upload a document or save an article to your Directory and the AI will start tagging."
-              : `${allTags.length} tag${allTags.length === 1 ? "" : "s"}. Rename or delete to keep your taxonomy clean.`}
-          </p>
+        <header className="mb-8 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">Tags</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {allTags.length === 0
+                ? "No tags yet. Upload a document or save an article to your Directory and the AI will start tagging."
+                : `${allTags.length} tag${allTags.length === 1 ? "" : "s"}. Rename or delete to keep your taxonomy clean.`}
+            </p>
+          </div>
+          <ExportMemoryButton />
         </header>
         <TagManager tags={allTags} usage={usageById} />
       </div>

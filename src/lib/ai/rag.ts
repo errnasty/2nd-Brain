@@ -1,6 +1,88 @@
-import { sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
+import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+
+/**
+ * A lightweight, content-free map of the user's Directory — folder hierarchy
+ * plus item titles/ids/kinds. Injected into the Ask system prompt so the model
+ * can act as a semantic router (see where things live before/instead of a
+ * broad vector search). Titles + ids only — NO full text — keeps it cheap.
+ */
+export async function buildDirectoryMap(userId: string, maxItems = 300): Promise<string> {
+  let folders: { id: string; name: string; parentId: string | null }[] = [];
+  let items: { id: string; title: string; kind: string; folderId: string | null }[] = [];
+  try {
+    [folders, items] = await Promise.all([
+      db
+        .select({ id: directoryFolders.id, name: directoryFolders.name, parentId: directoryFolders.parentId })
+        .from(directoryFolders)
+        .where(eq(directoryFolders.userId, userId))
+        .orderBy(asc(directoryFolders.name)),
+      db
+        .select({
+          id: directoryItems.id,
+          title: directoryItems.title,
+          kind: directoryItems.kind,
+          folderId: directoryItems.folderId,
+        })
+        .from(directoryItems)
+        .where(eq(directoryItems.userId, userId))
+        .orderBy(asc(directoryItems.title))
+        .limit(maxItems),
+    ]);
+  } catch {
+    return "(Directory map unavailable.)";
+  }
+
+  if (folders.length === 0 && items.length === 0) {
+    return "(Your Directory is empty.)";
+  }
+
+  const childrenOf = new Map<string | null, { id: string; name: string }[]>();
+  for (const f of folders) {
+    const key = f.parentId ?? null;
+    (childrenOf.get(key) ?? childrenOf.set(key, []).get(key)!).push({ id: f.id, name: f.name });
+  }
+  const itemsByFolder = new Map<string | null, { title: string; kind: string }[]>();
+  for (const it of items) {
+    const key = it.folderId ?? null;
+    (itemsByFolder.get(key) ?? itemsByFolder.set(key, []).get(key)!).push({
+      title: it.title,
+      kind: it.kind,
+    });
+  }
+
+  const lines: string[] = [];
+  const kindTag = (k: string) =>
+    k === "user_note" ? "note" : k === "saved_article" ? "article" : "doc";
+
+  function walk(folderId: string | null, depth: number) {
+    const indent = "  ".repeat(depth);
+    for (const child of childrenOf.get(folderId) ?? []) {
+      lines.push(`${indent}📁 ${child.name}`);
+      walk(child.id, depth + 1);
+    }
+    for (const it of itemsByFolder.get(folderId) ?? []) {
+      lines.push(`${indent}- [${kindTag(it.kind)}] ${it.title}`);
+    }
+  }
+
+  // Root-level folders + items first, then the "Unsorted" tray (folderId null
+  // items are already covered by walk(null), so render them under a heading).
+  const rootItems = itemsByFolder.get(null) ?? [];
+  const rootFolders = childrenOf.get(null) ?? [];
+  for (const child of rootFolders) {
+    lines.push(`📁 ${child.name}`);
+    walk(child.id, 1);
+  }
+  if (rootItems.length > 0) {
+    lines.push("📂 Unsorted");
+    for (const it of rootItems) lines.push(`  - [${kindTag(it.kind)}] ${it.title}`);
+  }
+
+  return lines.join("\n");
+}
 
 export type RagSource = {
   directoryItemId: string;

@@ -6,15 +6,31 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
+  Check,
+  ChevronDown,
+  Cpu,
   FileText,
   Loader2,
   Newspaper,
   NotebookPen,
+  RefreshCw,
   Sparkles,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
+import { toast } from "sonner";
+
+const MODEL_STORAGE_KEY = "ask.model.v1";
 
 type Source = {
   n: number;
@@ -44,8 +60,58 @@ export function AskShell() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [modelId, setModelId] = useState<string>(DEFAULT_CHAT_MODEL);
+  const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Persist the chosen model across visits
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+      if (saved && CHAT_MODELS.some((m) => m.id === saved)) setModelId(saved);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  function chooseModel(id: string) {
+    setModelId(id);
+    try {
+      localStorage.setItem(MODEL_STORAGE_KEY, id);
+    } catch {
+      // ignore
+    }
+  }
+
+  // "Refresh memory" — backfill embeddings so Ask can reference new content
+  const refreshMemory = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    toast.info("Indexing your library…");
+    try {
+      const res = await fetch("/api/embeddings/backfill", { method: "POST", cache: "no-store" });
+      if (!res.ok) {
+        const text = await res.text();
+        toast.error(text || `Backfill failed (HTTP ${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as {
+        articlesEmbedded?: number;
+        chunksEmbedded?: number;
+        notesEmbedded?: number;
+      };
+      const total =
+        (data.articlesEmbedded ?? 0) + (data.chunksEmbedded ?? 0) + (data.notesEmbedded ?? 0);
+      toast.success(
+        total > 0 ? `Memory refreshed — indexed ${total} new item(s)` : "Memory is already up to date",
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Backfill failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing]);
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -78,7 +144,7 @@ export function AskShell() {
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: trimmed, history }),
+          body: JSON.stringify({ question: trimmed, history, model: modelId }),
           cache: "no-store",
         });
         if (!res.ok) {
@@ -123,7 +189,7 @@ export function AskShell() {
         inputRef.current?.focus();
       }
     },
-    [messages, streaming],
+    [messages, streaming, modelId],
   );
 
   function clearChat() {
@@ -145,11 +211,27 @@ export function AskShell() {
             point back to the source items.
           </p>
         </div>
-        {messages.length > 0 && (
-          <Button size="sm" variant="ghost" onClick={clearChat} disabled={streaming}>
-            <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Clear
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={refreshMemory}
+            disabled={refreshing}
+            title="Re-index your library so Ask can reference new notes, docs, and articles"
+          >
+            {refreshing ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            Refresh memory
           </Button>
-        )}
+          {messages.length > 0 && (
+            <Button size="sm" variant="ghost" onClick={clearChat} disabled={streaming}>
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Clear
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
@@ -183,6 +265,35 @@ export function AskShell() {
 
       {/* Input */}
       <div className="border-t border-border bg-card/30 px-6 py-4">
+        {/* Model selector */}
+        <div className="mb-2 flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" disabled={streaming}>
+                <Cpu className="h-3.5 w-3.5" />
+                {getChatModel(modelId).label}
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top" className="w-56">
+              <DropdownMenuLabel>Model</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {CHAT_MODELS.map((m) => (
+                <DropdownMenuItem
+                  key={m.id}
+                  onClick={() => chooseModel(m.id)}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="flex flex-col">
+                    <span>{m.label}</span>
+                    {m.hint && <span className="text-[10px] text-muted-foreground">{m.hint}</span>}
+                  </span>
+                  {modelId === m.id && <Check className="h-3.5 w-3.5" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
         <form
           onSubmit={(e) => {
             e.preventDefault();

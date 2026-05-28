@@ -98,16 +98,31 @@ export async function syncAllAction(): Promise<SyncAllResult> {
 
   // Atomic lock acquire: only succeeds if not currently syncing, or the
   // previous sync is stale (>5 min — covers a crashed run that never cleared).
-  const acquired = (await db.execute(sql`
-    update profiles
-    set is_syncing = true, sync_started_at = now()
-    where id = ${user.id}
-      and (is_syncing = false or sync_started_at < now() - interval '5 minutes')
-    returning id
-  `)) as unknown as Array<{ id: string }>;
+  //
+  // The lock is best-effort: if the is_syncing/sync_started_at columns don't
+  // exist yet (migration 0005 not run), we degrade gracefully and sync WITHOUT
+  // the lock instead of crashing the whole server action. `lockHeld` tracks
+  // whether we actually acquired it so `finally` only releases when needed.
+  let lockHeld = false;
+  try {
+    const acquired = (await db.execute(sql`
+      update profiles
+      set is_syncing = true, sync_started_at = now()
+      where id = ${user.id}
+        and (is_syncing = false or sync_started_at < now() - interval '5 minutes')
+      returning id
+    `)) as unknown as Array<{ id: string }>;
 
-  if (acquired.length === 0) {
-    return { ok: false, alreadyRunning: true };
+    if (acquired.length === 0) {
+      return { ok: false, alreadyRunning: true };
+    }
+    lockHeld = true;
+  } catch (err) {
+    // Lock columns missing or DB hiccup — log and proceed without the lock.
+    console.warn(
+      "Sync lock unavailable, proceeding without it:",
+      err instanceof Error ? err.message : err,
+    );
   }
 
   try {
@@ -117,10 +132,16 @@ export async function syncAllAction(): Promise<SyncAllResult> {
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Sync failed" };
   } finally {
-    await db
-      .update(profiles)
-      .set({ isSyncing: false })
-      .where(eq(profiles.id, user.id));
+    if (lockHeld) {
+      try {
+        await db
+          .update(profiles)
+          .set({ isSyncing: false })
+          .where(eq(profiles.id, user.id));
+      } catch {
+        // Releasing the lock is best-effort; the 5-min staleness check covers us.
+      }
+    }
   }
 }
 

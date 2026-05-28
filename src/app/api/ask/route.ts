@@ -1,27 +1,45 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { streamText, type LanguageModelV1 } from "ai";
 import { requireUser } from "@/lib/auth";
-import { retrieveFromDirectory, type RagSource } from "@/lib/ai/rag";
+import { retrieveFromDirectory, buildDirectoryMap, type RagSource } from "@/lib/ai/rag";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
+import { getChatModel } from "@/lib/ai/models";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const SYSTEM = `You are the user's personal Second Brain assistant.
 
-You are given a question and a numbered list of CONTEXT excerpts drawn from
-their saved articles, uploaded documents, and notes. Answer the question
-USING ONLY the provided context.
+You are given:
+1. A DIRECTORY MAP — the folder hierarchy and item titles in the user's
+   knowledge base (no content, just structure). Use it to understand WHERE
+   things live and to act as a semantic router: if the answer clearly lives
+   in a specific file or folder, say so and prefer that.
+2. A numbered list of CONTEXT excerpts retrieved from the most relevant items.
+
+Answer the question USING the provided context.
 
 Rules:
 - Cite supporting excerpts inline using [1], [2], … keyed to the numbered
   context list.
-- If the context does not contain enough information to answer, say so plainly
-  and suggest what the user could add to their library.
-- Do not invent facts beyond the context.
+- You may reference the directory map to point the user to relevant files even
+  if their text wasn't retrieved, but be explicit that you're inferring from
+  the title/location, not the content.
+- If neither the map nor the context can answer, say so plainly and suggest
+  what the user could add to their library.
 - Be concise. Skip preamble like "Based on the context provided…".`;
 
 type Message = { role: "user" | "assistant"; content: string };
+
+/** Resolve the AI SDK model instance for a requested model id. */
+function resolveModel(modelId: string | undefined): { model: LanguageModelV1; provider: string } {
+  const chosen = getChatModel(modelId);
+  if (chosen.provider === "openai") {
+    return { model: openai(chosen.id), provider: "openai" };
+  }
+  return { model: anthropic(chosen.id), provider: "anthropic" };
+}
 
 export async function POST(req: Request) {
   let auth;
@@ -32,14 +50,7 @@ export async function POST(req: Request) {
   }
   const userId = auth.user.id;
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return new Response(
-      "ANTHROPIC_API_KEY not configured. Add it to your env vars to enable Ask.",
-      { status: 503 },
-    );
-  }
-
-  let body: { question?: string; history?: Message[] };
+  let body: { question?: string; history?: Message[]; model?: string };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -47,6 +58,17 @@ export async function POST(req: Request) {
   }
   const question = (body.question ?? "").trim();
   if (!question) return new Response("Empty question", { status: 400 });
+
+  // Resolve the requested model + verify the matching provider key is present.
+  const { model, provider } = resolveModel(body.model);
+  if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
+    return new Response("ANTHROPIC_API_KEY not configured.", { status: 503 });
+  }
+  if (provider === "openai" && !process.env.OPENAI_API_KEY) {
+    return new Response("OPENAI_API_KEY not configured — pick a Claude model instead.", {
+      status: 503,
+    });
+  }
 
   // ── 1. Retrieve relevant context from the Directory ─────────────
   let sources: RagSource[] = [];
@@ -86,7 +108,11 @@ export async function POST(req: Request) {
     }
   }
 
-  // ── 2. Build the context block ─────────────────────────────────
+  // ── 2. Build the directory map + context block ─────────────────
+  // Token-saving spatial pre-awareness: the structural map (titles only) lets
+  // the model route to the right area before relying on retrieved excerpts.
+  const directoryMap = await buildDirectoryMap(userId).catch(() => "(Directory map unavailable.)");
+
   const contextBlock =
     sources.length === 0
       ? "(No relevant items found in your Directory.)"
@@ -114,12 +140,12 @@ export async function POST(req: Request) {
     ...history.map((m) => ({ role: m.role, content: m.content })),
     {
       role: "user" as const,
-      content: `QUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}`,
+      content: `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}`,
     },
   ];
 
   const result = streamText({
-    model: anthropic("claude-sonnet-4-6"),
+    model,
     system: SYSTEM,
     messages,
     temperature: 0.3,
