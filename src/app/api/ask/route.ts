@@ -9,6 +9,10 @@ import { getChatModel } from "@/lib/ai/models";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Marker appended after the answer text carrying token usage as JSON. The
+// client splits on this and never renders it.
+export const USAGE_SENTINEL = "<<<SB_USAGE:";
+
 const SYSTEM = `You are the user's personal Second Brain assistant.
 
 You are given:
@@ -151,8 +155,36 @@ export async function POST(req: Request) {
     temperature: 0.3,
   });
 
-  return result.toTextStreamResponse({
+  // Stream the text, then append a usage sentinel the client strips + parses.
+  // (Token usage isn't known until generation finishes, so it can't go in a
+  // header that's already been sent.)
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        for await (const delta of result.textStream) {
+          controller.enqueue(encoder.encode(delta));
+        }
+        const usage = await result.usage;
+        const payload = {
+          promptTokens: usage?.promptTokens ?? 0,
+          completionTokens: usage?.completionTokens ?? 0,
+          totalTokens: usage?.totalTokens ?? 0,
+        };
+        controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
+      } catch (err) {
+        controller.enqueue(
+          encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
+        );
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
     headers: {
+      "content-type": "text/plain; charset=utf-8",
       "x-rag-sources": Buffer.from(JSON.stringify(sourceMap)).toString("base64"),
     },
   });

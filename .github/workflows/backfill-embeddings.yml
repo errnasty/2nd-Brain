@@ -1,0 +1,34 @@
+name: Backfill embeddings
+
+# Token-secured cron — embeds any new articles, document chunks, and notes
+# that don't have a vector yet, so the Ask tab stays current without manual
+# "Refresh memory" clicks.
+#
+# Secrets (GitHub repo → Settings → Secrets and variables → Actions):
+#   APP_URL      = https://your-site.netlify.app
+#   CRON_SECRET  = the same value set in your hosting platform's env vars
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours UTC
+  workflow_dispatch: # manual "Run workflow" button
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger embeddings backfill
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "Missing APP_URL or CRON_SECRET secret"; exit 1
+          fi
+          response=$(curl -sS -o /tmp/backfill.json -w "%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            --max-time 290 \
+            "$APP_URL/api/embeddings/cron-backfill")
+          echo "HTTP $response"
+          cat /tmp/backfill.json
+          if [ "$response" != "200" ]; then exit 1; fi

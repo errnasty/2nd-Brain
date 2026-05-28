@@ -40,12 +40,17 @@ type Source = {
   similarity: number;
 };
 
+type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
+
 type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  usage?: Usage;
 };
+
+const USAGE_SENTINEL = "<<<SB_USAGE:";
 
 const SUGGESTIONS = [
   "Summarize what I've read about AI safety this week",
@@ -169,17 +174,31 @@ export function AskShell() {
         if (!res.body) throw new Error("No response body");
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        let acc = "";
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          const chunk = decoder.decode(value, { stream: true });
+          acc += decoder.decode(value, { stream: true });
+          // Don't render the trailing usage sentinel as it streams in.
+          const sentinelIdx = acc.indexOf(USAGE_SENTINEL);
+          const display = sentinelIdx >= 0 ? acc.slice(0, sentinelIdx) : acc;
           setMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + chunk } : m)),
+            prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
           );
         }
-        // Attach sources once streaming completes
+
+        // Parse the usage sentinel (if present) off the end of the stream.
+        let usage: Usage | undefined;
+        const idx = acc.indexOf(USAGE_SENTINEL);
+        if (idx >= 0) {
+          try {
+            usage = JSON.parse(acc.slice(idx + USAGE_SENTINEL.length)) as Usage;
+          } catch {
+            // ignore malformed usage
+          }
+        }
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, sources } : m)),
+          prev.map((m) => (m.id === assistantId ? { ...m, sources, usage } : m)),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Request failed");
@@ -381,6 +400,17 @@ function MessageBubble({
           <span className="text-muted-foreground italic">…</span>
         )}
       </div>
+      {message.usage && message.usage.totalTokens > 0 && (
+        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5">
+            Tokens consumed: {message.usage.totalTokens.toLocaleString()}
+          </span>
+          <span className="opacity-60">
+            ({message.usage.promptTokens.toLocaleString()} in ·{" "}
+            {message.usage.completionTokens.toLocaleString()} out)
+          </span>
+        </div>
+      )}
       {message.sources && message.sources.length > 0 && (
         <div className="space-y-1 border-t border-border pt-3">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Sources</div>

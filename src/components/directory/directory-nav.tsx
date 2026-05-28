@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
+  Download,
   FolderClosed,
   Inbox,
   Library,
@@ -35,6 +36,7 @@ import {
 } from "@/app/(app)/directory/actions";
 import type { DirectoryFolder } from "@/lib/db/schema";
 import { DeleteFolderDialog } from "./delete-folder-dialog";
+import { ExportDialog } from "./export-dialog";
 
 const UNSORTED = "unsorted";
 
@@ -53,6 +55,7 @@ export function DirectoryNav({
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [folderToDelete, setFolderToDelete] = useState<DirectoryFolder | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   const activeFolder = params.get("folder");
 
@@ -108,6 +111,15 @@ export function DirectoryNav({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
+            onClick={() => setExportOpen(true)}
+            title="Export knowledge base"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7"
             onClick={runAutoOrganize}
             disabled={pending}
             title={pending ? "Auto-organizing…" : "Auto-organize uncategorized items"}
@@ -120,6 +132,7 @@ export function DirectoryNav({
           </Button>
         </div>
       </div>
+      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
       <Separator />
 
       <ScrollArea className="flex-1">
