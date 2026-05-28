@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,17 +10,17 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 
-function LoginForm() {
+function SignupForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const redirectTo = searchParams.get("redirect") ?? "/";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   function validate(): string | null {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email address.";
-    if (password.length < 1) return "Enter your password.";
+    if (password.length < 8) return "Password must be at least 8 characters.";
+    if (password !== confirm) return "Passwords don't match.";
     return null;
   }
 
@@ -34,12 +34,21 @@ function LoginForm() {
     setSubmitting(true);
     try {
       const supabase = createSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;
-      router.replace(redirectTo);
-      router.refresh();
+
+      // With email confirmation disabled, signUp returns an active session and
+      // we can go straight in. If confirmation is enabled, there's no session
+      // yet — tell the user to check their email.
+      if (data.session) {
+        router.replace("/");
+        router.refresh();
+      } else {
+        toast.success("Account created. Check your email to confirm, then sign in.");
+        router.replace("/login");
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Sign in failed.");
+      toast.error(err instanceof Error ? err.message : "Sign up failed.");
     } finally {
       setSubmitting(false);
     }
@@ -49,8 +58,8 @@ function LoginForm() {
     <div className="grid min-h-dvh place-items-center bg-background p-6">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle>Sign in</CardTitle>
-          <CardDescription>Welcome back to your Second Brain.</CardDescription>
+          <CardTitle>Create account</CardTitle>
+          <CardDescription>Start building your Second Brain.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -67,33 +76,37 @@ function LoginForm() {
               />
             </div>
             <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-                <Link
-                  href="/forgot-password"
-                  className="text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Forgot password?
-                </Link>
-              </div>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
                 required
-                autoComplete="current-password"
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="confirm">Confirm password</Label>
+              <Input
+                id="confirm"
+                type="password"
+                required
+                autoComplete="new-password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
                 placeholder="••••••••"
               />
             </div>
             <Button type="submit" disabled={submitting} className="w-full">
-              {submitting ? "Signing in…" : "Sign in"}
+              {submitting ? "Creating…" : "Create account"}
             </Button>
           </form>
           <p className="mt-4 text-center text-sm text-muted-foreground">
-            No account?{" "}
-            <Link href="/signup" className="font-medium text-foreground hover:underline">
-              Create one
+            Already have an account?{" "}
+            <Link href="/login" className="font-medium text-foreground hover:underline">
+              Sign in
             </Link>
           </p>
         </CardContent>
@@ -102,10 +115,10 @@ function LoginForm() {
   );
 }
 
-export default function LoginPage() {
+export default function SignupPage() {
   return (
     <Suspense>
-      <LoginForm />
+      <SignupForm />
     </Suspense>
   );
 }
