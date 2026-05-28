@@ -82,26 +82,61 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
   }
 }
 
-/** Sync every feed in the database. Used by the cron route. */
-const SYNC_BATCH = 8;
+// Max feeds processed concurrently. Kept conservative (5) so a single
+// serverless invocation stays well within execution-time limits and doesn't
+// hammer one origin too hard.
+const SYNC_BATCH = 5;
 
+/**
+ * Run syncFeed across a list of feeds in bounded-concurrency chunks using
+ * Promise.allSettled, so one slow/broken feed can never reject the batch or
+ * drop the remaining jobs. syncFeed already isolates its own errors and
+ * returns a SyncResult; allSettled is belt-and-suspenders.
+ */
+async function runSyncBatched(feedList: { id: string; userId: string }[]): Promise<SyncResult[]> {
+  const results: SyncResult[] = [];
+  for (let i = 0; i < feedList.length; i += SYNC_BATCH) {
+    const batch = feedList.slice(i, i + SYNC_BATCH);
+    const settled = await Promise.allSettled(batch.map((f) => syncFeed(f.id, f.userId)));
+    for (let j = 0; j < settled.length; j += 1) {
+      const s = settled[j];
+      if (s.status === "fulfilled") {
+        results.push(s.value);
+      } else {
+        results.push({
+          feedId: batch[j].id,
+          inserted: 0,
+          skipped: 0,
+          errored: true,
+          error: s.reason instanceof Error ? s.reason.message : String(s.reason),
+        });
+      }
+    }
+  }
+  return results;
+}
+
+/** Sync every feed in the database. Used by the cron route. */
 export async function syncAllFeeds(): Promise<{ total: number; ok: number; failed: number; results: SyncResult[] }> {
+  const all = await db.select({ id: feeds.id, userId: feeds.userId }).from(feeds);
+  const results = await runSyncBatched(all);
+  return {
+    total: all.length,
+    ok: results.filter((r) => !r.errored).length,
+    failed: results.filter((r) => r.errored).length,
+    results,
+  };
+}
+
+/** Sync only one user's feeds (used by the in-app "Sync all" button). */
+export async function syncUserFeeds(
+  userId: string,
+): Promise<{ total: number; ok: number; failed: number; results: SyncResult[] }> {
   const all = await db
     .select({ id: feeds.id, userId: feeds.userId })
-    .from(feeds);
-
-  // Batched parallelism: 8 feeds at a time. Keeps total runtime ~10x faster
-  // than serial while still avoiding burst hammering of a single origin
-  // (different feeds are usually different hosts).
-  const results: SyncResult[] = [];
-  for (let i = 0; i < all.length; i += SYNC_BATCH) {
-    const batch = all.slice(i, i + SYNC_BATCH);
-    const batchResults = await Promise.all(
-      batch.map((feed) => syncFeed(feed.id, feed.userId)),
-    );
-    results.push(...batchResults);
-  }
-
+    .from(feeds)
+    .where(eq(feeds.userId, userId));
+  const results = await runSyncBatched(all);
   return {
     total: all.length,
     ok: results.filter((r) => !r.errored).length,

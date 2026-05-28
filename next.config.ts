@@ -1,6 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Keep heavy native/WASM deps out of the bundler — loaded at runtime only
+  // when EMBEDDINGS_PROVIDER=local actually selects them.
+  serverExternalPackages: ["@xenova/transformers", "officeparser"],
   experimental: {
     serverActions: {
       bodySizeLimit: "20mb",

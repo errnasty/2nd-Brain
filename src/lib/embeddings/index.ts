@@ -18,6 +18,8 @@ export function getEmbeddingsProvider(): EmbeddingsProvider {
       return openaiEmbeddings();
     case "voyage":
       return voyageEmbeddings();
+    case "local":
+      return localEmbeddings();
     default:
       throw new Error(`Unknown EMBEDDINGS_PROVIDER: ${provider}`);
   }
@@ -87,6 +89,56 @@ function voyageEmbeddings(): EmbeddingsProvider {
       }
       const data = (await res.json()) as { data: Array<{ embedding: number[] }> };
       return data.data.map((d) => d.embedding);
+    },
+  };
+}
+
+// ── Local (offline) via @xenova/transformers ────────────────────────
+// Runs an ONNX model in-process (WASM) with NO network calls — useful for
+// local dev or air-gapped use. Default model bge-large-en-v1.5 outputs 1024
+// dims, matching the schema, so it's interchangeable with Voyage at the DB
+// level.
+//
+// IMPORTANT CAVEATS:
+//  - Vectors from different models are NOT comparable. If you switch a library
+//    that was embedded with Voyage/OpenAI over to `local`, you must re-embed
+//    everything (clear + backfill) or search results will be garbage. For this
+//    reason `local` is a deliberate provider CHOICE, not a silent auto-fallback.
+//  - The model (~130MB quantized) downloads on first use and needs memory +
+//    time that typically exceed serverless function limits. Best for local dev
+//    or a long-lived self-hosted Node process.
+
+let localPipelinePromise: Promise<(text: string, opts: object) => Promise<{ data: Float32Array }>> | null =
+  null;
+
+function localEmbeddings(): EmbeddingsProvider {
+  const model = process.env.EMBEDDINGS_MODEL ?? "Xenova/bge-large-en-v1.5";
+  return {
+    name: "local",
+    model,
+    dims: EMBEDDING_DIMS,
+    async embed(texts) {
+      if (texts.length === 0) return [];
+      if (!localPipelinePromise) {
+        // Dynamic import keeps the heavy WASM runtime out of the bundle unless
+        // the local provider is actually selected.
+        localPipelinePromise = import("@xenova/transformers").then(async (mod) => {
+          // Allow remote model download (set TRANSFORMERS_OFFLINE=1 to require
+          // a pre-cached model for truly offline use).
+          return (await mod.pipeline("feature-extraction", model)) as unknown as (
+            text: string,
+            opts: object,
+          ) => Promise<{ data: Float32Array }>;
+        });
+      }
+      const extractor = await localPipelinePromise;
+      const out: number[][] = [];
+      // Process sequentially — the WASM model isn't meaningfully parallel.
+      for (const text of texts) {
+        const result = await extractor(text, { pooling: "mean", normalize: true });
+        out.push(Array.from(result.data));
+      }
+      return out;
     },
   };
 }

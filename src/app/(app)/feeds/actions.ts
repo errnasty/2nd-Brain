@@ -1,13 +1,13 @@
 "use server";
 
-import { and, desc, eq, ilike, inArray, or, type SQL } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { articles, feeds, folders, itemTags, tags } from "@/lib/db/schema";
+import { articles, feeds, folders, itemTags, profiles, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
-import { syncFeed } from "@/lib/rss/sync";
+import { syncFeed, syncUserFeeds } from "@/lib/rss/sync";
 import { parseOpml } from "@/lib/opml/import";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { routeToFolder } from "@/lib/ai/routing";
@@ -80,17 +80,48 @@ export async function syncFeedAction(feedId: string) {
   return result;
 }
 
-export async function syncAllAction() {
-  const { user } = await requireUser();
-  const userFeeds = await db
-    .select({ id: feeds.id })
-    .from(feeds)
-    .where(eq(feeds.userId, user.id));
+export type SyncAllResult =
+  | { ok: true; synced: number; failed: number }
+  | { ok: false; alreadyRunning: true }
+  | { ok: false; error: string };
 
-  for (const f of userFeeds) {
-    await syncFeed(f.id, user.id);
+/**
+ * Sync all of the current user's feeds, batched + concurrency-limited.
+ *
+ * Guards against the "user smashes the button" problem with an atomic DB lock:
+ * a single conditional UPDATE acquires `profiles.is_syncing`. If another sync
+ * is already in flight (and started < 5 min ago), this no-ops with
+ * alreadyRunning. The lock is always released in `finally`.
+ */
+export async function syncAllAction(): Promise<SyncAllResult> {
+  const { user } = await requireUser();
+
+  // Atomic lock acquire: only succeeds if not currently syncing, or the
+  // previous sync is stale (>5 min — covers a crashed run that never cleared).
+  const acquired = (await db.execute(sql`
+    update profiles
+    set is_syncing = true, sync_started_at = now()
+    where id = ${user.id}
+      and (is_syncing = false or sync_started_at < now() - interval '5 minutes')
+    returning id
+  `)) as unknown as Array<{ id: string }>;
+
+  if (acquired.length === 0) {
+    return { ok: false, alreadyRunning: true };
   }
-  revalidatePath("/feeds");
+
+  try {
+    const summary = await syncUserFeeds(user.id);
+    revalidatePath("/feeds");
+    return { ok: true, synced: summary.ok, failed: summary.failed };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Sync failed" };
+  } finally {
+    await db
+      .update(profiles)
+      .set({ isSyncing: false })
+      .where(eq(profiles.id, user.id));
+  }
 }
 
 const MarkReadSchema = z.object({

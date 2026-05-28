@@ -38,6 +38,8 @@ export const profiles = pgTable("profiles", {
     embeddingsModel?: string;
   }>(),
   encryptedApiKeys: text("encrypted_api_keys"),
+  isSyncing: boolean("is_syncing").default(false).notNull(),
+  syncStartedAt: timestamp("sync_started_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });

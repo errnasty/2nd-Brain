@@ -154,11 +154,20 @@ export function FeedsNav({
             onClick={() =>
               startTransition(async () => {
                 try {
-                  await syncAllAction();
-                  toast.success("All feeds synced");
+                  const r = await syncAllAction();
+                  if (r.ok) {
+                    toast.success(
+                      `Synced ${r.synced} feed${r.synced === 1 ? "" : "s"}` +
+                        (r.failed > 0 ? ` · ${r.failed} failed` : ""),
+                    );
+                  } else if ("alreadyRunning" in r) {
+                    toast.info("A sync is already running — hang tight.");
+                  } else {
+                    toast.error(`Sync failed: ${r.error}`);
+                  }
                 } catch (err) {
                   toast.error(
-                    `Sync failed: ${err instanceof Error ? err.message : "unknown error"}. Some feeds may have synced.`,
+                    `Sync failed: ${err instanceof Error ? err.message : "unknown error"}.`,
                   );
                 }
               })

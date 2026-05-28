@@ -34,70 +34,77 @@ export async function retrieveFromDirectory(
   const [vector] = await provider.embed([text], "query");
   const lit = toVectorLiteral(vector);
 
-  // ── Uploaded documents (chunks) ──────────────────────────────────
-  type ChunkHit = {
+  type Hit = {
     directory_item_id: string;
     title: string;
     snippet: string;
     similarity: number;
   };
-  const chunkHits = (await db.execute(sql`
-    select
-      di.id as directory_item_id,
-      di.title,
-      substring(c.content, 1, 400) as snippet,
-      1 - (c.embedding <=> ${lit}::vector) as similarity
-    from directory_items di
-    inner join document_chunks c on c.document_id = di.document_id
-    where di.user_id = ${userId}
-      and di.kind = 'uploaded_document'
-      and c.embedding is not null
-    order by c.embedding <=> ${lit}::vector
-    limit ${limit * 2}
-  `)) as unknown as ChunkHit[];
 
-  // ── Saved articles ──────────────────────────────────────────────
-  type ArticleHit = {
-    directory_item_id: string;
-    title: string;
-    snippet: string;
-    similarity: number;
-  };
-  const articleHits = (await db.execute(sql`
-    select
-      di.id as directory_item_id,
-      di.title,
-      substring(coalesce(a.full_text, a.excerpt, ''), 1, 400) as snippet,
-      1 - (e.embedding <=> ${lit}::vector) as similarity
-    from directory_items di
-    inner join articles a on a.id = di.article_id
-    inner join article_embeddings e on e.article_id = a.id
-    where di.user_id = ${userId}
-      and di.kind = 'saved_article'
-    order by e.embedding <=> ${lit}::vector
-    limit ${limit * 2}
-  `)) as unknown as ArticleHit[];
+  // Each source is wrapped so a missing column/index on ONE table (e.g. a
+  // migration not yet run) doesn't kill the whole retrieval. A failed source
+  // just contributes nothing.
+  async function safe(run: () => Promise<unknown>): Promise<Hit[]> {
+    try {
+      return (await run()) as unknown as Hit[];
+    } catch (err) {
+      console.warn("RAG source query failed (skipping):", err instanceof Error ? err.message : err);
+      return [];
+    }
+  }
 
-  // ── User notes (embedded directly on directory_items) ──────────
-  type NoteHit = {
-    directory_item_id: string;
-    title: string;
-    snippet: string;
-    similarity: number;
-  };
-  const noteHits = (await db.execute(sql`
-    select
-      id as directory_item_id,
-      title,
-      coalesce(substring(content, 1, 400), '') as snippet,
-      1 - (embedding <=> ${lit}::vector) as similarity
-    from directory_items
-    where user_id = ${userId}
-      and kind = 'user_note'
-      and embedding is not null
-    order by embedding <=> ${lit}::vector
-    limit ${limit * 2}
-  `)) as unknown as NoteHit[];
+  const [chunkHits, articleHits, noteHits] = await Promise.all([
+    // ── Uploaded documents (chunks) ──
+    safe(() =>
+      db.execute(sql`
+        select
+          di.id as directory_item_id,
+          di.title,
+          substring(c.content, 1, 400) as snippet,
+          1 - (c.embedding <=> ${lit}::vector) as similarity
+        from directory_items di
+        inner join document_chunks c on c.document_id = di.document_id
+        where di.user_id = ${userId}
+          and di.kind = 'uploaded_document'
+          and c.embedding is not null
+        order by c.embedding <=> ${lit}::vector
+        limit ${limit * 2}
+      `),
+    ),
+    // ── Saved articles ──
+    safe(() =>
+      db.execute(sql`
+        select
+          di.id as directory_item_id,
+          di.title,
+          substring(coalesce(a.full_text, a.excerpt, ''), 1, 400) as snippet,
+          1 - (e.embedding <=> ${lit}::vector) as similarity
+        from directory_items di
+        inner join articles a on a.id = di.article_id
+        inner join article_embeddings e on e.article_id = a.id
+        where di.user_id = ${userId}
+          and di.kind = 'saved_article'
+        order by e.embedding <=> ${lit}::vector
+        limit ${limit * 2}
+      `),
+    ),
+    // ── User notes (embedded directly on directory_items) ──
+    safe(() =>
+      db.execute(sql`
+        select
+          id as directory_item_id,
+          title,
+          coalesce(substring(content, 1, 400), '') as snippet,
+          1 - (embedding <=> ${lit}::vector) as similarity
+        from directory_items
+        where user_id = ${userId}
+          and kind = 'user_note'
+          and embedding is not null
+        order by embedding <=> ${lit}::vector
+        limit ${limit * 2}
+      `),
+    ),
+  ]);
 
   // Combine, dedupe by directoryItemId (keep best score), take top N
   const byItem = new Map<string, RagSource>();

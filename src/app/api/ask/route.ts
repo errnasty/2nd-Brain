@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { streamText } from "ai";
 import { requireUser } from "@/lib/auth";
 import { retrieveFromDirectory, type RagSource } from "@/lib/ai/rag";
+import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -52,11 +53,37 @@ export async function POST(req: Request) {
   try {
     sources = await retrieveFromDirectory(userId, question, 8);
   } catch (err) {
+    const message = err instanceof Error ? err.message : "";
+    // A missing column means a migration hasn't been run — backfill can't fix
+    // that. Anything else (e.g. embeddings provider error) is also surfaced.
+    if (/does not exist|column .* does not exist|relation .* does not exist/i.test(message)) {
+      return new Response(
+        "Your vector schema is missing a column. Run the migration " +
+          "supabase/migrations/0005_ensure_vector_columns.sql in the Supabase SQL editor, " +
+          "then POST /api/embeddings/backfill.",
+        { status: 503 },
+      );
+    }
     return new Response(
-      `Retrieval failed: ${err instanceof Error ? err.message : "embeddings not configured"}. ` +
-        `Try running POST /api/embeddings/backfill to populate embeddings first.`,
+      `Retrieval failed: ${message || "embeddings provider error"}. Check your embeddings API key.`,
       { status: 503 },
     );
+  }
+
+  // ── 1b. Auto-heal: columns exist but nothing matched. Likely the
+  // embeddings just haven't been generated yet. Backfill inline (bounded),
+  // then retry once. This turns the common "empty library" failure into a
+  // self-healing first query instead of an error screen.
+  if (sources.length === 0) {
+    try {
+      const result = await backfillEmbeddings(userId, 150);
+      if (result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded > 0) {
+        sources = await retrieveFromDirectory(userId, question, 8);
+      }
+    } catch {
+      // If backfill itself fails (e.g. no embeddings key), fall through — the
+      // model will just answer "not enough info in your library".
+    }
   }
 
   // ── 2. Build the context block ─────────────────────────────────
