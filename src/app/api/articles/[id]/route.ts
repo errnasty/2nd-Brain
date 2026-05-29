@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds, folders } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
+import { cleanHtml } from "@/lib/sanitize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,5 +42,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     .limit(1);
 
   if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(row);
+  // Sanitize the cached HTML before it reaches the client's dangerouslySetInnerHTML.
+  return NextResponse.json({ ...row, fullText: row.fullText ? cleanHtml(row.fullText) : null });
 }

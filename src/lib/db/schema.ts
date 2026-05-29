@@ -287,6 +287,21 @@ export const itemTags = pgTable(
   }),
 );
 
+export const rateLimits = pgTable(
+  "rate_limits",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    bucket: text("bucket").notNull(),
+    count: integer("count").default(0).notNull(),
+    windowStart: timestamp("window_start", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.bucket] }),
+  }),
+);
+
 export type Profile = typeof profiles.$inferSelect;
 export type Folder = typeof folders.$inferSelect;
 export type Feed = typeof feeds.$inferSelect;

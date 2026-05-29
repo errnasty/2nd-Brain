@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { articles } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
 import { extractReadable } from "@/lib/readability/extract";
+import { cleanHtml } from "@/lib/sanitize";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -27,21 +28,23 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   if (!article) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   if (article.fullText) {
-    return NextResponse.json({ content: article.fullText, cached: true });
+    // Sanitize on read too, in case it was cached before sanitization existed.
+    return NextResponse.json({ content: cleanHtml(article.fullText), cached: true });
   }
 
   try {
     const extracted = await extractReadable(article.url);
+    const safe = cleanHtml(extracted.content);
     await db
       .update(articles)
       .set({
-        fullText: extracted.content,
+        fullText: safe, // store clean HTML at rest
         fullTextFetchedAt: new Date(),
         wordCount: extracted.textContent.split(/\s+/).length,
       })
       .where(eq(articles.id, id));
 
-    return NextResponse.json({ content: extracted.content, cached: false });
+    return NextResponse.json({ content: safe, cached: false });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Extraction failed";
     return NextResponse.json({ error: message }, { status: 502 });

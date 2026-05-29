@@ -8,11 +8,12 @@ if (!connectionString) {
 }
 
 // prepare: false is required by Supabase's transaction-mode pooler (port 6543).
-// max: 5 lets parallel queries within one request actually run in parallel
-// rather than serializing on a single TCP connection.
+// max: 3 — each serverless instance opens its own pool, so this multiplies
+// across concurrent instances. 3 keeps parallel queries-per-request fast
+// without exhausting Supabase's connection limit under load.
 const client = postgres(connectionString, {
   prepare: false,
-  max: 5,
+  max: 3,
   idle_timeout: 20,
 });
 

@@ -158,7 +158,8 @@ export function FeedsNav({
                   if (r.ok) {
                     toast.success(
                       `Synced ${r.synced} feed${r.synced === 1 ? "" : "s"}` +
-                        (r.failed > 0 ? ` · ${r.failed} failed` : ""),
+                        (r.failed > 0 ? ` · ${r.failed} failed` : "") +
+                        (r.remaining > 0 ? ` · ${r.remaining} left, tap sync again` : ""),
                     );
                   } else if ("alreadyRunning" in r) {
                     toast.info("A sync is already running — hang tight.");

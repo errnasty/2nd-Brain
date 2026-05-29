@@ -4,6 +4,7 @@ import { streamText } from "ai";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -66,6 +67,14 @@ export async function POST(req: Request) {
     return new Response("Unauthorized", { status: 401 });
   }
   const user = auth.user;
+
+  // Daily Brief is expensive (full-text bundle). 10 generations / minute.
+  const rl = await checkRateLimit(user.id, "brief", 10, 60);
+  if (!rl.allowed) {
+    return new Response("Rate limit reached — wait a moment before regenerating the brief.", {
+      status: 429,
+    });
+  }
 
   if (!process.env.ANTHROPIC_API_KEY) {
     return new Response(

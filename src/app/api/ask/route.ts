@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { retrieveFromDirectory, buildDirectoryMap, type RagSource } from "@/lib/ai/rag";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 import { getChatModel } from "@/lib/ai/models";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -54,6 +55,14 @@ export async function POST(req: Request) {
   }
   const userId = auth.user.id;
 
+  // Cap AI spend per user: 30 questions / minute.
+  const rl = await checkRateLimit(userId, "ask", 30, 60);
+  if (!rl.allowed) {
+    return new Response("Rate limit reached — please wait a moment before asking again.", {
+      status: 429,
+    });
+  }
+
   let body: { question?: string; history?: Message[]; model?: string };
   try {
     body = (await req.json()) as typeof body;
@@ -102,7 +111,9 @@ export async function POST(req: Request) {
   // self-healing first query instead of an error screen.
   if (sources.length === 0) {
     try {
-      const result = await backfillEmbeddings(userId, 150);
+      // Bounded so the first query stays within the function budget. A full
+      // library is finished by the 6-hourly cron backfill.
+      const result = await backfillEmbeddings(userId, 60);
       if (result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded > 0) {
         sources = await retrieveFromDirectory(userId, question, 8);
       }

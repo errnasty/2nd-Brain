@@ -82,20 +82,26 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
   }
 }
 
-// Max feeds processed concurrently. Kept conservative (5) so a single
-// serverless invocation stays well within execution-time limits and doesn't
-// hammer one origin too hard.
+// Max feeds processed concurrently. 5 keeps one invocation off any single
+// origin too hard.
 const SYNC_BATCH = 5;
 
+// Wall-clock budget per invocation. Netlify's sync function cap is 10s (it
+// IGNORES the route's maxDuration export — that's Vercel-only). We stop
+// starting new batches past this and return a partial 200; the next run picks
+// up where we left off because feeds are synced oldest-first.
+const SYNC_BUDGET_MS = 8000;
+
 /**
- * Run syncFeed across a list of feeds in bounded-concurrency chunks using
- * Promise.allSettled, so one slow/broken feed can never reject the batch or
- * drop the remaining jobs. syncFeed already isolates its own errors and
- * returns a SyncResult; allSettled is belt-and-suspenders.
+ * Run syncFeed across feeds in bounded-concurrency chunks via Promise.allSettled
+ * (one slow/broken feed can't reject the batch). Time-boxed: bails out of the
+ * loop once SYNC_BUDGET_MS elapses so the serverless function never times out.
  */
 async function runSyncBatched(feedList: { id: string; userId: string }[]): Promise<SyncResult[]> {
+  const start = Date.now();
   const results: SyncResult[] = [];
   for (let i = 0; i < feedList.length; i += SYNC_BATCH) {
+    if (Date.now() - start > SYNC_BUDGET_MS) break; // out of budget — rest next run
     const batch = feedList.slice(i, i + SYNC_BATCH);
     const settled = await Promise.allSettled(batch.map((f) => syncFeed(f.id, f.userId)));
     for (let j = 0; j < settled.length; j += 1) {
@@ -116,12 +122,20 @@ async function runSyncBatched(feedList: { id: string; userId: string }[]): Promi
   return results;
 }
 
+// Oldest-synced feeds first, so each time-boxed run makes forward progress
+// across the whole set instead of re-doing the same head every time.
+const STALEST_FIRST = sql`last_fetched_at asc nulls first`;
+
 /** Sync every feed in the database. Used by the cron route. */
-export async function syncAllFeeds(): Promise<{ total: number; ok: number; failed: number; results: SyncResult[] }> {
-  const all = await db.select({ id: feeds.id, userId: feeds.userId }).from(feeds);
+export async function syncAllFeeds(): Promise<{ total: number; processed: number; ok: number; failed: number; results: SyncResult[] }> {
+  const all = await db
+    .select({ id: feeds.id, userId: feeds.userId })
+    .from(feeds)
+    .orderBy(STALEST_FIRST);
   const results = await runSyncBatched(all);
   return {
     total: all.length,
+    processed: results.length,
     ok: results.filter((r) => !r.errored).length,
     failed: results.filter((r) => r.errored).length,
     results,
@@ -131,14 +145,16 @@ export async function syncAllFeeds(): Promise<{ total: number; ok: number; faile
 /** Sync only one user's feeds (used by the in-app "Sync all" button). */
 export async function syncUserFeeds(
   userId: string,
-): Promise<{ total: number; ok: number; failed: number; results: SyncResult[] }> {
+): Promise<{ total: number; processed: number; ok: number; failed: number; results: SyncResult[] }> {
   const all = await db
     .select({ id: feeds.id, userId: feeds.userId })
     .from(feeds)
-    .where(eq(feeds.userId, userId));
+    .where(eq(feeds.userId, userId))
+    .orderBy(STALEST_FIRST);
   const results = await runSyncBatched(all);
   return {
     total: all.length,
+    processed: results.length,
     ok: results.filter((r) => !r.errored).length,
     failed: results.filter((r) => r.errored).length,
     results,

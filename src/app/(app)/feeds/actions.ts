@@ -81,7 +81,7 @@ export async function syncFeedAction(feedId: string) {
 }
 
 export type SyncAllResult =
-  | { ok: true; synced: number; failed: number }
+  | { ok: true; synced: number; failed: number; remaining: number }
   | { ok: false; alreadyRunning: true }
   | { ok: false; error: string };
 
@@ -128,7 +128,12 @@ export async function syncAllAction(): Promise<SyncAllResult> {
   try {
     const summary = await syncUserFeeds(user.id);
     revalidatePath("/feeds");
-    return { ok: true, synced: summary.ok, failed: summary.failed };
+    return {
+      ok: true,
+      synced: summary.ok,
+      failed: summary.failed,
+      remaining: Math.max(0, summary.total - summary.processed),
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Sync failed" };
   } finally {
