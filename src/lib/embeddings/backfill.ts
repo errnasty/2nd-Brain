@@ -11,7 +11,39 @@ export type BackfillResult = {
   chunksEmbedded: number;
   notesEmbedded: number;
   failed: number;
+  errors: string[];
 };
+
+// Run-once-per-instance guard so we don't re-issue DDL on every warm call.
+let schemaEnsured = false;
+
+/**
+ * Idempotently guarantee the pgvector columns + HNSW indexes exist (the
+ * contents of migration 0005). This removes the recurring
+ * `column "embedding" does not exist` failures when a migration wasn't run by
+ * hand. Each statement is isolated — `create extension` may be a no-op or
+ * permission-gated on managed Postgres, and that's fine.
+ */
+export async function ensureVectorSchema(): Promise<void> {
+  if (schemaEnsured) return;
+  const statements = [
+    sql`create extension if not exists vector`,
+    sql`alter table document_chunks add column if not exists embedding vector(1024)`,
+    sql`alter table article_embeddings add column if not exists embedding vector(1024)`,
+    sql`alter table directory_items add column if not exists embedding vector(1024)`,
+    sql`create index if not exists document_chunks_embedding_idx on document_chunks using hnsw (embedding vector_cosine_ops)`,
+    sql`create index if not exists article_embeddings_embedding_idx on article_embeddings using hnsw (embedding vector_cosine_ops)`,
+    sql`create index if not exists directory_items_embedding_idx on directory_items using hnsw (embedding vector_cosine_ops)`,
+  ];
+  for (const stmt of statements) {
+    try {
+      await db.execute(stmt);
+    } catch (err) {
+      console.warn("ensureVectorSchema statement skipped:", err instanceof Error ? err.message : err);
+    }
+  }
+  schemaEnsured = true;
+}
 
 /**
  * Embed any articles for `userId` that don't yet have a row in `article_embeddings`,
@@ -24,115 +56,113 @@ export type BackfillResult = {
 const NOTE_BATCH = 16;
 
 export async function backfillEmbeddings(userId: string, limit = 500): Promise<BackfillResult> {
+  // Make sure the columns/indexes exist before we touch them.
+  await ensureVectorSchema();
+
   const provider = getEmbeddingsProvider();
   let articlesEmbedded = 0;
   let chunksEmbedded = 0;
   let notesEmbedded = 0;
   let failed = 0;
+  const errors: string[] = [];
 
   // ── Articles ─────────────────────────────────────────────────────
-  type ArticleRow = { id: string; title: string; excerpt: string | null; full_text: string | null };
-  const missingArticles = (await db.execute(sql`
-    select a.id, a.title, a.excerpt, a.full_text
-    from articles a
-    left join article_embeddings e on e.article_id = a.id
-    where a.user_id = ${userId} and e.id is null
-    order by a.publish_date desc nulls last
-    limit ${limit}
-  `)) as unknown as ArticleRow[];
-  const articleRows = missingArticles;
+  // Whole phase wrapped so a missing column on the SELECT can't kill the
+  // other phases (articles can still index even if notes can't, etc.).
+  try {
+    type ArticleRow = { id: string; title: string; excerpt: string | null; full_text: string | null };
+    const articleRows = (await db.execute(sql`
+      select a.id, a.title, a.excerpt, a.full_text
+      from articles a
+      left join article_embeddings e on e.article_id = a.id
+      where a.user_id = ${userId} and e.id is null
+      order by a.publish_date desc nulls last
+      limit ${limit}
+    `)) as unknown as ArticleRow[];
 
-  for (let i = 0; i < articleRows.length; i += ARTICLE_BATCH) {
-    const batch = articleRows.slice(i, i + ARTICLE_BATCH);
-    const texts = batch.map((r) =>
-      clampForEmbedding(
-        `${r.title}\n\n${r.excerpt ?? r.full_text?.slice(0, 800) ?? ""}`.trim(),
-      ),
-    );
-    try {
-      const vectors = await provider.embed(texts);
-      for (let j = 0; j < batch.length; j += 1) {
-        const row = batch[j];
-        const vector = toVectorLiteral(vectors[j]);
-        await db.execute(sql`
-          insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
-          values (${row.id}, ${userId}, 0, ${texts[j]}, ${vector}::vector)
-          on conflict (article_id, chunk_index) do nothing
-        `);
-        articlesEmbedded += 1;
+    for (let i = 0; i < articleRows.length; i += ARTICLE_BATCH) {
+      const batch = articleRows.slice(i, i + ARTICLE_BATCH);
+      const texts = batch.map((r) =>
+        clampForEmbedding(`${r.title}\n\n${r.excerpt ?? r.full_text?.slice(0, 800) ?? ""}`.trim()),
+      );
+      try {
+        const vectors = await provider.embed(texts);
+        for (let j = 0; j < batch.length; j += 1) {
+          const vector = toVectorLiteral(vectors[j]);
+          await db.execute(sql`
+            insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
+            values (${batch[j].id}, ${userId}, 0, ${texts[j]}, ${vector}::vector)
+            on conflict (article_id, chunk_index) do nothing
+          `);
+          articlesEmbedded += 1;
+        }
+      } catch (err) {
+        failed += batch.length;
+        console.error("Article embedding batch failed:", err);
       }
-    } catch (err) {
-      failed += batch.length;
-      console.error("Article embedding batch failed:", err);
     }
+  } catch (err) {
+    errors.push(`articles: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // ── Document chunks ──────────────────────────────────────────────
-  const missingChunks = await db
-    .select({ id: documentChunks.id, content: documentChunks.content })
-    .from(documentChunks)
-    .where(and(eq(documentChunks.userId, userId), isNull(documentChunks.embedding)))
-    .limit(limit);
+  try {
+    const missingChunks = await db
+      .select({ id: documentChunks.id, content: documentChunks.content })
+      .from(documentChunks)
+      .where(and(eq(documentChunks.userId, userId), isNull(documentChunks.embedding)))
+      .limit(limit);
 
-  for (let i = 0; i < missingChunks.length; i += CHUNK_BATCH) {
-    const batch = missingChunks.slice(i, i + CHUNK_BATCH);
-    const texts = batch.map((c) => clampForEmbedding(c.content));
-    try {
-      const vectors = await provider.embed(texts);
-      for (let j = 0; j < batch.length; j += 1) {
-        const id = batch[j].id;
-        const vector = toVectorLiteral(vectors[j]);
-        await db.execute(sql`
-          update document_chunks
-          set embedding = ${vector}::vector
-          where id = ${id}
-        `);
-        chunksEmbedded += 1;
+    for (let i = 0; i < missingChunks.length; i += CHUNK_BATCH) {
+      const batch = missingChunks.slice(i, i + CHUNK_BATCH);
+      const texts = batch.map((c) => clampForEmbedding(c.content));
+      try {
+        const vectors = await provider.embed(texts);
+        for (let j = 0; j < batch.length; j += 1) {
+          const vector = toVectorLiteral(vectors[j]);
+          await db.execute(sql`update document_chunks set embedding = ${vector}::vector where id = ${batch[j].id}`);
+          chunksEmbedded += 1;
+        }
+      } catch (err) {
+        failed += batch.length;
+        console.error("Chunk embedding batch failed:", err);
       }
-    } catch (err) {
-      failed += batch.length;
-      console.error("Chunk embedding batch failed:", err);
     }
+  } catch (err) {
+    errors.push(`chunks: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // ── User notes (in directory_items) ─────────────────────────────
-  // Notes have no underlying document/article row, so their embedding lives
-  // directly on directory_items.embedding.
-  type NoteRow = { id: string; title: string; content: string | null };
-  const missingNotes = (await db.execute(sql`
-    select id, title, content
-    from directory_items
-    where user_id = ${userId}
-      and kind = 'user_note'
-      and embedding is null
-    order by updated_at desc
-    limit ${limit}
-  `)) as unknown as NoteRow[];
+  // ── User notes (embedding stored directly on directory_items) ────
+  try {
+    type NoteRow = { id: string; title: string; content: string | null };
+    const missingNotes = (await db.execute(sql`
+      select id, title, content
+      from directory_items
+      where user_id = ${userId} and kind = 'user_note' and embedding is null
+      order by updated_at desc
+      limit ${limit}
+    `)) as unknown as NoteRow[];
 
-  for (let i = 0; i < missingNotes.length; i += NOTE_BATCH) {
-    const batch = missingNotes.slice(i, i + NOTE_BATCH);
-    const texts = batch.map((n) =>
-      clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()),
-    );
-    try {
-      const vectors = await provider.embed(texts);
-      for (let j = 0; j < batch.length; j += 1) {
-        const row = batch[j];
-        const vector = toVectorLiteral(vectors[j]);
-        await db.execute(sql`
-          update directory_items
-          set embedding = ${vector}::vector
-          where id = ${row.id} and user_id = ${userId}
-        `);
-        notesEmbedded += 1;
+    for (let i = 0; i < missingNotes.length; i += NOTE_BATCH) {
+      const batch = missingNotes.slice(i, i + NOTE_BATCH);
+      const texts = batch.map((n) => clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()));
+      try {
+        const vectors = await provider.embed(texts);
+        for (let j = 0; j < batch.length; j += 1) {
+          const vector = toVectorLiteral(vectors[j]);
+          await db.execute(sql`update directory_items set embedding = ${vector}::vector where id = ${batch[j].id} and user_id = ${userId}`);
+          notesEmbedded += 1;
+        }
+      } catch (err) {
+        failed += batch.length;
+        console.error("Note embedding batch failed:", err);
       }
-    } catch (err) {
-      failed += batch.length;
-      console.error("Note embedding batch failed:", err);
     }
+  } catch (err) {
+    errors.push(`notes: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  return { articlesEmbedded, chunksEmbedded, notesEmbedded, failed };
+  return { articlesEmbedded, chunksEmbedded, notesEmbedded, failed, errors };
 }
 
 /** Embed a single user note inline (fire-and-forget after note save). */
