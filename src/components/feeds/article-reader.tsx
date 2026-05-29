@@ -83,11 +83,15 @@ export function ArticleReader({
   function saveToDirectory() {
     if (!article) return;
     startTransition(async () => {
-      const r = await saveArticleToDirectoryAction(article.id);
-      if (r.ok) {
-        toast.success(r.alreadySaved ? "Already in your Directory" : "Saved to Directory");
-      } else {
-        toast.error(r.error);
+      try {
+        const r = await saveArticleToDirectoryAction(article.id);
+        if (r.ok) {
+          toast.success(r.alreadySaved ? "Already in your Directory" : "Saved to Directory");
+        } else {
+          toast.error(r.error);
+        }
+      } catch (err) {
+        toast.error(`Save failed: ${err instanceof Error ? err.message : "unknown error"}`);
       }
     });
   }

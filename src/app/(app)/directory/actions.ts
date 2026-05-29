@@ -378,43 +378,58 @@ export async function bulkMoveDirectoryItemsAction(itemIds: string[], folderId: 
 
 export async function saveArticleToDirectoryAction(articleId: string, folderId?: string | null) {
   const { user } = await requireUser();
-  const [article] = await db
-    .select()
-    .from(articles)
-    .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)))
-    .limit(1);
-  if (!article) return { ok: false as const, error: "Article not found" };
+  try {
+    const [article] = await db
+      .select()
+      .from(articles)
+      .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)))
+      .limit(1);
+    if (!article) return { ok: false as const, error: "Article not found" };
 
-  // Dedup: if this article was already saved, return that id
-  const [existing] = await db
-    .select({ id: directoryItems.id })
-    .from(directoryItems)
-    .where(
-      and(
-        eq(directoryItems.userId, user.id),
-        eq(directoryItems.articleId, articleId),
-        eq(directoryItems.kind, "saved_article"),
-      ),
-    )
-    .limit(1);
-  if (existing) return { ok: true as const, itemId: existing.id, alreadySaved: true };
+    // Dedup: if this article was already saved, return that id
+    const [existing] = await db
+      .select({ id: directoryItems.id })
+      .from(directoryItems)
+      .where(
+        and(
+          eq(directoryItems.userId, user.id),
+          eq(directoryItems.articleId, articleId),
+          eq(directoryItems.kind, "saved_article"),
+        ),
+      )
+      .limit(1);
+    if (existing) return { ok: true as const, itemId: existing.id, alreadySaved: true };
 
-  const [row] = await db
-    .insert(directoryItems)
-    .values({
-      userId: user.id,
-      folderId: folderId ?? null,
-      kind: "saved_article",
-      title: article.title,
-      sourceUrl: article.url,
-      articleId: article.id,
-      updatedAt: new Date(),
-    })
-    .returning({ id: directoryItems.id });
+    const [row] = await db
+      .insert(directoryItems)
+      .values({
+        userId: user.id,
+        folderId: folderId ?? null,
+        kind: "saved_article",
+        title: article.title,
+        sourceUrl: article.url,
+        articleId: article.id,
+        updatedAt: new Date(),
+      })
+      .returning({ id: directoryItems.id });
 
-  void autoTagDirectoryItem(user.id, row.id);
-  revalidatePath("/directory");
-  return { ok: true as const, itemId: row.id, alreadySaved: false };
+    // Best-effort tagging — already self-contained, but await+catch so a
+    // rejection can't become an unhandled promise on serverless.
+    try {
+      await autoTagDirectoryItem(user.id, row.id);
+    } catch (err) {
+      console.warn("autoTag after save failed:", err instanceof Error ? err.message : err);
+    }
+
+    revalidatePath("/directory");
+    return { ok: true as const, itemId: row.id, alreadySaved: false };
+  } catch (err) {
+    console.error("saveArticleToDirectory failed:", err instanceof Error ? err.message : err);
+    return {
+      ok: false as const,
+      error: err instanceof Error ? err.message : "Failed to save article",
+    };
+  }
 }
 
 // ── Upload a file as a directory item ────────────────────────────────
