@@ -175,17 +175,29 @@ export function AskShell() {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let acc = "";
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          acc += decoder.decode(value, { stream: true });
-          // Don't render the trailing usage sentinel as it streams in.
+
+        // Coalesce renders to one per animation frame instead of one per chunk
+        // — avoids O(messages) re-renders on every token during long answers.
+        let frameQueued = false;
+        const flush = () => {
+          frameQueued = false;
           const sentinelIdx = acc.indexOf(USAGE_SENTINEL);
           const display = sentinelIdx >= 0 ? acc.slice(0, sentinelIdx) : acc;
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
           );
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          if (!frameQueued) {
+            frameQueued = true;
+            requestAnimationFrame(flush);
+          }
         }
+        flush(); // ensure the final chunk is committed
 
         // Parse the usage sentinel (if present) off the end of the stream.
         let usage: Usage | undefined;

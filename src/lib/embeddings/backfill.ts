@@ -2,6 +2,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { documentChunks } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+import { EMBEDDING_TABLES } from "@/lib/embeddings/tables";
 
 const ARTICLE_BATCH = 16;
 const CHUNK_BATCH = 16;
@@ -26,15 +27,17 @@ let schemaEnsured = false;
  */
 export async function ensureVectorSchema(): Promise<void> {
   if (schemaEnsured) return;
-  const statements = [
-    sql`create extension if not exists vector`,
-    sql`alter table document_chunks add column if not exists embedding vector(1024)`,
-    sql`alter table article_embeddings add column if not exists embedding vector(1024)`,
-    sql`alter table directory_items add column if not exists embedding vector(1024)`,
-    sql`create index if not exists document_chunks_embedding_idx on document_chunks using hnsw (embedding vector_cosine_ops)`,
-    sql`create index if not exists article_embeddings_embedding_idx on article_embeddings using hnsw (embedding vector_cosine_ops)`,
-    sql`create index if not exists directory_items_embedding_idx on directory_items using hnsw (embedding vector_cosine_ops)`,
-  ];
+  const statements = [sql`create extension if not exists vector`];
+  // Table names come from the EMBEDDING_TABLES allowlist (not user input), so
+  // sql.raw interpolation is safe here.
+  for (const table of EMBEDDING_TABLES) {
+    statements.push(sql.raw(`alter table ${table} add column if not exists embedding vector(1024)`));
+    statements.push(
+      sql.raw(
+        `create index if not exists ${table}_embedding_idx on ${table} using hnsw (embedding vector_cosine_ops)`,
+      ),
+    );
+  }
   for (const stmt of statements) {
     try {
       await db.execute(stmt);
@@ -173,6 +176,7 @@ export async function embedNote(
   content: string | null,
 ): Promise<void> {
   try {
+    await ensureVectorSchema(); // column must exist before we write to it
     const provider = getEmbeddingsProvider();
     const text = clampForEmbedding(`${title}\n\n${content ?? ""}`.trim());
     if (!text) return;

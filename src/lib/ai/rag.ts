@@ -9,7 +9,21 @@ import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib
  * can act as a semantic router (see where things live before/instead of a
  * broad vector search). Titles + ids only — NO full text — keeps it cheap.
  */
+// Per-user 60s cache. The structural map changes rarely relative to how often
+// it's rebuilt (every Ask question), so this skips 2 queries + the tree walk
+// on back-to-back questions.
+const mapCache = new Map<string, { at: number; text: string }>();
+const MAP_TTL_MS = 60_000;
+
 export async function buildDirectoryMap(userId: string, maxItems = 300): Promise<string> {
+  const cached = mapCache.get(userId);
+  if (cached && Date.now() - cached.at < MAP_TTL_MS) return cached.text;
+  const text = await buildDirectoryMapUncached(userId, maxItems);
+  mapCache.set(userId, { at: Date.now(), text });
+  return text;
+}
+
+async function buildDirectoryMapUncached(userId: string, maxItems: number): Promise<string> {
   let folders: { id: string; name: string; parentId: string | null }[] = [];
   let items: { id: string; title: string; kind: string; folderId: string | null }[] = [];
   try {

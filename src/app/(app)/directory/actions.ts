@@ -37,8 +37,18 @@ function stripHtml(html: string): string {
  * Called inline after item creation; safe to call again later for re-processing.
  */
 async function autoTagDirectoryItem(userId: string, itemId: string) {
+  // Select explicit columns (NOT select()/all) so this never references the
+  // pgvector `embedding` column — which may not exist if a migration is
+  // pending. Tagging doesn't need the vector anyway.
   const [item] = await db
-    .select()
+    .select({
+      id: directoryItems.id,
+      kind: directoryItems.kind,
+      title: directoryItems.title,
+      content: directoryItems.content,
+      articleId: directoryItems.articleId,
+      documentId: directoryItems.documentId,
+    })
     .from(directoryItems)
     .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, userId)))
     .limit(1);
