@@ -1,9 +1,11 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
+  ChevronDown,
+  ChevronRight,
   Download,
   FolderClosed,
   Inbox,
@@ -39,6 +41,7 @@ import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { ExportDialog } from "./export-dialog";
 
 const UNSORTED = "unsorted";
+const DIR_COLLAPSE_KEY = "directory.collapsed.v1";
 
 export function DirectoryNav({
   folders,
@@ -56,6 +59,28 @@ export function DirectoryNav({
   const [newFolderName, setNewFolderName] = useState("");
   const [folderToDelete, setFolderToDelete] = useState<DirectoryFolder | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+
+  // Collapse state for nested folders, persisted to localStorage.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DIR_COLLAPSE_KEY);
+      if (raw) setCollapsed(JSON.parse(raw));
+    } catch {
+      // ignore
+    }
+  }, []);
+  function toggleCollapsed(id: string) {
+    setCollapsed((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      try {
+        localStorage.setItem(DIR_COLLAPSE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
 
   const activeFolder = params.get("folder");
 
@@ -197,6 +222,8 @@ export function DirectoryNav({
               depth={0}
               folderCounts={folderCounts}
               activeFolder={activeFolder}
+              collapsed={collapsed}
+              onToggleCollapsed={toggleCollapsed}
               onSelect={setFolder}
               onRequestDelete={(f) => setFolderToDelete(f)}
             />
@@ -250,6 +277,8 @@ function FolderTreeNode({
   depth,
   folderCounts,
   activeFolder,
+  collapsed,
+  onToggleCollapsed,
   onSelect,
   onRequestDelete,
 }: {
@@ -257,21 +286,38 @@ function FolderTreeNode({
   depth: number;
   folderCounts: Record<string, number>;
   activeFolder: string | null;
+  collapsed: Record<string, boolean>;
+  onToggleCollapsed: (id: string) => void;
   onSelect: (id: string) => void;
   onRequestDelete: (f: DirectoryFolder) => void;
 }) {
+  const hasChildren = node.children.length > 0;
+  const isCollapsed = collapsed[node.folder.id];
   return (
     <div>
-      <div style={{ paddingLeft: depth * 12 }}>
-        <FolderRow
-          folder={node.folder}
-          count={folderCounts[node.folder.id] ?? 0}
-          active={activeFolder === node.folder.id}
-          onSelect={() => onSelect(node.folder.id)}
-          onRequestDelete={() => onRequestDelete(node.folder)}
-        />
+      <div className="flex items-center" style={{ paddingLeft: depth * 12 }}>
+        {hasChildren ? (
+          <button
+            onClick={() => onToggleCollapsed(node.folder.id)}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+            title={isCollapsed ? "Expand" : "Collapse"}
+          >
+            {isCollapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
+        ) : (
+          <span className="w-4 shrink-0" /> // align leaf rows with chevroned ones
+        )}
+        <div className="min-w-0 flex-1">
+          <FolderRow
+            folder={node.folder}
+            count={folderCounts[node.folder.id] ?? 0}
+            active={activeFolder === node.folder.id}
+            onSelect={() => onSelect(node.folder.id)}
+            onRequestDelete={() => onRequestDelete(node.folder)}
+          />
+        </div>
       </div>
-      {node.children.length > 0 && (
+      {hasChildren && !isCollapsed && (
         <div>
           {node.children.map((child) => (
             <FolderTreeNode
@@ -280,6 +326,8 @@ function FolderTreeNode({
               depth={depth + 1}
               folderCounts={folderCounts}
               activeFolder={activeFolder}
+              collapsed={collapsed}
+              onToggleCollapsed={onToggleCollapsed}
               onSelect={onSelect}
               onRequestDelete={onRequestDelete}
             />

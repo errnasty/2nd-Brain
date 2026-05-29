@@ -20,6 +20,23 @@ import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
 import { embedNote } from "@/lib/embeddings/backfill";
+import { fetchDirectoryPage, type DirectoryPage } from "@/lib/directory/query";
+
+/** Infinite-scroll: fetch the next page of directory items for the shell. */
+export async function loadMoreDirectoryItemsAction(input: {
+  folder: string | null;
+  tagIds: string[];
+  offset: number;
+  limit: number;
+}): Promise<DirectoryPage> {
+  const { user } = await requireUser();
+  return fetchDirectoryPage(user.id, {
+    folder: input.folder,
+    tagIds: input.tagIds,
+    offset: input.offset,
+    limit: input.limit,
+  });
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

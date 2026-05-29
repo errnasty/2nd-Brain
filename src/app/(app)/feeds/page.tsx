@@ -1,22 +1,34 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds, itemTags, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { FeedsShell } from "@/components/feeds/feeds-shell";
 
+export type FeedSort = "newest" | "oldest" | "hot";
+
 type Search = Promise<{
   feed?: string;
   folder?: string;
   view?: "unread" | "all" | "starred";
+  sort?: FeedSort;
+  dedupe?: string;
   // `article` is intentionally NOT read here — selection lives in client state
   // (FeedsShell) so opening an article doesn't trigger a server re-render.
 }>;
 
 const ARTICLE_LIMIT = 100;
+const HOT_WINDOW_DAYS = 3;
+
+/** Normalize a title for cross-feed duplicate detection. */
+function normTitle(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
 
 export default async function FeedsPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
   const view = sp.view ?? "unread";
+  const sort: FeedSort = sp.sort ?? "newest";
+  const dedupe = sp.dedupe === "1";
   const { user } = await requireUser();
 
   const where = [eq(articles.userId, user.id)];
@@ -24,6 +36,11 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
   if (sp.folder) where.push(eq(articles.folderId, sp.folder));
   if (view === "unread") where.push(eq(articles.readStatus, "unread"));
   if (view === "starred") where.push(eq(articles.starred, true));
+  // "Hot" = what's buzzing now: only the last few days, newest first.
+  if (sort === "hot") {
+    where.push(gte(articles.publishDate, new Date(Date.now() - HOT_WINDOW_DAYS * 86_400_000)));
+  }
+  const orderBy = sort === "oldest" ? asc(articles.publishDate) : desc(articles.publishDate);
 
   // Defensive: a failed query returns an empty list instead of crashing the
   // server render. `rows` are already plain {key: value} objects selected
@@ -62,8 +79,20 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
       .from(articles)
       .innerJoin(feeds, eq(feeds.id, articles.feedId))
       .where(and(...where))
-      .orderBy(desc(articles.publishDate))
+      .orderBy(orderBy)
       .limit(ARTICLE_LIMIT);
+
+    // Collapse cross-feed duplicates (same story syndicated to multiple feeds)
+    // by normalized title, keeping the first (already sort-ordered) copy.
+    if (dedupe) {
+      const seen = new Set<string>();
+      rows = rows.filter((r) => {
+        const key = normTitle(r.title);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
 
     // Fetch tags per visible article. Usually empty (articles aren't
     // auto-tagged), but render legacy/manual tags conditionally if present.

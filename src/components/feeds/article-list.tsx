@@ -4,7 +4,16 @@ import Link from "next/link";
 import { useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CheckCheck, Loader2, Search, Star, X } from "lucide-react";
+import { ArrowDownUp, Check, CheckCheck, Copy, Loader2, Search, Star, X } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -174,17 +183,20 @@ export function ArticleList({
           <ViewLink view="all" current={view} label="All" />
           <ViewLink view="starred" current={view} label="Starred" />
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={markAllRead}
-          title={`Mark all as read (${
-            feedId ? "this feed" : folderId ? "this folder" : view === "starred" ? "starred" : "everywhere"
-          })`}
-          disabled={showingSearch}
-        >
-          <CheckCheck className="h-4 w-4" />
-        </Button>
+        <div className="flex items-center gap-0.5">
+          <SortControls />
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={markAllRead}
+            title={`Mark all as read (${
+              feedId ? "this feed" : folderId ? "this folder" : view === "starred" ? "starred" : "everywhere"
+            })`}
+            disabled={showingSearch}
+          >
+            <CheckCheck className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
       <Separator />
 
@@ -345,5 +357,57 @@ function ViewLink({
     >
       {label}
     </Link>
+  );
+}
+
+const SORT_LABELS: Record<string, string> = {
+  newest: "Newest",
+  oldest: "Oldest",
+  hot: "Hot (recent)",
+};
+
+function SortControls() {
+  const router = useRouter();
+  const params = useSearchParams();
+  const sort = params.get("sort") ?? "newest";
+  const dedupe = params.get("dedupe") === "1";
+
+  function setParam(key: string, value: string | null) {
+    const sp = new URLSearchParams(params.toString());
+    if (value === null) sp.delete(key);
+    else sp.set(key, value);
+    sp.delete("article");
+    router.replace(`/feeds?${sp.toString()}`, { scroll: false });
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost" className="h-8 px-2" title="Sort & filter">
+          <ArrowDownUp className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        <DropdownMenuLabel>Sort by</DropdownMenuLabel>
+        {(["newest", "oldest", "hot"] as const).map((s) => (
+          <DropdownMenuItem
+            key={s}
+            onClick={() => setParam("sort", s === "newest" ? null : s)}
+            className="flex items-center justify-between"
+          >
+            {SORT_LABELS[s]}
+            {sort === s && <Check className="h-3.5 w-3.5" />}
+          </DropdownMenuItem>
+        ))}
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={dedupe}
+          onCheckedChange={(c) => setParam("dedupe", c ? "1" : null)}
+        >
+          <Copy className="mr-2 h-3.5 w-3.5" />
+          Hide duplicates
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

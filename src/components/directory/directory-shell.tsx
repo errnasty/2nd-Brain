@@ -8,7 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatRelativeTime } from "@/lib/utils";
-import { createNoteAction, uploadToDirectoryAction } from "@/app/(app)/directory/actions";
+import {
+  createNoteAction,
+  loadMoreDirectoryItemsAction,
+  uploadToDirectoryAction,
+} from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
@@ -35,15 +39,19 @@ const KIND_META: Record<DirectoryListItem["kind"], { label: string; icon: React.
   user_note: { label: "Note", icon: <NotebookPen className="h-3.5 w-3.5" /> },
 };
 
+const PAGE_SIZE = 50;
+
 export function DirectoryShell({
   items,
   itemTagsById,
+  hasMore,
   folders,
   activeFolder,
   activeTagIds,
 }: {
   items: DirectoryListItem[];
   itemTagsById: Record<string, string[]>;
+  hasMore: boolean;
   folders: DirectoryFolder[];
   activeFolder: string | null;
   activeTagIds: string[];
@@ -51,6 +59,48 @@ export function DirectoryShell({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
+
+  // Infinite scroll: seed from the server's first page, append more as the
+  // user scrolls. Re-seed when the filter/first-page changes (folder switch,
+  // or a mutation that revalidated the page).
+  const [extraItems, setExtraItems] = useState<DirectoryListItem[]>([]);
+  const [extraTags, setExtraTags] = useState<Record<string, string[]>>({});
+  const [pageHasMore, setPageHasMore] = useState(hasMore);
+  const [offset, setOffset] = useState(items.length);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const seedSig = `${activeFolder ?? ""}|${activeTagIds.join(",")}|${items.length}|${items[0]?.id ?? ""}|${items[0]?.updatedAt ?? ""}`;
+  useEffect(() => {
+    setExtraItems([]);
+    setExtraTags({});
+    setPageHasMore(hasMore);
+    setOffset(items.length);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedSig]);
+
+  const allItems = useMemo(() => [...items, ...extraItems], [items, extraItems]);
+  const allTags = useMemo(() => ({ ...itemTagsById, ...extraTags }), [itemTagsById, extraTags]);
+
+  const loadMore = useCallback(() => {
+    if (loadingMore || !pageHasMore) return;
+    setLoadingMore(true);
+    startTransition(async () => {
+      try {
+        const r = await loadMoreDirectoryItemsAction({
+          folder: activeFolder,
+          tagIds: activeTagIds,
+          offset,
+          limit: PAGE_SIZE,
+        });
+        setExtraItems((prev) => [...prev, ...(r.items as DirectoryListItem[])]);
+        setExtraTags((prev) => ({ ...prev, ...r.itemTagsById }));
+        setPageHasMore(r.hasMore);
+        setOffset((o) => o + r.items.length);
+      } finally {
+        setLoadingMore(false);
+      }
+    });
+  }, [loadingMore, pageHasMore, activeFolder, activeTagIds, offset]);
 
   // Clear bulk selection when the visible items list changes (folder/filter switch)
   useEffect(() => {
@@ -82,13 +132,13 @@ export function DirectoryShell({
   // Clear selection if no longer in the visible list
   useEffect(() => {
     if (!selectedId) return;
-    if (!items.some((i) => i.id === selectedId)) {
+    if (!allItems.some((i) => i.id === selectedId)) {
       setSelectedId(null);
       const url = new URL(window.location.href);
       url.searchParams.delete("item");
       window.history.replaceState(null, "", url.toString());
     }
-  }, [items, selectedId]);
+  }, [allItems, selectedId]);
 
   const selectItem = useCallback((id: string | null) => {
     setSelectedId(id);
@@ -128,9 +178,11 @@ export function DirectoryShell({
   }
 
   const selectedItem = useMemo(
-    () => items.find((i) => i.id === selectedId) ?? null,
-    [items, selectedId],
+    () => allItems.find((i) => i.id === selectedId) ?? null,
+    [allItems, selectedId],
   );
+
+  const countLabel = `${allItems.length}${pageHasMore ? "+" : ""}`;
 
   return (
     <>
@@ -139,9 +191,9 @@ export function DirectoryShell({
         <div className="flex items-center justify-between px-3 py-3">
           <div className="text-sm font-semibold">
             {activeTagIds.length > 0
-              ? `${items.length} tagged`
+              ? `${countLabel} tagged`
               : activeFolder
-                ? `${items.length} items`
+                ? `${countLabel} items`
                 : "All items"}
           </div>
           <div className="flex items-center gap-0.5">
@@ -158,7 +210,7 @@ export function DirectoryShell({
           </div>
         </div>
         <Separator />
-        {items.length === 0 ? (
+        {allItems.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">
             {activeTagIds.length > 0
               ? "No items match the selected tags."
@@ -166,12 +218,15 @@ export function DirectoryShell({
           </div>
         ) : (
           <VirtualizedDirectoryList
-            items={items}
-            itemTagsById={itemTagsById}
+            items={allItems}
+            itemTagsById={allTags}
             selectedId={selectedId}
             checkedIds={checkedIds}
             onCheck={toggleChecked}
             onOpen={selectItem}
+            onReachEnd={loadMore}
+            loadingMore={loadingMore}
+            hasMore={pageHasMore}
           />
         )}
       </section>
@@ -198,6 +253,9 @@ function VirtualizedDirectoryList({
   checkedIds,
   onCheck,
   onOpen,
+  onReachEnd,
+  loadingMore,
+  hasMore,
 }: {
   items: DirectoryListItem[];
   itemTagsById: Record<string, string[]>;
@@ -205,6 +263,9 @@ function VirtualizedDirectoryList({
   checkedIds: Set<string>;
   onCheck: (id: string) => void;
   onOpen: (id: string | null) => void;
+  onReachEnd: () => void;
+  loadingMore: boolean;
+  hasMore: boolean;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -215,13 +276,22 @@ function VirtualizedDirectoryList({
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
+  // Trigger the next page when the last rendered row is within 5 of the end.
+  const virtualRows = virtualizer.getVirtualItems();
+  const lastIndex = virtualRows.length > 0 ? virtualRows[virtualRows.length - 1].index : 0;
+  useEffect(() => {
+    if (hasMore && !loadingMore && lastIndex >= items.length - 5) {
+      onReachEnd();
+    }
+  }, [lastIndex, hasMore, loadingMore, items.length, onReachEnd]);
+
   return (
     <div ref={parentRef} className="flex-1 overflow-y-auto">
       <div
         className="relative w-full divide-y divide-border"
         style={{ height: `${virtualizer.getTotalSize()}px` }}
       >
-        {virtualizer.getVirtualItems().map((row) => {
+        {virtualRows.map((row) => {
           const item = items[row.index];
           return (
             <div
@@ -244,6 +314,9 @@ function VirtualizedDirectoryList({
           );
         })}
       </div>
+      {loadingMore && (
+        <div className="py-3 text-center text-xs text-muted-foreground">Loading more…</div>
+      )}
     </div>
   );
 }
