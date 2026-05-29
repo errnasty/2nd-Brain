@@ -11,8 +11,9 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 // Marker appended after the answer text carrying token usage as JSON. The
-// client splits on this and never renders it.
-export const USAGE_SENTINEL = "<<<SB_USAGE:";
+// client splits on this and never renders it. NOT exported — Next.js route
+// modules only allow specific named exports.
+const USAGE_SENTINEL = "<<<SB_USAGE:";
 
 const SYSTEM = `You are the user's personal Second Brain assistant.
 
