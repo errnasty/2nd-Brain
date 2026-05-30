@@ -21,9 +21,10 @@ export type DirectoryPage = {
   hasMore: boolean;
 };
 
-/** Default page size for directory infinite scroll. Shared by the server
- *  page (first paint) and the load-more action. */
-export const DIRECTORY_PAGE_SIZE = 50;
+// Re-export so server-side callers can keep importing from query.ts. The
+// constant itself lives in constants.ts (db-free) so client components can
+// import it without dragging postgres into the client bundle.
+export { DIRECTORY_PAGE_SIZE } from "./constants";
 
 /**
  * One page of directory items (newest-updated first), scoped by folder and/or

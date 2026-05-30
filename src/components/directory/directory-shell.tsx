@@ -13,7 +13,7 @@ import {
   loadMoreDirectoryItemsAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
-import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/query";
+import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
