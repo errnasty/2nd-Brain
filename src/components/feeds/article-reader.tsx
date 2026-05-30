@@ -10,7 +10,6 @@ import {
   ExternalLink,
   Rss,
   Star,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -235,8 +234,11 @@ export function ArticleReader({
   return (
     <section className="flex flex-1 flex-col overflow-hidden" data-reader-theme={prefs.theme}>
       <div className="flex items-center gap-1 border-b border-border px-2 py-2">
-        <Button size="icon" variant="ghost" onClick={close} className="lg:hidden">
-          <X className="h-4 w-4" />
+        {/* Mobile-only back: returns to the article list (list is hidden on
+            mobile while reading; side-by-side on md+ so no button needed). */}
+        <Button size="sm" variant="ghost" onClick={close} className="md:hidden -ml-1 gap-1 px-2">
+          <ChevronLeft className="h-4 w-4" />
+          Back
         </Button>
         <Button
           size="icon"

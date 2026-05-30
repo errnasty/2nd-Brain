@@ -6,9 +6,16 @@ import { retrieveFromDirectory, buildDirectoryMap, type RagSource } from "@/lib/
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 import { getChatModel } from "@/lib/ai/models";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { validateAskBody, withTimeout, TimeoutError } from "./validate";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+// Fail-fast budget for the pre-stream work (vector retrieval + directory map +
+// optional inline backfill). If the DB or embeddings provider stalls past this,
+// we return a clean JSON 504 instead of letting the proxy kill the request
+// with an HTML "Inactivity Timeout" page.
+const PRESTREAM_TIMEOUT_MS = 8000;
 
 // Marker appended after the answer text carrying token usage as JSON. The
 // client splits on this and never renders it. NOT exported — Next.js route
@@ -70,8 +77,12 @@ export async function POST(req: Request) {
   } catch {
     return new Response("Invalid JSON body", { status: 400 });
   }
-  const question = (body.question ?? "").trim();
-  if (!question) return new Response("Empty question", { status: 400 });
+
+  // Zero-token gate: reject empty/whitespace/missing questions before any DB
+  // or AI SDK work (0 tokens consumed, no stream opened).
+  const validated = validateAskBody(body);
+  if (!validated.ok) return new Response(validated.error, { status: validated.status });
+  const question = validated.question;
 
   // Resolve the requested model + verify the matching provider key is present.
   const { model, provider } = resolveModel(body.model);
@@ -91,8 +102,14 @@ export async function POST(req: Request) {
   // ── 1. Retrieve relevant context from the Directory ─────────────
   let sources: RagSource[] = [];
   try {
-    sources = await retrieveFromDirectory(userId, question, 8);
+    sources = await withTimeout(retrieveFromDirectory(userId, question, 8), PRESTREAM_TIMEOUT_MS, "retrieval");
   } catch (err) {
+    if (err instanceof TimeoutError) {
+      return Response.json(
+        { error: "The retrieval engine is taking too long. Please try again in a moment." },
+        { status: 504 },
+      );
+    }
     const message = err instanceof Error ? err.message : "";
     // A missing column means a migration hasn't been run — backfill can't fix
     // that. Anything else (e.g. embeddings provider error) is also surfaced.
@@ -112,25 +129,28 @@ export async function POST(req: Request) {
 
   // ── 1b. Auto-heal: columns exist but nothing matched. Likely the
   // embeddings just haven't been generated yet. Backfill inline (bounded),
-  // then retry once. This turns the common "empty library" failure into a
-  // self-healing first query instead of an error screen.
+  // then retry once. Time-boxed so a slow backfill can't hang the request.
   if (sources.length === 0) {
     try {
-      // Bounded so the first query stays within the function budget. A full
-      // library is finished by the 6-hourly cron backfill.
-      const result = await backfillEmbeddings(userId, 60);
+      const result = await withTimeout(backfillEmbeddings(userId, 60), PRESTREAM_TIMEOUT_MS, "backfill");
       if (result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded > 0) {
-        sources = await retrieveFromDirectory(userId, question, 8);
+        sources = await withTimeout(
+          retrieveFromDirectory(userId, question, 8),
+          PRESTREAM_TIMEOUT_MS,
+          "retrieval-retry",
+        );
       }
     } catch {
-      // If backfill itself fails (e.g. no embeddings key), fall through — the
-      // model will just answer "not enough info in your library".
+      // Backfill/retry failed or timed out — fall through and let the model
+      // answer from the directory map alone rather than hanging.
     }
   }
 
   // ── 2. Build the directory map + context block ─────────────────
-  // (Started in parallel above; just await the result here.)
-  const directoryMap = await mapPromise;
+  // (Started in parallel above.) Time-box so a stalled map query can't hang.
+  const directoryMap = await withTimeout(mapPromise, PRESTREAM_TIMEOUT_MS, "directory-map").catch(
+    () => "(Directory map unavailable.)",
+  );
 
   const contextBlock =
     sources.length === 0

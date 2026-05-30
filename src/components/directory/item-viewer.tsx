@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { ChevronRight, ExternalLink, Eye, Library, Pencil, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Eye, Library, Pencil, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -158,8 +158,9 @@ export function ItemViewer({
     <section className="flex flex-1 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-1 border-b border-border px-3 py-2">
-        <Button size="icon" variant="ghost" onClick={onClose} className="lg:hidden">
-          <X className="h-4 w-4" />
+        <Button size="sm" variant="ghost" onClick={onClose} className="md:hidden -ml-1 gap-1 px-2">
+          <ChevronLeft className="h-4 w-4" />
+          Back
         </Button>
         <div className="flex flex-1 items-center gap-2 text-xs text-muted-foreground">
           <span className="capitalize">{item.kind.replace("_", " ")}</span>
