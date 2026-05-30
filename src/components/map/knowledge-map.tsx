@@ -3,7 +3,9 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Network, X } from "lucide-react";
+import { ChevronRight, Loader2, Network, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -12,7 +14,7 @@ const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), { ssr: false 
 
 type MapNode = {
   id: string;
-  kind: "tag" | "item";
+  kind: "tag" | "item" | "folder";
   label: string;
   itemKind?: "saved_article" | "uploaded_document" | "user_note";
   x?: number;
@@ -22,6 +24,7 @@ type MapNode = {
 type MapLink = {
   source: string | MapNode;
   target: string | MapNode;
+  kind?: "tag" | "folder";
 };
 
 type Detail = {
@@ -32,11 +35,38 @@ type Detail = {
   sourceUrl: string | null;
   articleId: string | null;
   documentId: string | null;
+  breadcrumb?: { id: string; name: string }[];
+  tags?: string[];
 };
+
+// Node radius + color by type. Folders largest + purple, tags medium + amber,
+// items small + per-kind color.
+const FOLDER_COLOR = "#8b5cf6"; // violet-500
+function nodeColorFor(node: MapNode): string {
+  if (node.kind === "folder") return FOLDER_COLOR;
+  if (node.kind === "tag") return "#d97706";
+  switch (node.itemKind) {
+    case "saved_article":
+      return "#3b82f6";
+    case "uploaded_document":
+      return "#10b981";
+    default:
+      return "#9ca3af";
+  }
+}
+function nodeRadiusFor(node: MapNode): number {
+  if (node.kind === "folder") return 10;
+  if (node.kind === "tag") return 7;
+  return 4;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type ForceGraphHandle = any;
 
 export function KnowledgeMap() {
   const router = useRouter();
   const containerRef = useRef<HTMLDivElement>(null);
+  const fgRef = useRef<ForceGraphHandle>(null);
   const [data, setData] = useState<{
     nodes: MapNode[];
     links: MapLink[];
@@ -108,6 +138,12 @@ export function KnowledgeMap() {
   const onNodeClick = useCallback(
     async (node: MapNode) => {
       setSelected(node);
+      // Smoothly lock the camera onto the clicked node.
+      const n = node as MapNode & { x?: number; y?: number };
+      if (fgRef.current && typeof n.x === "number" && typeof n.y === "number") {
+        fgRef.current.centerAt(n.x, n.y, 600);
+        fgRef.current.zoom(2.4, 600);
+      }
       if (node.kind !== "item") {
         setDetail(null);
         return;
@@ -125,26 +161,8 @@ export function KnowledgeMap() {
     [],
   );
 
-  const itemNodeColor = useCallback((n: object) => {
-    const node = n as MapNode;
-    if (node.kind === "tag") return "#d97706";
-    switch (node.itemKind) {
-      case "user_note":
-        return "#9ca3af";
-      case "saved_article":
-        return "#3b82f6";
-      case "uploaded_document":
-        return "#10b981";
-      default:
-        return "#9ca3af";
-    }
-  }, []);
-
-  const itemNodeSize = useCallback(
-    (n: object) => ((n as MapNode).kind === "tag" ? 6 : 4),
-    [],
-  );
-
+  const itemNodeColor = useCallback((n: object) => nodeColorFor(n as MapNode), []);
+  const itemNodeSize = useCallback((n: object) => nodeRadiusFor(n as MapNode), []);
   const nodeLabel = useCallback((n: object) => (n as MapNode).label, []);
 
   // Memoize the graph data to prevent re-layout
@@ -176,14 +194,17 @@ export function KnowledgeMap() {
         )}
         {!loading && !error && data && data.nodes.length > 0 && dims.width > 0 && (
           <ForceGraph2D
+            ref={fgRef}
             graphData={graphData}
             width={dims.width}
             height={dims.height}
             nodeColor={itemNodeColor}
             nodeVal={itemNodeSize}
             nodeLabel={nodeLabel}
-            linkColor={() => "rgba(120,120,120,0.22)"}
-            linkWidth={0.5}
+            linkColor={(l: object) =>
+              (l as MapLink).kind === "folder" ? "rgba(139,92,246,0.35)" : "rgba(120,120,120,0.22)"
+            }
+            linkWidth={(l: object) => ((l as MapLink).kind === "folder" ? 1 : 0.5)}
             backgroundColor="transparent"
             cooldownTime={1500}
             warmupTicks={20}
@@ -197,15 +218,16 @@ export function KnowledgeMap() {
               return "after";
             }}
             nodeCanvasObject={(node, ctx, globalScale) => {
-              if (globalScale < 1.4) return; // bail before any string allocation
               const n = node as MapNode;
+              // Folders always labelled; tags/items only when zoomed in enough.
+              if (n.kind !== "folder" && globalScale < 1.4) return;
               const label = n.label.length > 36 ? n.label.slice(0, 36) + "…" : n.label;
-              const fontSize = 11 / globalScale;
-              ctx.font = `${fontSize}px Georgia, serif`;
-              ctx.fillStyle = "rgba(160, 160, 160, 0.85)";
+              const fontSize = (n.kind === "folder" ? 13 : 11) / globalScale;
+              ctx.font = `${n.kind === "folder" ? "600 " : ""}${fontSize}px Georgia, serif`;
+              ctx.fillStyle = n.kind === "folder" ? "rgba(167,139,250,0.95)" : "rgba(160,160,160,0.85)";
               ctx.textAlign = "center";
               ctx.textBaseline = "top";
-              ctx.fillText(label, n.x ?? 0, (n.y ?? 0) + 6);
+              ctx.fillText(label, n.x ?? 0, (n.y ?? 0) + nodeRadiusFor(n) + 1);
             }}
           />
         )}
@@ -214,6 +236,7 @@ export function KnowledgeMap() {
         <div className="absolute bottom-4 left-4 rounded-lg border border-border bg-card/90 px-3 py-2 text-[11px] backdrop-blur">
           <div className="mb-1 font-medium text-muted-foreground">Legend</div>
           <div className="space-y-0.5">
+            <LegendDot color="#8b5cf6" label="Folder" />
             <LegendDot color="#d97706" label="Tag" />
             <LegendDot color="#3b82f6" label="Saved article" />
             <LegendDot color="#10b981" label="Uploaded doc" />
@@ -232,7 +255,7 @@ export function KnowledgeMap() {
         <aside className="hidden w-96 shrink-0 flex-col border-l border-border lg:flex">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="text-xs uppercase tracking-wider text-muted-foreground">
-              {selected.kind === "tag" ? "Tag" : "Item"}
+              {selected.kind === "tag" ? "Tag" : selected.kind === "folder" ? "Folder" : "Item"}
             </div>
             <button
               onClick={() => { setSelected(null); setDetail(null); }}
@@ -251,6 +274,13 @@ export function KnowledgeMap() {
                 </p>
               )}
 
+              {selected.kind === "folder" && (
+                <p className="mt-3 text-sm text-muted-foreground">
+                  Folder. Click a connected item to inspect its contents, or open it in the
+                  Directory.
+                </p>
+              )}
+
               {selected.kind === "item" && detailLoading && (
                 <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
@@ -259,14 +289,48 @@ export function KnowledgeMap() {
 
               {selected.kind === "item" && detail && (
                 <>
+                  {/* Folder breadcrumb */}
+                  <nav className="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                    {(detail.breadcrumb && detail.breadcrumb.length > 0
+                      ? detail.breadcrumb.map((b) => b.name)
+                      : ["Unsorted"]
+                    ).map((name, i, arr) => (
+                      <span key={name + i} className="flex items-center gap-1">
+                        {name}
+                        {i < arr.length - 1 && <ChevronRight className="h-3 w-3 opacity-50" />}
+                      </span>
+                    ))}
+                  </nav>
+
                   <p className="mt-1 text-xs text-muted-foreground capitalize">
                     {detail.kind.replace("_", " ")}
                   </p>
-                  <div className="mt-4 whitespace-pre-wrap text-sm leading-relaxed">
-                    {detail.content
-                      ? detail.content.slice(0, 2000)
-                      : "(no preview available)"}
+
+                  {/* Tags */}
+                  {detail.tags && detail.tags.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {detail.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+                        >
+                          #{t}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Markdown preview */}
+                  <div className="prose-reader mt-4 max-w-none text-sm">
+                    {detail.content ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {detail.content.slice(0, 4000)}
+                      </ReactMarkdown>
+                    ) : (
+                      <p className="text-muted-foreground">(no preview available)</p>
+                    )}
                   </div>
+
                   <div className="mt-4 flex flex-col gap-2">
                     {detail.sourceUrl && (
                       <Button asChild size="sm" variant="outline">
@@ -275,10 +339,7 @@ export function KnowledgeMap() {
                         </a>
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      onClick={() => router.push(`/directory?item=${detail.id}`)}
-                    >
+                    <Button size="sm" onClick={() => router.push(`/directory?item=${detail.id}`)}>
                       Open in Directory
                     </Button>
                   </div>

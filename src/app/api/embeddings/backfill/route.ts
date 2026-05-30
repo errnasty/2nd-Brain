@@ -4,8 +4,17 @@ import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
+/**
+ * Streaming backfill. Instead of looping all docs then returning one JSON blob
+ * (which blows the load-balancer's ~10-15s inactivity timeout and yields an
+ * HTML error page), we open a ReadableStream immediately and write a progress
+ * line after every batch. The constant data flow keeps the connection alive.
+ *
+ * The final line is JSON prefixed with "DONE " so the client can parse the
+ * summary off the end of the stream.
+ */
 export async function POST(req: Request) {
   let user;
   try {
@@ -14,7 +23,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Backfill embeds many items (paid). 5 manual runs / minute is plenty.
   const rl = await checkRateLimit(user.id, "backfill", 5, 60);
   if (!rl.allowed) {
     return NextResponse.json(
@@ -25,12 +33,41 @@ export async function POST(req: Request) {
 
   const url = new URL(req.url);
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 500), 2000);
+  const userId = user.id;
 
-  try {
-    const result = await backfillEmbeddings(user.id, limit);
-    return NextResponse.json({ ok: true, ...result });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
-  }
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const write = (s: string) => controller.enqueue(encoder.encode(s));
+      // Heartbeat: emit a dot every 3s even if a batch is slow, so the proxy
+      // always sees traffic. Cleared when work finishes.
+      const heartbeat = setInterval(() => write("·"), 3000);
+      try {
+        write("Refreshing memory…\n");
+        const result = await backfillEmbeddings(userId, limit, (msg) => write(`${msg}\n`));
+        clearInterval(heartbeat);
+        const total = result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded;
+        write(
+          `\nDONE ${JSON.stringify({
+            ok: true,
+            total,
+            ...result,
+          })}\n`,
+        );
+      } catch (err) {
+        clearInterval(heartbeat);
+        write(`\nDONE ${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : "Unknown error" })}\n`);
+      } finally {
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-accel-buffering": "no", // disable proxy buffering so chunks flush
+    },
+  });
 }

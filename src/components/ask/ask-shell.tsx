@@ -93,26 +93,49 @@ export function AskShell() {
   const refreshMemory = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
-    toast.info("Indexing your library…");
+    const toastId = toast.loading("Indexing your library…");
     try {
       const res = await fetch("/api/embeddings/backfill", { method: "POST", cache: "no-store" });
-      if (!res.ok) {
-        const text = await res.text();
-        toast.error(text || `Backfill failed (HTTP ${res.status})`);
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => "");
+        toast.error(text || `Backfill failed (HTTP ${res.status})`, { id: toastId });
         return;
       }
-      const data = (await res.json()) as {
-        articlesEmbedded?: number;
-        chunksEmbedded?: number;
-        notesEmbedded?: number;
-      };
-      const total =
-        (data.articlesEmbedded ?? 0) + (data.chunksEmbedded ?? 0) + (data.notesEmbedded ?? 0);
-      toast.success(
-        total > 0 ? `Memory refreshed — indexed ${total} new item(s)` : "Memory is already up to date",
-      );
+      // Stream progress; the last "DONE {json}" line carries the summary.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        // Show the latest non-heartbeat progress line.
+        const lines = acc.split("\n").filter((l) => l && !l.startsWith("DONE") && l !== "·");
+        const last = lines[lines.length - 1]?.replace(/·/g, "").trim();
+        if (last) toast.loading(last, { id: toastId });
+      }
+      const doneLine = acc.split("\n").find((l) => l.startsWith("DONE "));
+      if (doneLine) {
+        const data = JSON.parse(doneLine.slice(5)) as {
+          ok: boolean;
+          total?: number;
+          error?: string;
+        };
+        if (data.ok) {
+          toast.success(
+            (data.total ?? 0) > 0
+              ? `Memory refreshed — indexed ${data.total} new item(s)`
+              : "Memory is already up to date",
+            { id: toastId },
+          );
+        } else {
+          toast.error(data.error ?? "Backfill failed", { id: toastId });
+        }
+      } else {
+        toast.success("Memory refresh finished", { id: toastId });
+      }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Backfill failed");
+      toast.error(err instanceof Error ? err.message : "Backfill failed", { id: toastId });
     } finally {
       setRefreshing(false);
     }

@@ -58,9 +58,25 @@ export async function ensureVectorSchema(): Promise<void> {
  */
 const NOTE_BATCH = 16;
 
-export async function backfillEmbeddings(userId: string, limit = 500): Promise<BackfillResult> {
+/** Optional progress callback — invoked after each batch so a streaming route
+ *  can keep the connection alive past the proxy inactivity timeout. */
+export type BackfillProgress = (msg: string) => void;
+
+export async function backfillEmbeddings(
+  userId: string,
+  limit = 500,
+  onProgress?: BackfillProgress,
+): Promise<BackfillResult> {
+  const progress = (msg: string) => {
+    try {
+      onProgress?.(msg);
+    } catch {
+      // never let a progress sink break the backfill
+    }
+  };
   // Make sure the columns/indexes exist before we touch them.
   await ensureVectorSchema();
+  progress("Schema ready. Scanning library…");
 
   const provider = getEmbeddingsProvider();
   let articlesEmbedded = 0;
@@ -103,6 +119,7 @@ export async function backfillEmbeddings(userId: string, limit = 500): Promise<B
         failed += batch.length;
         console.error("Article embedding batch failed:", err);
       }
+      progress(`Articles: ${Math.min(i + ARTICLE_BATCH, articleRows.length)}/${articleRows.length}`);
     }
   } catch (err) {
     errors.push(`articles: ${err instanceof Error ? err.message : String(err)}`);
@@ -130,6 +147,7 @@ export async function backfillEmbeddings(userId: string, limit = 500): Promise<B
         failed += batch.length;
         console.error("Chunk embedding batch failed:", err);
       }
+      progress(`Documents: ${Math.min(i + CHUNK_BATCH, missingChunks.length)}/${missingChunks.length} chunks`);
     }
   } catch (err) {
     errors.push(`chunks: ${err instanceof Error ? err.message : String(err)}`);
@@ -160,6 +178,7 @@ export async function backfillEmbeddings(userId: string, limit = 500): Promise<B
         failed += batch.length;
         console.error("Note embedding batch failed:", err);
       }
+      progress(`Notes: ${Math.min(i + NOTE_BATCH, missingNotes.length)}/${missingNotes.length}`);
     }
   } catch (err) {
     errors.push(`notes: ${err instanceof Error ? err.message : String(err)}`);

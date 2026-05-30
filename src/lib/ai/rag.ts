@@ -253,3 +253,98 @@ export async function retrieveFromDirectory(
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, limit);
 }
+
+export type ItemContent = {
+  directoryItemId: string;
+  title: string;
+  kind: "saved_article" | "uploaded_document" | "user_note";
+  path: string; // folder breadcrumb, "Unsorted" if none
+  content: string; // full (clamped) text for the model to read
+};
+
+const MAX_DOC_CHARS = 6000; // per-document budget so a few big files don't blow the prompt
+
+/**
+ * Fetch the ACTUAL text for matched items (not just the 400-char snippet from
+ * retrieval). Notes use their own content; documents concatenate their chunks
+ * (or fall back to documents.full_text); articles use full_text/excerpt. Also
+ * resolves each item's folder path for the <document path="…"> attribute.
+ *
+ * This is the step that was missing — retrieval found the right items but the
+ * model only ever saw previews, so it "couldn't read the contents".
+ */
+export async function fetchItemContents(
+  userId: string,
+  itemIds: string[],
+): Promise<ItemContent[]> {
+  if (itemIds.length === 0) return [];
+
+  type Row = {
+    id: string;
+    title: string;
+    kind: ItemContent["kind"];
+    folder_id: string | null;
+    note_content: string | null;
+    doc_text: string | null;
+    article_text: string | null;
+  };
+
+  const rows = (await db.execute(sql`
+    select
+      di.id,
+      di.title,
+      di.kind,
+      di.folder_id,
+      di.content as note_content,
+      coalesce(
+        (select string_agg(c.content, E'\n\n' order by c.chunk_index)
+         from document_chunks c where c.document_id = di.document_id),
+        d.full_text
+      ) as doc_text,
+      coalesce(a.full_text, a.excerpt) as article_text
+    from directory_items di
+    left join documents d on d.id = di.document_id
+    left join articles a on a.id = di.article_id
+    where di.user_id = ${userId}
+      and di.id in ${itemIds}
+  `)) as unknown as Row[];
+
+  // Folder path resolution (cheap; folders are few).
+  const folders = (await db
+    .select({ id: directoryFolders.id, name: directoryFolders.name, parentId: directoryFolders.parentId })
+    .from(directoryFolders)
+    .where(eq(directoryFolders.userId, userId))) as {
+    id: string;
+    name: string;
+    parentId: string | null;
+  }[];
+  const folderById = new Map(folders.map((f) => [f.id, f]));
+  function pathFor(folderId: string | null): string {
+    if (!folderId) return "Unsorted";
+    const parts: string[] = [];
+    let cur = folderById.get(folderId);
+    let guard = 0;
+    while (cur && guard < 16) {
+      parts.unshift(cur.name);
+      cur = cur.parentId ? folderById.get(cur.parentId) : undefined;
+      guard += 1;
+    }
+    return parts.join(" / ") || "Unsorted";
+  }
+
+  return rows.map((r) => {
+    const raw =
+      r.kind === "user_note"
+        ? r.note_content
+        : r.kind === "uploaded_document"
+          ? r.doc_text
+          : r.article_text;
+    return {
+      directoryItemId: r.id,
+      title: r.title,
+      kind: r.kind,
+      path: pathFor(r.folder_id),
+      content: (raw ?? "").slice(0, MAX_DOC_CHARS).trim(),
+    };
+  });
+}

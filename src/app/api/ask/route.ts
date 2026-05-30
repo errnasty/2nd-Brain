@@ -2,7 +2,12 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import { streamText, type LanguageModelV1 } from "ai";
 import { requireUser } from "@/lib/auth";
-import { retrieveFromDirectory, buildDirectoryMap, type RagSource } from "@/lib/ai/rag";
+import {
+  retrieveFromDirectory,
+  buildDirectoryMap,
+  fetchItemContents,
+  type RagSource,
+} from "@/lib/ai/rag";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 import { getChatModel } from "@/lib/ai/models";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -29,13 +34,15 @@ You are given:
    knowledge base (no content, just structure). Use it to understand WHERE
    things live and to act as a semantic router: if the answer clearly lives
    in a specific file or folder, say so and prefer that.
-2. A numbered list of CONTEXT excerpts retrieved from the most relevant items.
+2. CONTEXT: <document> blocks containing the ACTUAL full text of the most
+   relevant items. Read these to answer — they are the file contents, not
+   previews.
 
 Answer the question USING the provided context.
 
 Rules:
-- Cite supporting excerpts inline using [1], [2], … keyed to the numbered
-  context list.
+- Cite supporting documents inline using [1], [2], … keyed to each document's
+  id attribute.
 - You may reference the directory map to point the user to relevant files even
   if their text wasn't retrieved, but be explicit that you're inferring from
   the title/location, not the content.
@@ -146,20 +153,31 @@ export async function POST(req: Request) {
     }
   }
 
-  // ── 2. Build the directory map + context block ─────────────────
-  // (Started in parallel above.) Time-box so a stalled map query can't hang.
-  const directoryMap = await withTimeout(mapPromise, PRESTREAM_TIMEOUT_MS, "directory-map").catch(
-    () => "(Directory map unavailable.)",
-  );
+  // ── 2. Fetch FULL content for matched items + build the map ────
+  // (Map started in parallel above.) Time-box both so a stall can't hang.
+  const itemIds = sources.map((s) => s.directoryItemId);
+  const [directoryMap, contents] = await Promise.all([
+    withTimeout(mapPromise, PRESTREAM_TIMEOUT_MS, "directory-map").catch(
+      () => "(Directory map unavailable.)",
+    ),
+    withTimeout(fetchItemContents(userId, itemIds), PRESTREAM_TIMEOUT_MS, "contents").catch(
+      () => [] as Awaited<ReturnType<typeof fetchItemContents>>,
+    ),
+  ]);
 
+  // Build <document> XML blocks with the ACTUAL text so Claude can read the
+  // file contents (not just titles). Ordered by retrieval relevance.
+  const contentById = new Map(contents.map((c) => [c.directoryItemId, c]));
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const contextBlock =
     sources.length === 0
       ? "(No relevant items found in your Directory.)"
       : sources
-          .map(
-            (s, i) =>
-              `[${i + 1}] "${s.title}" (${s.kind.replace("_", " ")})\n${s.snippet}`,
-          )
+          .map((s, i) => {
+            const c = contentById.get(s.directoryItemId);
+            const body = c?.content && c.content.length > 0 ? c.content : s.snippet;
+            return `<document id="${i + 1}" title="${esc(s.title)}" path="${esc(c?.path ?? "")}" kind="${s.kind}">\n${body}\n</document>`;
+          })
           .join("\n\n");
 
   // Encode source map in a custom header so the client can render citations

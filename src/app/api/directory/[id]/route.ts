@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { directoryFolders, directoryItems, documents } from "@/lib/db/schema";
+import { directoryFolders, directoryItems, documents, itemTags, tags } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -57,5 +57,18 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     }
   }
 
-  return NextResponse.json({ ...row, breadcrumb });
+  // Assigned tag names for the inspector drawer.
+  const tagRows = await db
+    .select({ name: tags.name })
+    .from(itemTags)
+    .innerJoin(tags, eq(tags.id, itemTags.tagId))
+    .where(
+      and(
+        eq(itemTags.userId, user.id),
+        eq(itemTags.itemKind, "directory_item"),
+        eq(itemTags.itemId, id),
+      ),
+    );
+
+  return NextResponse.json({ ...row, breadcrumb, tags: tagRows.map((t) => t.name) });
 }
