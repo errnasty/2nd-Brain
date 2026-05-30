@@ -7,6 +7,44 @@ import { EMBEDDING_TABLES } from "@/lib/embeddings/tables";
 const ARTICLE_BATCH = 16;
 const CHUNK_BATCH = 16;
 
+/**
+ * Embed a batch resiliently. Returns vectors aligned 1:1 with `texts`; any
+ * slot that couldn't be embedded is null (caller skips it).
+ *
+ * Why: provider.embed() rejects the WHOLE batch if a single input is bad
+ * (empty, oversized, malformed). Articles have clean title+excerpt inputs so
+ * they never trip this — but document chunks and notes can, which silently
+ * dropped every item in their batches. On a batch failure we retry each input
+ * individually so one poison input only loses itself.
+ */
+async function safeEmbedBatch(
+  provider: ReturnType<typeof getEmbeddingsProvider>,
+  texts: string[],
+): Promise<(number[] | null)[]> {
+  // Empty/whitespace inputs can't be embedded — mark null up front.
+  const idx = texts.map((t, i) => (t.trim().length > 0 ? i : -1)).filter((i) => i >= 0);
+  const nonEmpty = idx.map((i) => texts[i]);
+  const out: (number[] | null)[] = texts.map(() => null);
+  if (nonEmpty.length === 0) return out;
+
+  try {
+    const vectors = await provider.embed(nonEmpty);
+    idx.forEach((origIdx, k) => (out[origIdx] = vectors[k] ?? null));
+    return out;
+  } catch {
+    // Batch failed — retry each input alone so one bad item can't drop the rest.
+    for (const origIdx of idx) {
+      try {
+        const [v] = await provider.embed([texts[origIdx]]);
+        out[origIdx] = v ?? null;
+      } catch {
+        out[origIdx] = null;
+      }
+    }
+    return out;
+  }
+}
+
 export type BackfillResult = {
   articlesEmbedded: number;
   chunksEmbedded: number;
@@ -104,20 +142,19 @@ export async function backfillEmbeddings(
       const texts = batch.map((r) =>
         clampForEmbedding(`${r.title}\n\n${r.excerpt ?? r.full_text?.slice(0, 800) ?? ""}`.trim()),
       );
-      try {
-        const vectors = await provider.embed(texts);
-        for (let j = 0; j < batch.length; j += 1) {
-          const vector = toVectorLiteral(vectors[j]);
-          await db.execute(sql`
-            insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
-            values (${batch[j].id}, ${userId}, 0, ${texts[j]}, ${vector}::vector)
-            on conflict (article_id, chunk_index) do nothing
-          `);
-          articlesEmbedded += 1;
+      const vectors = await safeEmbedBatch(provider, texts);
+      for (let j = 0; j < batch.length; j += 1) {
+        if (!vectors[j]) {
+          failed += 1;
+          continue;
         }
-      } catch (err) {
-        failed += batch.length;
-        console.error("Article embedding batch failed:", err);
+        const vector = toVectorLiteral(vectors[j]!);
+        await db.execute(sql`
+          insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
+          values (${batch[j].id}, ${userId}, 0, ${texts[j]}, ${vector}::vector)
+          on conflict (article_id, chunk_index) do nothing
+        `);
+        articlesEmbedded += 1;
       }
       progress(`Articles: ${Math.min(i + ARTICLE_BATCH, articleRows.length)}/${articleRows.length}`);
     }
@@ -136,16 +173,15 @@ export async function backfillEmbeddings(
     for (let i = 0; i < missingChunks.length; i += CHUNK_BATCH) {
       const batch = missingChunks.slice(i, i + CHUNK_BATCH);
       const texts = batch.map((c) => clampForEmbedding(c.content));
-      try {
-        const vectors = await provider.embed(texts);
-        for (let j = 0; j < batch.length; j += 1) {
-          const vector = toVectorLiteral(vectors[j]);
-          await db.execute(sql`update document_chunks set embedding = ${vector}::vector where id = ${batch[j].id}`);
-          chunksEmbedded += 1;
+      const vectors = await safeEmbedBatch(provider, texts);
+      for (let j = 0; j < batch.length; j += 1) {
+        if (!vectors[j]) {
+          failed += 1;
+          continue;
         }
-      } catch (err) {
-        failed += batch.length;
-        console.error("Chunk embedding batch failed:", err);
+        const vector = toVectorLiteral(vectors[j]!);
+        await db.execute(sql`update document_chunks set embedding = ${vector}::vector where id = ${batch[j].id}`);
+        chunksEmbedded += 1;
       }
       progress(`Documents: ${Math.min(i + CHUNK_BATCH, missingChunks.length)}/${missingChunks.length} chunks`);
     }
@@ -167,16 +203,15 @@ export async function backfillEmbeddings(
     for (let i = 0; i < missingNotes.length; i += NOTE_BATCH) {
       const batch = missingNotes.slice(i, i + NOTE_BATCH);
       const texts = batch.map((n) => clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()));
-      try {
-        const vectors = await provider.embed(texts);
-        for (let j = 0; j < batch.length; j += 1) {
-          const vector = toVectorLiteral(vectors[j]);
-          await db.execute(sql`update directory_items set embedding = ${vector}::vector where id = ${batch[j].id} and user_id = ${userId}`);
-          notesEmbedded += 1;
+      const vectors = await safeEmbedBatch(provider, texts);
+      for (let j = 0; j < batch.length; j += 1) {
+        if (!vectors[j]) {
+          failed += 1;
+          continue;
         }
-      } catch (err) {
-        failed += batch.length;
-        console.error("Note embedding batch failed:", err);
+        const vector = toVectorLiteral(vectors[j]!);
+        await db.execute(sql`update directory_items set embedding = ${vector}::vector where id = ${batch[j].id} and user_id = ${userId}`);
+        notesEmbedded += 1;
       }
       progress(`Notes: ${Math.min(i + NOTE_BATCH, missingNotes.length)}/${missingNotes.length}`);
     }

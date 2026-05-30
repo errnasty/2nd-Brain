@@ -119,15 +119,29 @@ export function AskShell() {
         const data = JSON.parse(doneLine.slice(5)) as {
           ok: boolean;
           total?: number;
+          articlesEmbedded?: number;
+          chunksEmbedded?: number;
+          notesEmbedded?: number;
+          failed?: number;
+          errors?: string[];
           error?: string;
         };
         if (data.ok) {
+          const parts = [
+            (data.articlesEmbedded ?? 0) > 0 ? `${data.articlesEmbedded} articles` : null,
+            (data.chunksEmbedded ?? 0) > 0 ? `${data.chunksEmbedded} doc chunks` : null,
+            (data.notesEmbedded ?? 0) > 0 ? `${data.notesEmbedded} notes` : null,
+          ].filter(Boolean);
+          const failNote = (data.failed ?? 0) > 0 ? ` · ${data.failed} skipped` : "";
           toast.success(
-            (data.total ?? 0) > 0
-              ? `Memory refreshed — indexed ${data.total} new item(s)`
+            parts.length > 0
+              ? `Indexed ${parts.join(", ")}${failNote}`
               : "Memory is already up to date",
             { id: toastId },
           );
+          if (data.errors && data.errors.length > 0) {
+            console.warn("Backfill phase errors:", data.errors);
+          }
         } else {
           toast.error(data.error ?? "Backfill failed", { id: toastId });
         }
