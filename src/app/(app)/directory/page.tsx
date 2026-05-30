@@ -3,15 +3,13 @@ import { db } from "@/lib/db";
 import { directoryFolders } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { DirectoryShell } from "@/components/directory/directory-shell";
-import { fetchDirectoryPage } from "@/lib/directory/query";
+import { DIRECTORY_PAGE_SIZE, fetchDirectoryPage } from "@/lib/directory/query";
 
 type Search = Promise<{
   folder?: string;
   tags?: string;
   q?: string;
 }>;
-
-export const PAGE_SIZE = 50;
 
 export default async function DirectoryPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
@@ -23,7 +21,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
       folder: sp.folder ?? null,
       tagIds,
       offset: 0,
-      limit: PAGE_SIZE,
+      limit: DIRECTORY_PAGE_SIZE,
     }),
     db
       .select()

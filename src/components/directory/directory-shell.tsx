@@ -13,6 +13,7 @@ import {
   loadMoreDirectoryItemsAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
+import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/query";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
@@ -38,8 +39,6 @@ const KIND_META: Record<DirectoryListItem["kind"], { label: string; icon: React.
   uploaded_document: { label: "Document", icon: <FileText className="h-3.5 w-3.5" /> },
   user_note: { label: "Note", icon: <NotebookPen className="h-3.5 w-3.5" /> },
 };
-
-const PAGE_SIZE = 50;
 
 export function DirectoryShell({
   items,
@@ -90,7 +89,7 @@ export function DirectoryShell({
           folder: activeFolder,
           tagIds: activeTagIds,
           offset,
-          limit: PAGE_SIZE,
+          limit: DIRECTORY_PAGE_SIZE,
         });
         setExtraItems((prev) => [...prev, ...(r.items as DirectoryListItem[])]);
         setExtraTags((prev) => ({ ...prev, ...r.itemTagsById }));
@@ -187,7 +186,13 @@ export function DirectoryShell({
   return (
     <>
       {/* Items list */}
-      <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border md:flex">
+      <section
+        className={cn(
+          "w-full flex-col border-r border-border md:max-w-sm md:shrink-0 md:flex",
+          // Mobile: hide list when an item is open; reader takes full screen.
+          selectedId ? "hidden" : "flex",
+        )}
+      >
         <div className="flex items-center justify-between px-3 py-3">
           <div className="text-sm font-semibold">
             {activeTagIds.length > 0

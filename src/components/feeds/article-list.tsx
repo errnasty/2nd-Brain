@@ -146,7 +146,14 @@ export function ArticleList({
   const showingSearch = results !== null;
 
   return (
-    <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border md:flex">
+    <section
+      className={cn(
+        "w-full flex-col border-r border-border md:max-w-sm md:shrink-0 md:flex",
+        // Mobile: hide the list when an article is open so the reader takes
+        // the full screen. Desktop (md+) always shows both side-by-side.
+        selectedId ? "hidden" : "flex",
+      )}
+    >
       {/* Search */}
       <div className="px-3 pt-3">
         <div className="relative">
@@ -383,8 +390,15 @@ function SortControls() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button size="sm" variant="ghost" className="h-8 px-2" title="Sort & filter">
-          <ArrowDownUp className="h-4 w-4" />
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-8 gap-1 px-2 text-[11px] font-medium"
+          title="Sort & filter"
+        >
+          <ArrowDownUp className="h-3.5 w-3.5" />
+          {SORT_LABELS[sort] ?? "Sort"}
+          {dedupe && <span className="text-muted-foreground">· uniq</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">

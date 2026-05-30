@@ -21,6 +21,10 @@ export type DirectoryPage = {
   hasMore: boolean;
 };
 
+/** Default page size for directory infinite scroll. Shared by the server
+ *  page (first paint) and the load-more action. */
+export const DIRECTORY_PAGE_SIZE = 50;
+
 /**
  * One page of directory items (newest-updated first), scoped by folder and/or
  * tags, with their tag names. Shared by the server page (offset 0) and the

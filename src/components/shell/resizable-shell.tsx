@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Panel,
   PanelGroup,
@@ -37,6 +37,23 @@ export function ResizableShell({
 }) {
   const panelRef = useRef<ImperativePanelHandle>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Mobile (<768px): skip the resizable panel layout entirely — the bottom
+  // MobileNav covers navigation, and the panel would otherwise squish content.
+  // Default to desktop on first render to avoid hydration flicker; flip after
+  // mount if the viewport actually is mobile.
+  useEffect(() => {
+    const m = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(m.matches);
+    update();
+    m.addEventListener("change", update);
+    return () => m.removeEventListener("change", update);
+  }, []);
+
+  if (isMobile) {
+    return <div className="h-full w-full overflow-hidden">{children}</div>;
+  }
 
   return (
     <div className="relative flex h-full w-full overflow-hidden">
