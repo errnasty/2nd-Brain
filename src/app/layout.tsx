@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SettingsEffects } from "@/components/settings-effects";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className="font-serif">
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+          <SettingsEffects />
           {children}
           <Toaster richColors closeButton position="bottom-right" />
         </ThemeProvider>

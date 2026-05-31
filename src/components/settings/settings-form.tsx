@@ -1,0 +1,182 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useTheme } from "next-themes";
+import { Check, Minus, Monitor, Moon, Plus, RotateCcw, Sun } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Separator } from "@/components/ui/separator";
+import { cn } from "@/lib/utils";
+import { CHAT_MODELS, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import {
+  FONT_SCALE_DEFAULT,
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
+  getFontScale,
+  getReduceMotion,
+  setFontScale,
+  setReduceMotion,
+} from "@/lib/settings";
+import { toast } from "sonner";
+
+const MODEL_STORAGE_KEY = "ask.model.v1";
+
+function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-4">
+      <div className="min-w-0">
+        <div className="text-sm font-medium">{title}</div>
+        {desc && <div className="mt-0.5 text-xs text-muted-foreground">{desc}</div>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+export function SettingsForm() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  const [fontScale, setFontScaleState] = useState(FONT_SCALE_DEFAULT);
+  const [reduceMotion, setReduceMotionState] = useState(false);
+  const [model, setModel] = useState(DEFAULT_CHAT_MODEL);
+
+  useEffect(() => {
+    setMounted(true);
+    setFontScaleState(getFontScale());
+    setReduceMotionState(getReduceMotion());
+    try {
+      const m = localStorage.getItem(MODEL_STORAGE_KEY);
+      if (m && CHAT_MODELS.some((x) => x.id === m)) setModel(m);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  function bumpFont(delta: number) {
+    const next = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, fontScale + delta));
+    setFontScaleState(next);
+    setFontScale(next);
+  }
+
+  function chooseModel(id: string) {
+    setModel(id);
+    try {
+      localStorage.setItem(MODEL_STORAGE_KEY, id);
+    } catch {
+      // ignore
+    }
+  }
+
+  function resetAll() {
+    setTheme("dark");
+    setFontScaleState(FONT_SCALE_DEFAULT);
+    setFontScale(FONT_SCALE_DEFAULT);
+    setReduceMotionState(false);
+    setReduceMotion(false);
+    chooseModel(DEFAULT_CHAT_MODEL);
+    toast.success("Settings reset to defaults");
+  }
+
+  // Avoid hydration mismatch on theme/localStorage-derived values.
+  if (!mounted) return <div className="h-64" />;
+
+  const themes = [
+    { id: "light", label: "Light", icon: Sun },
+    { id: "dark", label: "Dark", icon: Moon },
+    { id: "system", label: "System", icon: Monitor },
+  ];
+
+  return (
+    <div className="divide-y divide-border">
+      {/* Appearance */}
+      <section>
+        <h2 className="pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Appearance
+        </h2>
+
+        <Row title="Theme" desc="Light, dark, or follow your system.">
+          <div className="flex items-center gap-1 rounded-md border border-border p-0.5">
+            {themes.map((t) => {
+              const Icon = t.icon;
+              const active = theme === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTheme(t.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors",
+                    active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+        </Row>
+
+        <Separator />
+
+        <Row title="Font size" desc="Scales the whole app. Default 100%.">
+          <div className="flex items-center gap-2">
+            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => bumpFont(-5)} disabled={fontScale <= FONT_SCALE_MIN}>
+              <Minus className="h-3.5 w-3.5" />
+            </Button>
+            <span className="w-12 text-center text-sm tabular-nums">{fontScale}%</span>
+            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => bumpFont(5)} disabled={fontScale >= FONT_SCALE_MAX}>
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        </Row>
+
+        <Separator />
+
+        <Row title="Reduce motion" desc="Minimize animations and transitions.">
+          <Checkbox
+            checked={reduceMotion}
+            onCheckedChange={(c) => {
+              const on = c === true;
+              setReduceMotionState(on);
+              setReduceMotion(on);
+            }}
+          />
+        </Row>
+      </section>
+
+      {/* AI */}
+      <section className="pt-4">
+        <h2 className="pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          AI
+        </h2>
+        <Row title="Default Ask model" desc="Used for new questions in the Ask tab.">
+          <div className="flex flex-col items-end gap-1">
+            {CHAT_MODELS.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => chooseModel(m.id)}
+                className={cn(
+                  "flex items-center gap-1.5 rounded px-2 py-0.5 text-xs transition-colors",
+                  model === m.id ? "text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {model === m.id && <Check className="h-3 w-3" />}
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </Row>
+      </section>
+
+      {/* Reset */}
+      <section className="pt-4">
+        <Row title="Reset" desc="Restore all preferences above to defaults.">
+          <Button size="sm" variant="outline" onClick={resetAll}>
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+            Reset
+          </Button>
+        </Row>
+      </section>
+    </div>
+  );
+}

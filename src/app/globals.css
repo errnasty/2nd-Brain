@@ -57,11 +57,19 @@
   }
   html {
     font-family: Georgia, "Times New Roman", serif;
+    /* Global type scale set from Settings. Tailwind is rem-based, so scaling
+       the root font-size scales the whole UI. Default 100% (16px). */
+    font-size: var(--app-font-scale, 100%);
   }
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
     text-rendering: optimizeLegibility;
+  }
+  /* Honor the "reduce motion" preference toggled in Settings. */
+  html[data-reduce-motion="true"] * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
   }
   button, input, select, textarea {
     font-family: inherit;
