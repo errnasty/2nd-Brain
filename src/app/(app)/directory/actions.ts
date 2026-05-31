@@ -303,7 +303,8 @@ export async function createNoteAction(input: { title: string; content?: string;
 const UpdateNoteSchema = z.object({
   id: z.string().uuid(),
   title: z.string().trim().min(1).max(300).optional(),
-  content: z.string().max(200_000).optional(),
+  // Generous cap: also used for editing uploaded-document full text.
+  content: z.string().max(2_000_000).optional(),
   folderId: z.string().uuid().nullable().optional(),
 });
 
@@ -331,17 +332,44 @@ export async function updateNoteAction(input: {
     .set(patch)
     .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)));
 
-  // Re-embed with the new text (fire-and-forget). Only relevant for notes;
-  // for other kinds the embedding column stays null and they're searched via
-  // their related tables anyway.
-  if (parsed.data.title !== undefined || parsed.data.content !== undefined) {
+  const contentChanged = parsed.data.content !== undefined;
+  if (parsed.data.title !== undefined || contentChanged) {
     const [row] = await db
-      .select({ kind: directoryItems.kind, title: directoryItems.title, content: directoryItems.content })
+      .select({
+        kind: directoryItems.kind,
+        title: directoryItems.title,
+        content: directoryItems.content,
+        documentId: directoryItems.documentId,
+      })
       .from(directoryItems)
       .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)))
       .limit(1);
+
     if (row?.kind === "user_note") {
+      // Notes: embedding lives on the directory_items row; re-embed inline.
       void embedNote(parsed.data.id, user.id, row.title, row.content);
+    } else if (row?.kind === "uploaded_document" && contentChanged && row.documentId) {
+      // Documents: the searchable text is the underlying document + its chunks.
+      // Update full_text, re-chunk, and reset chunk embeddings so the next
+      // backfill re-embeds the edited text (Ask reflects the edit).
+      const newText = parsed.data.content ?? "";
+      await db
+        .update(documents)
+        .set({ fullText: newText })
+        .where(and(eq(documents.id, row.documentId), eq(documents.userId, user.id)));
+      await db.delete(documentChunks).where(eq(documentChunks.documentId, row.documentId));
+      const chunks = chunkText(newText);
+      if (chunks.length > 0) {
+        await db.insert(documentChunks).values(
+          chunks.map((c) => ({
+            documentId: row.documentId!,
+            userId: user.id,
+            chunkIndex: c.index,
+            content: c.text,
+            tokenCount: c.approxTokens,
+          })),
+        );
+      }
     }
   }
 

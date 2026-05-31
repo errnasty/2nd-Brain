@@ -75,6 +75,11 @@ export function ItemViewer({
         if (data.kind === "user_note") {
           setContent(data.content ?? "");
           lastSavedRef.current = { title: data.title, content: data.content ?? "" };
+        } else if (data.kind === "uploaded_document") {
+          // Seed the editor from the FULL doc text (not the truncated preview).
+          const body = data.docFullText ?? data.content ?? "";
+          setContent(body);
+          lastSavedRef.current = { title: data.title, content: body };
         }
       })
       .finally(() => !aborted && setFullLoading(false));
@@ -111,12 +116,12 @@ export function ItemViewer({
     };
   }, [full?.id, full?.kind, full?.articleId]);
 
-  // Debounced autosave for notes
+  // Debounced autosave for editable items (notes + uploaded documents).
   useEffect(() => {
-    if (!item || item.kind !== "user_note") return;
+    if (!item || (item.kind !== "user_note" && item.kind !== "uploaded_document")) return;
     if (!dirty) return;
     const handle = setTimeout(() => {
-      const t = title.trim() || "Untitled note";
+      const t = title.trim() || (item.kind === "user_note" ? "Untitled note" : "Untitled");
       const c = content;
       if (t === lastSavedRef.current.title && c === lastSavedRef.current.content) return;
       startTransition(async () => {
@@ -169,7 +174,7 @@ export function ItemViewer({
           {dirty && <span className="italic">· unsaved</span>}
         </div>
 
-        {isNote && (
+        {(isNote || isDoc) && (
           <div className="flex items-center rounded-md border border-border p-0.5">
             <button
               onClick={() => setMode("edit")}
@@ -246,7 +251,7 @@ export function ItemViewer({
           )}
 
           {/* Title */}
-          {isNote && mode === "edit" ? (
+          {(isNote || isDoc) && mode === "edit" ? (
             <Input
               value={title}
               onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
@@ -299,13 +304,22 @@ export function ItemViewer({
             </div>
           )}
 
-          {isDoc && !fullLoading && (
+          {isDoc && mode === "edit" && (
+            <Textarea
+              value={content}
+              onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+              placeholder="Document text… edits re-index this document for Ask."
+              className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
+            />
+          )}
+
+          {isDoc && mode === "preview" && !fullLoading && (
             <div className="prose-reader">
-              {isMarkdownDoc && docBody ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{docBody}</ReactMarkdown>
-              ) : docBody ? (
+              {isMarkdownDoc && (content || docBody) ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content || docBody}</ReactMarkdown>
+              ) : content || docBody ? (
                 <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
-                  {docBody}
+                  {content || docBody}
                 </div>
               ) : (
                 <p className="text-muted-foreground italic">No text extracted from this document.</p>

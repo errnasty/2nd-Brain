@@ -1,4 +1,4 @@
-import { asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
@@ -347,4 +347,47 @@ export async function fetchItemContents(
       content: (raw ?? "").slice(0, MAX_DOC_CHARS).trim(),
     };
   });
+}
+
+/**
+ * Structural retrieval. "Summarise my notes in the AI & Data Science folder"
+ * is NOT a semantic query — vector search ranks by similarity to the question
+ * text, so the folder's actual items rarely surface. If the question names a
+ * folder (its name appears in the text), return that folder's item ids
+ * (including descendant folders) directly. Combined with vector hits in the
+ * ask route so "everything in folder X" works.
+ */
+export async function folderScopedItemIds(
+  userId: string,
+  query: string,
+  cap = 12,
+): Promise<string[]> {
+  const q = query.toLowerCase();
+  const folders = await db
+    .select({ id: directoryFolders.id, name: directoryFolders.name, parentId: directoryFolders.parentId })
+    .from(directoryFolders)
+    .where(eq(directoryFolders.userId, userId));
+
+  // Folders whose name (≥3 chars, to avoid trivial matches) appears in the query.
+  const matched = folders.filter(
+    (f) => f.name.trim().length >= 3 && q.includes(f.name.toLowerCase()),
+  );
+  if (matched.length === 0) return [];
+
+  // Pull in descendant folders too.
+  const wanted = new Set<string>();
+  const addWithDescendants = (id: string) => {
+    if (wanted.has(id)) return;
+    wanted.add(id);
+    for (const c of folders) if (c.parentId === id) addWithDescendants(c.id);
+  };
+  matched.forEach((m) => addWithDescendants(m.id));
+
+  const rows = await db
+    .select({ id: directoryItems.id })
+    .from(directoryItems)
+    .where(and(eq(directoryItems.userId, userId), inArray(directoryItems.folderId, Array.from(wanted))))
+    .orderBy(asc(directoryItems.title))
+    .limit(cap);
+  return rows.map((r) => r.id);
 }

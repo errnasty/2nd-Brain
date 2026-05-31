@@ -6,6 +6,7 @@ import {
   retrieveFromDirectory,
   buildDirectoryMap,
   fetchItemContents,
+  folderScopedItemIds,
   type RagSource,
 } from "@/lib/ai/rag";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
@@ -154,41 +155,55 @@ export async function POST(req: Request) {
   }
 
   // ── 2. Fetch FULL content for matched items + build the map ────
-  // (Map started in parallel above.) Time-box both so a stall can't hang.
-  const itemIds = sources.map((s) => s.directoryItemId);
-  const [directoryMap, contents] = await Promise.all([
+  // (Map started in parallel above.) Time-box everything so a stall can't hang.
+  // Union vector hits with folder-scoped items (when the question names a
+  // folder) so "summarise everything in folder X" actually gets that folder's
+  // content, not just whatever ranked highest by vector similarity.
+  const snippetById = new Map(sources.map((s) => [s.directoryItemId, s.snippet]));
+  const simById = new Map(sources.map((s) => [s.directoryItemId, s.similarity]));
+
+  const [directoryMap, folderIds] = await Promise.all([
     withTimeout(mapPromise, PRESTREAM_TIMEOUT_MS, "directory-map").catch(
       () => "(Directory map unavailable.)",
     ),
-    withTimeout(fetchItemContents(userId, itemIds), PRESTREAM_TIMEOUT_MS, "contents").catch(
-      () => [] as Awaited<ReturnType<typeof fetchItemContents>>,
+    withTimeout(folderScopedItemIds(userId, question, 12), PRESTREAM_TIMEOUT_MS, "folder-scope").catch(
+      () => [] as string[],
     ),
   ]);
 
-  // Build <document> XML blocks with the ACTUAL text so Claude can read the
-  // file contents (not just titles). Ordered by retrieval relevance.
+  // Vector items first (ranked), then any folder-scoped items not already in.
+  const orderedIds = Array.from(
+    new Set([...sources.map((s) => s.directoryItemId), ...folderIds]),
+  ).slice(0, 14);
+
+  const contents = await withTimeout(
+    fetchItemContents(userId, orderedIds),
+    PRESTREAM_TIMEOUT_MS,
+    "contents",
+  ).catch(() => [] as Awaited<ReturnType<typeof fetchItemContents>>);
+
+  // Keep the orderedIds ordering for the document list.
   const contentById = new Map(contents.map((c) => [c.directoryItemId, c]));
+  const ordered = orderedIds.map((id) => contentById.get(id)).filter(Boolean) as typeof contents;
+
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   const contextBlock =
-    sources.length === 0
+    ordered.length === 0
       ? "(No relevant items found in your Directory.)"
-      : sources
-          .map((s, i) => {
-            const c = contentById.get(s.directoryItemId);
-            const body = c?.content && c.content.length > 0 ? c.content : s.snippet;
-            return `<document id="${i + 1}" title="${esc(s.title)}" path="${esc(c?.path ?? "")}" kind="${s.kind}">\n${body}\n</document>`;
+      : ordered
+          .map((c, i) => {
+            const body = c.content && c.content.length > 0 ? c.content : snippetById.get(c.directoryItemId) ?? "";
+            return `<document id="${i + 1}" title="${esc(c.title)}" path="${esc(c.path)}" kind="${c.kind}">\n${body}\n</document>`;
           })
           .join("\n\n");
 
-  // Encode source map in a custom header so the client can render citations
-  // separately from the streamed text. (The streamed text only contains the
-  // model's answer with [N] markers.)
-  const sourceMap = sources.map((s) => ({
-    n: sources.indexOf(s) + 1,
-    directoryItemId: s.directoryItemId,
-    title: s.title,
-    kind: s.kind,
-    similarity: Math.round(s.similarity * 100) / 100,
+  // Source map for client citations, aligned to the document ids above.
+  const sourceMap = ordered.map((c, i) => ({
+    n: i + 1,
+    directoryItemId: c.directoryItemId,
+    title: c.title,
+    kind: c.kind,
+    similarity: Math.round((simById.get(c.directoryItemId) ?? 0) * 100) / 100,
   }));
 
   // ── 3. Build messages with history ─────────────────────────────
