@@ -24,7 +24,7 @@ type MapNode = {
 type MapLink = {
   source: string | MapNode;
   target: string | MapNode;
-  kind?: "tag" | "folder";
+  kind?: "tag" | "folder" | "link";
 };
 
 type Detail = {
@@ -80,49 +80,54 @@ export function KnowledgeMap() {
   const [selected, setSelected] = useState<MapNode | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [centerId, setCenterId] = useState<string | null>(null);
 
-  // Fetch graph with session-storage cache (60s TTL). Avoids the multi-MB
-  // payload on every navigation to /map.
-  useEffect(() => {
+  // Fetch graph (full or, when centerId set, a depth-1 local graph). Full graph
+  // is cached in sessionStorage (60s); local graphs are small + always fresh.
+  const loadGraph = useCallback((center: string | null) => {
     const CACHE_KEY = "knowledgeMap.cache.v1";
     const CACHE_TTL_MS = 60_000;
-
-    let aborted = false;
-    try {
-      const raw = sessionStorage.getItem(CACHE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as { at: number; data: typeof data };
-        if (Date.now() - parsed.at < CACHE_TTL_MS && parsed.data) {
-          setData(parsed.data);
-          setLoading(false);
+    setError(null);
+    if (!center) {
+      try {
+        const raw = sessionStorage.getItem(CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as { at: number; data: typeof data };
+          if (Date.now() - parsed.at < CACHE_TTL_MS && parsed.data) {
+            setData(parsed.data);
+            setLoading(false);
+          }
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore cache errors
+    } else {
+      setLoading(true);
     }
 
-    fetch("/api/map", { cache: "no-store" })
+    const url = center ? `/api/map?center=${center}` : "/api/map";
+    fetch(url, { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then((d) => {
-        if (aborted) return;
         setData(d);
-        try {
-          sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data: d }));
-        } catch {
-          // quota exceeded — silently ignore
+        if (!center) {
+          try {
+            sessionStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), data: d }));
+          } catch {
+            // quota — ignore
+          }
         }
       })
-      .catch((err) => {
-        if (!aborted) setError(err.message ?? "Failed to load");
-      })
-      .finally(() => !aborted && setLoading(false));
-    return () => {
-      aborted = true;
-    };
+      .catch((err) => setError(err.message ?? "Failed to load"))
+      .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    loadGraph(centerId);
+  }, [centerId, loadGraph]);
 
   // Resize observer
   useEffect(() => {
@@ -201,12 +206,21 @@ export function KnowledgeMap() {
             nodeColor={itemNodeColor}
             nodeVal={itemNodeSize}
             nodeLabel={nodeLabel}
-            linkColor={(l: object) =>
-              (l as MapLink).kind === "folder" ? "rgba(139,92,246,0.35)" : "rgba(120,120,120,0.22)"
-            }
-            linkWidth={(l: object) => ((l as MapLink).kind === "folder" ? 1 : 0.5)}
+            linkColor={(l: object) => {
+              const k = (l as MapLink).kind;
+              if (k === "link") return "rgba(96,165,250,0.6)"; // wikilink — solid blue
+              if (k === "folder") return "rgba(139,92,246,0.35)";
+              return "rgba(120,120,120,0.22)";
+            }}
+            linkWidth={(l: object) => {
+              const k = (l as MapLink).kind;
+              return k === "link" ? 1.4 : k === "folder" ? 1 : 0.5;
+            }}
+            linkDirectionalParticles={(l: object) => ((l as MapLink).kind === "link" ? 2 : 0)}
+            linkDirectionalParticleWidth={1.6}
             backgroundColor="transparent"
             cooldownTime={1500}
+            cooldownTicks={200}
             warmupTicks={20}
             d3AlphaDecay={0.04}
             d3VelocityDecay={0.35}
@@ -232,6 +246,17 @@ export function KnowledgeMap() {
           />
         )}
 
+        {/* Local-graph banner */}
+        {centerId && (
+          <div className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-1.5 text-xs shadow-sm backdrop-blur">
+            <Network className="h-3.5 w-3.5 text-primary" />
+            <span>Local graph</span>
+            <button onClick={() => setCenterId(null)} className="font-medium text-primary hover:underline">
+              Exit
+            </button>
+          </div>
+        )}
+
         {/* Legend */}
         <div className="absolute bottom-4 left-4 rounded-lg border border-border bg-card/90 px-3 py-2 text-[11px] backdrop-blur">
           <div className="mb-1 font-medium text-muted-foreground">Legend</div>
@@ -241,6 +266,7 @@ export function KnowledgeMap() {
             <LegendDot color="#3b82f6" label="Saved article" />
             <LegendDot color="#10b981" label="Uploaded doc" />
             <LegendDot color="#9ca3af" label="User note" />
+            <LegendDot color="#60a5fa" label="Wikilink" />
           </div>
           {data?.truncated && (
             <div className="mt-2 border-t border-border pt-1 text-[10px] text-muted-foreground">
@@ -339,6 +365,14 @@ export function KnowledgeMap() {
                         </a>
                       </Button>
                     )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setCenterId(detail.id)}
+                    >
+                      <Network className="mr-1.5 h-3.5 w-3.5" />
+                      Focus local graph
+                    </Button>
                     <Button size="sm" onClick={() => router.push(`/directory?item=${detail.id}`)}>
                       Open in Directory
                     </Button>

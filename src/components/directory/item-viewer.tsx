@@ -1,7 +1,8 @@
 "use client";
 
+import * as React from "react";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink, Eye, Library, Pencil, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +20,9 @@ import {
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
 
+type ResolvedLink = { title: string; id: string | null };
+type Backlink = { id: string; title: string; kind: string };
+
 type FullItem = {
   id: string;
   title: string;
@@ -30,9 +34,30 @@ type FullItem = {
   docKind: "pdf" | "markdown" | "text" | "epub" | null;
   docFullText: string | null;
   breadcrumb: { id: string; name: string }[];
+  outgoingLinks?: ResolvedLink[];
+  backlinks?: Backlink[];
 };
 
 type ArticleContent = { fullText: string | null; excerpt: string | null; url: string };
+
+const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
+
+/**
+ * Turn [[Title]] / [[Title|alias]] into markdown links the ReactMarkdown `a`
+ * handler routes to ?item=<id>. Resolved → app link; missing → a marker link
+ * (#missing) the renderer styles dim/red. Square brackets escaped so stray
+ * ones don't break markdown.
+ */
+function linkifyWikilinks(md: string, links: ResolvedLink[]): string {
+  const byLower = new Map(links.map((l) => [l.title.toLowerCase(), l.id]));
+  return md.replace(WIKILINK_RE, (_full, rawTitle: string, alias?: string) => {
+    const title = rawTitle.trim();
+    const label = (alias ?? title).trim();
+    const id = byLower.get(title.toLowerCase()) ?? null;
+    if (id) return `[${label}](?item=${id})`;
+    return `[${label}](#missing-wikilink)`;
+  });
+}
 
 export function ItemViewer({
   item,
@@ -158,6 +183,40 @@ export function ItemViewer({
   const isDoc = item.kind === "uploaded_document";
   const isMarkdownDoc = isDoc && full?.docKind === "markdown";
   const docBody = full?.docFullText ?? full?.content ?? "";
+  const outgoing = full?.outgoingLinks ?? [];
+  const backlinks = full?.backlinks ?? [];
+
+  // ReactMarkdown link handler: intercept wikilink hrefs and route them in-app.
+  const mdComponents = {
+    a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
+      if (href === "#missing-wikilink") {
+        return (
+          <span
+            className="rounded bg-destructive/10 px-1 text-destructive/80"
+            title="No matching item — create a note with this title"
+          >
+            {children}
+          </span>
+        );
+      }
+      if (href?.startsWith("?item=")) {
+        const id = href.slice("?item=".length);
+        return (
+          <button
+            onClick={() => router.push(`/directory?item=${id}`)}
+            className="text-primary underline underline-offset-2 hover:opacity-80"
+          >
+            {children}
+          </button>
+        );
+      }
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+          {children}
+        </a>
+      );
+    },
+  } as const;
 
   return (
     <section className="flex flex-1 flex-col overflow-hidden">
@@ -285,7 +344,9 @@ export function ItemViewer({
           {isNote && mode === "preview" && (
             <div className="prose-reader">
               {content.trim() ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                  {linkifyWikilinks(content, outgoing)}
+                </ReactMarkdown>
               ) : (
                 <p className="text-muted-foreground italic">Empty note. Switch to Edit to write.</p>
               )}
@@ -316,7 +377,9 @@ export function ItemViewer({
           {isDoc && mode === "preview" && !fullLoading && (
             <div className="prose-reader">
               {isMarkdownDoc && (content || docBody) ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{content || docBody}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                  {linkifyWikilinks(content || docBody, outgoing)}
+                </ReactMarkdown>
               ) : content || docBody ? (
                 <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
                   {content || docBody}
@@ -324,6 +387,28 @@ export function ItemViewer({
               ) : (
                 <p className="text-muted-foreground italic">No text extracted from this document.</p>
               )}
+            </div>
+          )}
+
+          {/* Backlinks — items that link here via [[…]] */}
+          {!fullLoading && backlinks.length > 0 && (
+            <div className="not-prose mt-10 border-t border-border pt-4">
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Linked from ({backlinks.length})
+              </div>
+              <ul className="space-y-1">
+                {backlinks.map((b) => (
+                  <li key={b.id}>
+                    <button
+                      onClick={() => router.push(`/directory?item=${b.id}`)}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent/50"
+                    >
+                      <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{b.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
         </div>

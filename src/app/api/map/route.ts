@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { directoryFolders, directoryItems, itemTags, tags } from "@/lib/db/schema";
+import { directoryFolders, directoryItems, directoryLinks, itemTags, tags } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
+import { getCachedMap, setCachedMap } from "@/lib/map-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export type MapNode = {
 export type MapLink = {
   source: string;
   target: string;
-  kind: "tag" | "folder"; // folder-inheritance vs tag membership
+  kind: "tag" | "folder" | "link"; // tag membership · folder inheritance · wikilink
 };
 
 const HARD_NODE_CAP = 300;
@@ -32,11 +33,22 @@ const HARD_NODE_CAP = 300;
  *   - tag membership: tag → item
  * Capped at HARD_NODE_CAP most-connected nodes so the canvas stays smooth.
  */
-export async function GET() {
+export async function GET(req: Request) {
   const { user, error } = await getApiUser();
   if (!user) return NextResponse.json({ error: error?.message }, { status: error?.status });
 
-  const [items, allTags, allLinks, folders] = await Promise.all([
+  // Local graph: ?center=<itemId> restricts the graph to that item's depth-1
+  // neighborhood (its folder, tags, wikilink neighbors, and tag-siblings).
+  const center = new URL(req.url).searchParams.get("center");
+
+  // Serve the cached full graph when available (local graphs are small + skip
+  // the cache so they're always fresh).
+  if (!center) {
+    const cached = getCachedMap(user.id);
+    if (cached) return NextResponse.json(cached);
+  }
+
+  const [items, allTags, allLinks, folders, wikiLinks] = await Promise.all([
     db
       .select({
         id: directoryItems.id,
@@ -55,6 +67,10 @@ export async function GET() {
       .select({ id: directoryFolders.id, name: directoryFolders.name, parentId: directoryFolders.parentId })
       .from(directoryFolders)
       .where(eq(directoryFolders.userId, user.id)),
+    db
+      .select({ source: directoryLinks.sourceItemId, target: directoryLinks.targetItemId })
+      .from(directoryLinks)
+      .where(eq(directoryLinks.userId, user.id)),
   ]);
 
   // Connection counts for ranking.
@@ -74,12 +90,38 @@ export async function GET() {
   for (const f of folders) {
     if (f.parentId) folderConn.set(f.parentId, (folderConn.get(f.parentId) ?? 0) + 1);
   }
+  for (const w of wikiLinks) {
+    itemConn.set(w.source, (itemConn.get(w.source) ?? 0) + 1);
+    itemConn.set(w.target, (itemConn.get(w.target) ?? 0) + 1);
+  }
 
-  // Item is shown if it has any connection (tag or folder).
-  const referencedItems = items.filter((i) => itemConn.has(i.id));
-  const referencedTags = allTags.filter((t) => tagConn.has(t.id));
+  // Item is shown if it has any connection (tag, folder, or wikilink).
+  let referencedItems = items.filter((i) => itemConn.has(i.id));
+  let referencedTags = allTags.filter((t) => tagConn.has(t.id));
   // Show all folders that contain something or nest something.
-  const referencedFolders = folders.filter((f) => folderConn.has(f.id) || folders.some((c) => c.parentId === f.id));
+  let referencedFolders = folders.filter((f) => folderConn.has(f.id) || folders.some((c) => c.parentId === f.id));
+
+  // ── Local graph: restrict to the center item's depth-1 neighborhood ──
+  let isLocal = false;
+  if (center && items.some((i) => i.id === center)) {
+    isLocal = true;
+    const centerTags = new Set(allLinks.filter((l) => l.itemId === center).map((l) => l.tagId));
+    const centerItem = items.find((i) => i.id === center)!;
+    const neighborItems = new Set<string>([center]);
+    // wikilink neighbors (both directions)
+    for (const w of wikiLinks) {
+      if (w.source === center) neighborItems.add(w.target);
+      if (w.target === center) neighborItems.add(w.source);
+    }
+    // tag-siblings (items sharing any of the center's tags)
+    for (const l of allLinks) if (centerTags.has(l.tagId)) neighborItems.add(l.itemId);
+    const neighborFolders = new Set<string>();
+    if (centerItem.folderId) neighborFolders.add(centerItem.folderId);
+
+    referencedItems = items.filter((i) => neighborItems.has(i.id));
+    referencedTags = allTags.filter((t) => centerTags.has(t.id));
+    referencedFolders = folders.filter((f) => neighborFolders.has(f.id));
+  }
 
   const totalReferenced = referencedItems.length + referencedTags.length + referencedFolders.length;
   let truncated = false;
@@ -88,7 +130,7 @@ export async function GET() {
   let displayTags = referencedTags;
   const displayFolders = referencedFolders; // folders are few; always keep
 
-  if (totalReferenced > HARD_NODE_CAP) {
+  if (!isLocal && totalReferenced > HARD_NODE_CAP) {
     truncated = true;
     const budget = HARD_NODE_CAP - displayFolders.length;
     const itemBudget = Math.max(0, Math.floor(budget * 0.7));
@@ -146,12 +188,21 @@ export async function GET() {
       links.push({ source: `f:${f.parentId}`, target: `f:${f.id}`, kind: "folder" });
     }
   }
+  // Wikilinks: item → item (solid edges)
+  for (const w of wikiLinks) {
+    if (visibleItemIds.has(w.source) && visibleItemIds.has(w.target)) {
+      links.push({ source: `i:${w.source}`, target: `i:${w.target}`, kind: "link" });
+    }
+  }
 
-  return NextResponse.json({
+  const payload = {
     nodes,
     links,
     truncated,
     total: totalReferenced,
     shown: nodes.length,
-  });
+    center: isLocal ? center : null,
+  };
+  if (!isLocal) setCachedMap(user.id, payload);
+  return NextResponse.json(payload);
 }

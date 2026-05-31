@@ -20,6 +20,8 @@ import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
 import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
+import { syncWikilinks } from "@/lib/directory/wikilinks";
+import { bustMapCache } from "@/lib/map-cache";
 import { fetchDirectoryPage, type DirectoryPage } from "@/lib/directory/query";
 
 /** Infinite-scroll: fetch the next page of directory items for the shell. */
@@ -164,7 +166,8 @@ export async function createDirectoryFolderAction(name: string) {
       .insert(directoryFolders)
       .values({ userId: user.id, name: parsed.data.name })
       .returning({ id: directoryFolders.id });
-    revalidatePath("/directory");
+    bustMapCache(user.id);
+  revalidatePath("/directory");
     return { ok: true as const, folderId: row.id };
   } catch {
     return { ok: false as const, error: "Folder already exists" };
@@ -206,6 +209,7 @@ export async function moveDirectoryFolderToParentAction(
     .update(directoryFolders)
     .set({ parentId })
     .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true };
 }
@@ -218,6 +222,7 @@ export async function renameDirectoryFolderAction(folderId: string, name: string
     .update(directoryFolders)
     .set({ name: parsed.data.name })
     .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true as const };
 }
@@ -264,6 +269,7 @@ export async function deleteDirectoryFolderAction(
   await db
     .delete(directoryFolders)
     .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
+  bustMapCache(user.id);
   revalidatePath("/directory");
 }
 
@@ -295,7 +301,9 @@ export async function createNoteAction(input: { title: string; content?: string;
   // Use the manual "Tag with AI" action on a note to trigger tagging on demand.
   // Embed the note in the background so Ask can find it (no await).
   void embedNote(row.id, user.id, parsed.data.title, parsed.data.content ?? null);
+  void syncWikilinks(user.id, row.id, parsed.data.content ?? null);
 
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true as const, itemId: row.id };
 }
@@ -345,6 +353,11 @@ export async function updateNoteAction(input: {
       .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)))
       .limit(1);
 
+    // Re-derive wikilinks from the new text (notes + docs).
+    if (contentChanged) {
+      void syncWikilinks(user.id, parsed.data.id, parsed.data.content ?? null);
+    }
+
     if (row?.kind === "user_note") {
       // Notes: embedding lives on the directory_items row; re-embed inline.
       void embedNote(parsed.data.id, user.id, row.title, row.content);
@@ -375,6 +388,7 @@ export async function updateNoteAction(input: {
     }
   }
 
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true as const };
 }
@@ -394,6 +408,7 @@ export async function deleteDirectoryItemAction(itemId: string) {
   await db
     .delete(directoryItems)
     .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)));
+  bustMapCache(user.id);
   revalidatePath("/directory");
 }
 
@@ -415,6 +430,7 @@ export async function bulkDeleteDirectoryItemsAction(itemIds: string[]) {
     .delete(directoryItems)
     .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)))
     .returning({ id: directoryItems.id });
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true as const, count: result.length };
 }
@@ -427,6 +443,7 @@ export async function bulkMoveDirectoryItemsAction(itemIds: string[], folderId: 
     .set({ folderId, updatedAt: new Date() })
     .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)))
     .returning({ id: directoryItems.id });
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true as const, count: result.length };
 }
@@ -478,7 +495,8 @@ export async function saveArticleToDirectoryAction(articleId: string, folderId?:
       console.warn("autoTag after save failed:", err instanceof Error ? err.message : err);
     }
 
-    revalidatePath("/directory");
+    bustMapCache(user.id);
+  revalidatePath("/directory");
     return { ok: true as const, itemId: row.id, alreadySaved: false };
   } catch (err) {
     console.error("saveArticleToDirectory failed:", err instanceof Error ? err.message : err);
@@ -571,7 +589,8 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
     // Refresh Memory needed for typical-size uploads).
     void embedDocument(doc.id, user.id);
 
-    revalidatePath("/directory");
+    bustMapCache(user.id);
+  revalidatePath("/directory");
     return { ok: true, itemId: item.id, chunkCount: chunks.length };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
@@ -704,6 +723,7 @@ export async function autoOrganizeDirectoryAction(): Promise<OrganizeResult> {
       .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)));
   }
 
+  bustMapCache(user.id);
   revalidatePath("/directory");
   return {
     ok: true,

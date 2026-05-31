@@ -248,6 +248,27 @@ export const directoryItems = pgTable(
   }),
 );
 
+export const directoryLinks = pgTable(
+  "directory_links",
+  {
+    sourceItemId: uuid("source_item_id")
+      .notNull()
+      .references(() => directoryItems.id, { onDelete: "cascade" }),
+    targetItemId: uuid("target_item_id")
+      .notNull()
+      .references(() => directoryItems.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sourceItemId, t.targetItemId] }),
+    targetIdx: index("directory_links_target_idx").on(t.targetItemId),
+    userIdx: index("directory_links_user_idx").on(t.userId),
+  }),
+);
+
 export const tags = pgTable(
   "tags",
   {
@@ -310,6 +331,7 @@ export type Document = typeof documents.$inferSelect;
 export type DocumentChunk = typeof documentChunks.$inferSelect;
 export type DirectoryFolder = typeof directoryFolders.$inferSelect;
 export type DirectoryItem = typeof directoryItems.$inferSelect;
+export type DirectoryLink = typeof directoryLinks.$inferSelect;
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 

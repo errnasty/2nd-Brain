@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { directoryFolders, directoryItems, documents, itemTags, tags } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
+import { getOutgoingLinks, getBacklinks } from "@/lib/directory/wikilinks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -70,5 +71,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       ),
     );
 
-  return NextResponse.json({ ...row, breadcrumb, tags: tagRows.map((t) => t.name) });
+  // Wikilinks: outgoing ([[Title]] in this item's text, resolved) + backlinks.
+  const [outgoingLinks, backlinks] = await Promise.all([
+    getOutgoingLinks(user.id, row.content),
+    getBacklinks(user.id, id),
+  ]);
+
+  return NextResponse.json({
+    ...row,
+    breadcrumb,
+    tags: tagRows.map((t) => t.name),
+    outgoingLinks,
+    backlinks,
+  });
 }

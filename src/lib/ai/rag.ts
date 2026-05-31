@@ -263,17 +263,33 @@ export async function retrieveFromDirectory(
     ),
   ).slice(0, 12);
   if (terms.length > 0) {
-    const patterns = terms.map((t) => `%${t}%`);
-    const keywordHits = await safe(() =>
+    // Prefer the GIN-indexed tsvector (migration 0008); fall back to ILIKE if
+    // the generated column isn't present yet. websearch_to_tsquery handles
+    // raw user phrasing safely.
+    const tsHits = await safe(() =>
       db.execute(sql`
         select id as directory_item_id, title, kind,
                coalesce(substring(content, 1, 400), '') as snippet
         from directory_items
         where user_id = ${userId}
-          and (title ilike any(${patterns}::text[]) or content ilike any(${patterns}::text[]))
+          and content_tsv @@ websearch_to_tsquery('english', ${query})
         limit ${limit * 2}
       `),
     );
+    const patterns = terms.map((t) => `%${t}%`);
+    const keywordHits =
+      tsHits.length > 0
+        ? tsHits
+        : await safe(() =>
+            db.execute(sql`
+              select id as directory_item_id, title, kind,
+                     coalesce(substring(content, 1, 400), '') as snippet
+              from directory_items
+              where user_id = ${userId}
+                and (title ilike any(${patterns}::text[]) or content ilike any(${patterns}::text[]))
+              limit ${limit * 2}
+            `),
+          );
     for (const h of keywordHits as unknown as Array<Hit & { kind: RagSource["kind"] }>) {
       if (!byItem.has(h.directory_item_id)) {
         byItem.set(h.directory_item_id, {

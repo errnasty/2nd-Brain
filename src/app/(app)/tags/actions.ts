@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { itemTags, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { tagSlug } from "@/lib/ai/tagging";
+import { bustMapCache } from "@/lib/map-cache";
 
 const RenameSchema = z.object({
   id: z.string().uuid(),
@@ -49,6 +50,7 @@ export async function deleteTagAction(tagId: string) {
   await db
     .delete(tags)
     .where(and(eq(tags.id, tagId), eq(tags.userId, user.id)));
+  bustMapCache(user.id);
   revalidatePath("/tags");
   revalidatePath("/directory");
 }
@@ -88,6 +90,7 @@ export async function mergeTagsAction(input: { targetId: string; sourceIds: stri
     .where(and(eq(tags.userId, user.id), inArray(tags.id, sources)))
     .returning({ id: tags.id });
 
+  bustMapCache(user.id);
   revalidatePath("/tags");
   revalidatePath("/directory");
   return { ok: true as const, merged: deleted.length };
@@ -103,6 +106,7 @@ export async function bulkDeleteTagsAction(tagIds: string[]) {
     .delete(tags)
     .where(and(eq(tags.userId, user.id), inArray(tags.id, tagIds)))
     .returning({ id: tags.id });
+  bustMapCache(user.id);
   revalidatePath("/tags");
   revalidatePath("/directory");
   return { ok: true as const, count: result.length };
