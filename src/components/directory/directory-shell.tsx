@@ -147,12 +147,17 @@ export function DirectoryShell({
     window.history.replaceState(null, "", url.toString());
   }, []);
 
+  // "unsorted" is a UI-only view, not a real folder id. New items created
+  // there must land with folderId = null, never the literal "unsorted"
+  // (which a uuid column rejects).
+  const targetFolderId = activeFolder && activeFolder !== "unsorted" ? activeFolder : null;
+
   function newNote() {
     startTransition(async () => {
       const r = await createNoteAction({
         title: "Untitled note",
         content: "",
-        folderId: activeFolder,
+        folderId: targetFolderId,
       });
       if (r.ok) {
         toast.success("Note created");
@@ -167,7 +172,7 @@ export function DirectoryShell({
     Array.from(files).forEach((file) => {
       const fd = new FormData();
       fd.set("file", file);
-      if (activeFolder) fd.set("folderId", activeFolder);
+      if (targetFolderId) fd.set("folderId", targetFolderId);
       startTransition(async () => {
         const r = await uploadToDirectoryAction(fd);
         if (r.ok) toast.success(`${file.name} uploaded`);

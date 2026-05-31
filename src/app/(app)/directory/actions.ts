@@ -467,9 +467,13 @@ export type DirectoryUploadResult =
   | { ok: true; itemId: string; chunkCount: number }
   | { ok: false; error: string };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function uploadToDirectoryAction(formData: FormData): Promise<DirectoryUploadResult> {
   const file = formData.get("file");
-  const folderId = (formData.get("folderId") as string | null) || null;
+  const rawFolder = (formData.get("folderId") as string | null) || null;
+  // Only accept a real uuid; the "unsorted" view sentinel (or any junk) → null.
+  const folderId = rawFolder && UUID_RE.test(rawFolder) ? rawFolder : null;
 
   if (!file || !(file instanceof File)) return { ok: false, error: "No file provided" };
   if (file.size > MAX_UPLOAD_BYTES)
