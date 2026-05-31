@@ -246,6 +246,36 @@ export async function embedNote(
   }
 }
 
+/**
+ * Embed all unembedded chunks of one document inline (fire-and-forget after
+ * upload/edit) so an uploaded doc is answerable in Ask immediately, without
+ * waiting for Refresh Memory or the 6h cron. Bounded; large docs finish in
+ * the next backfill.
+ */
+export async function embedDocument(documentId: string, userId: string, maxChunks = 40): Promise<void> {
+  try {
+    await ensureVectorSchema();
+    const provider = getEmbeddingsProvider();
+    const chunks = (await db.execute(sql`
+      select id, content from document_chunks
+      where document_id = ${documentId} and user_id = ${userId} and embedding is null
+      order by chunk_index asc
+      limit ${maxChunks}
+    `)) as unknown as { id: string; content: string }[];
+    for (let i = 0; i < chunks.length; i += CHUNK_BATCH) {
+      const batch = chunks.slice(i, i + CHUNK_BATCH);
+      const vectors = await safeEmbedBatch(provider, batch.map((c) => clampForEmbedding(c.content)));
+      for (let j = 0; j < batch.length; j += 1) {
+        if (!vectors[j]) continue;
+        const literal = toVectorLiteral(vectors[j]!);
+        await db.execute(sql`update document_chunks set embedding = ${literal}::vector where id = ${batch[j].id}`);
+      }
+    }
+  } catch (err) {
+    console.warn("embedDocument skipped:", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Embed a single article (used inline when a feed sync inserts new items). */
 export async function embedArticle(
   articleId: string,

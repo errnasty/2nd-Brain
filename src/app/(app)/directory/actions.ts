@@ -19,7 +19,7 @@ import { routeToFolder } from "@/lib/ai/routing";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
-import { embedNote } from "@/lib/embeddings/backfill";
+import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { fetchDirectoryPage, type DirectoryPage } from "@/lib/directory/query";
 
 /** Infinite-scroll: fetch the next page of directory items for the shell. */
@@ -370,6 +370,8 @@ export async function updateNoteAction(input: {
           })),
         );
       }
+      // Re-embed the edited doc inline so Ask reflects the change immediately.
+      void embedDocument(row.documentId, user.id);
     }
   }
 
@@ -565,6 +567,9 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
       .returning({ id: directoryItems.id });
 
     void autoTagDirectoryItem(user.id, item.id);
+    // Embed inline so the doc is answerable in Ask right away (no manual
+    // Refresh Memory needed for typical-size uploads).
+    void embedDocument(doc.id, user.id);
 
     revalidatePath("/directory");
     return { ok: true, itemId: item.id, chunkCount: chunks.length };

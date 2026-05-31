@@ -17,6 +17,7 @@ import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
+import { useShortcuts } from "@/components/reader/use-shortcuts";
 import type { DirectoryFolder } from "@/lib/db/schema";
 
 export type DirectoryListItem = {
@@ -146,6 +147,25 @@ export function DirectoryShell({
     else url.searchParams.delete("item");
     window.history.replaceState(null, "", url.toString());
   }, []);
+
+  // Keyboard nav (parity with Feeds): j/k or ↓/↑ move through items, Esc
+  // closes the viewer. Ignored while typing (the hook skips inputs/textareas).
+  const moveSelection = useCallback(
+    (delta: number) => {
+      if (allItems.length === 0) return;
+      const idx = allItems.findIndex((i) => i.id === selectedId);
+      const next = idx < 0 ? 0 : Math.min(allItems.length - 1, Math.max(0, idx + delta));
+      selectItem(allItems[next].id);
+    },
+    [allItems, selectedId, selectItem],
+  );
+  useShortcuts({
+    j: () => moveSelection(1),
+    k: () => moveSelection(-1),
+    arrowdown: () => moveSelection(1),
+    arrowup: () => moveSelection(-1),
+    escape: () => selectItem(null),
+  });
 
   // "unsorted" is a UI-only view, not a real folder id. New items created
   // there must land with folderId = null, never the literal "unsorted"

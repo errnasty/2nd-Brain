@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -51,6 +51,46 @@ export async function deleteTagAction(tagId: string) {
     .where(and(eq(tags.id, tagId), eq(tags.userId, user.id)));
   revalidatePath("/tags");
   revalidatePath("/directory");
+}
+
+/**
+ * Merge several tags into one. Re-points every item_tags link from the source
+ * tags to the target (skipping links the item already has on the target), then
+ * deletes the source tags. Fixes the auto-tagging near-duplicate problem
+ * ("AI" / "ai" / "artificial-intelligence" → one tag).
+ */
+export async function mergeTagsAction(input: { targetId: string; sourceIds: string[] }) {
+  const { user } = await requireUser();
+  const sources = input.sourceIds.filter((id) => id !== input.targetId);
+  if (sources.length === 0) return { ok: false as const, error: "Pick at least one other tag to merge" };
+
+  // Repoint links to the target; ON CONFLICT keeps the existing (target) link.
+  await db.execute(sql`
+    update item_tags it
+    set tag_id = ${input.targetId}
+    where it.user_id = ${user.id}
+      and it.tag_id in ${sources}
+      and not exists (
+        select 1 from item_tags ex
+        where ex.user_id = ${user.id}
+          and ex.tag_id = ${input.targetId}
+          and ex.item_kind = it.item_kind
+          and ex.item_id = it.item_id
+      )
+  `);
+  // Drop any leftover source links (the item already had the target tag).
+  await db
+    .delete(itemTags)
+    .where(and(eq(itemTags.userId, user.id), inArray(itemTags.tagId, sources)));
+  // Delete the now-empty source tags.
+  const deleted = await db
+    .delete(tags)
+    .where(and(eq(tags.userId, user.id), inArray(tags.id, sources)))
+    .returning({ id: tags.id });
+
+  revalidatePath("/tags");
+  revalidatePath("/directory");
+  return { ok: true as const, merged: deleted.length };
 }
 
 export async function bulkDeleteTagsAction(tagIds: string[]) {

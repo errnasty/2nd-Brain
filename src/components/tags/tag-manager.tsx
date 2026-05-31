@@ -2,13 +2,14 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { Check, Hash, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { Check, GitMerge, Hash, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
   bulkDeleteTagsAction,
   deleteTagAction,
+  mergeTagsAction,
   renameTagAction,
 } from "@/app/(app)/tags/actions";
 import { toast } from "sonner";
@@ -80,6 +81,33 @@ export function TagManager({
     startTransition(async () => {
       await deleteTagAction(tag.id);
       toast.success("Tag deleted");
+    });
+  }
+
+  function handleMerge() {
+    const ids = Array.from(checked);
+    if (ids.length < 2) return;
+    const selectedTags = tags.filter((t) => ids.includes(t.id));
+    // Keeper = most-used (ties → first alphabetically, already sorted).
+    const target = [...selectedTags].sort(
+      (a, b) => (usage[b.id]?.total ?? 0) - (usage[a.id]?.total ?? 0),
+    )[0];
+    const sources = ids.filter((id) => id !== target.id);
+    if (
+      !confirm(
+        `Merge ${sources.length} tag${sources.length === 1 ? "" : "s"} into "${target.name}"? ` +
+          `Items keep their links under "${target.name}"; the others are deleted.`,
+      )
+    )
+      return;
+    startTransition(async () => {
+      const r = await mergeTagsAction({ targetId: target.id, sourceIds: sources });
+      if (r.ok) {
+        toast.success(`Merged into "${target.name}"`);
+        setChecked(new Set());
+      } else {
+        toast.error(r.error);
+      }
     });
   }
 
@@ -223,6 +251,12 @@ export function TagManager({
         <div className="pointer-events-auto fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur">
           <span className="text-sm font-medium">{checked.size} selected</span>
           <span className="h-4 w-px bg-border" />
+          {checked.size > 1 && (
+            <Button size="sm" variant="ghost" onClick={handleMerge}>
+              <GitMerge className="mr-1.5 h-3.5 w-3.5" />
+              Merge
+            </Button>
+          )}
           <Button
             size="sm"
             variant="ghost"

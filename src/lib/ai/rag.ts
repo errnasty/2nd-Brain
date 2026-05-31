@@ -249,6 +249,45 @@ export async function retrieveFromDirectory(
     }
   }
 
+  // ── Hybrid: keyword (ILIKE) pass ──
+  // Vector embeddings miss exact tokens (names, error codes, acronyms, IDs).
+  // A cheap keyword match over item title/content catches those. Keyword-only
+  // hits get a floor score so they're included when vector returned little,
+  // but never override a stronger vector match.
+  const terms = Array.from(
+    new Set(
+      query
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .filter((t) => t.length >= 3),
+    ),
+  ).slice(0, 12);
+  if (terms.length > 0) {
+    const patterns = terms.map((t) => `%${t}%`);
+    const keywordHits = await safe(() =>
+      db.execute(sql`
+        select id as directory_item_id, title, kind,
+               coalesce(substring(content, 1, 400), '') as snippet
+        from directory_items
+        where user_id = ${userId}
+          and (title ilike any(${patterns}::text[]) or content ilike any(${patterns}::text[]))
+        limit ${limit * 2}
+      `),
+    );
+    for (const h of keywordHits as unknown as Array<Hit & { kind: RagSource["kind"] }>) {
+      if (!byItem.has(h.directory_item_id)) {
+        byItem.set(h.directory_item_id, {
+          directoryItemId: h.directory_item_id,
+          title: h.title,
+          kind: h.kind,
+          snippet: (h.snippet ?? "").trim(),
+          similarity: 0.45, // floor — below strong vector hits, above nothing
+          sourceKind: h.kind === "user_note" ? "note" : h.kind === "saved_article" ? "article" : "chunk",
+        });
+      }
+    }
+  }
+
   return Array.from(byItem.values())
     .sort((a, b) => b.similarity - a.similarity)
     .slice(0, limit);
