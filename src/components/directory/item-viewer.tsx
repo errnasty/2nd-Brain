@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -19,6 +19,7 @@ import {
 } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
+import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 
 type ResolvedLink = { title: string; id: string | null };
 type Backlink = { id: string; title: string; kind: string };
@@ -75,6 +76,7 @@ export function ItemViewer({
   const [full, setFull] = useState<FullItem | null>(null);
   const [fullLoading, setFullLoading] = useState(false);
   const [articleData, setArticleData] = useState<ArticleContent | null>(null);
+  const [queryOpen, setQueryOpen] = useState(false);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
 
   // Fetch full content from /api/directory/:id whenever the selected item changes.
@@ -87,6 +89,7 @@ export function ItemViewer({
     setTitle(item.title);
     setContent("");
     setDirty(false);
+    setQueryOpen(false);
     setMode(item.kind === "user_note" ? "edit" : "preview");
     setArticleData(null);
     setFullLoading(true);
@@ -268,6 +271,16 @@ export function ItemViewer({
           </Button>
         )}
 
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => setQueryOpen((v) => !v)}
+          title="Ask about this item"
+          className={queryOpen ? "text-primary" : ""}
+        >
+          <Sparkles className="h-4 w-4" />
+        </Button>
+
         <Button size="icon" variant="ghost" onClick={handleDelete} title="Delete">
           <Trash2 className="h-4 w-4" />
         </Button>
@@ -388,6 +401,15 @@ export function ItemViewer({
                 <p className="text-muted-foreground italic">No text extracted from this document.</p>
               )}
             </div>
+          )}
+
+          {/* Per-document query panel */}
+          {queryOpen && (
+            <DocQueryPanel
+              title={title}
+              content={isNote ? content : isDoc ? content || docBody : articleData?.fullText ?? articleData?.excerpt ?? ""}
+              onClose={() => setQueryOpen(false)}
+            />
           )}
 
           {/* Backlinks — items that link here via [[…]] */}

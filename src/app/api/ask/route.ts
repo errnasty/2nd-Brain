@@ -174,9 +174,24 @@ export async function POST(req: Request) {
   // Structural matches (folder/title) FIRST — when the user names a note or
   // folder, that intent must win over whatever ranked highest by vector
   // similarity (often unrelated articles). Vector hits fill the remainder.
-  const orderedIds = Array.from(
-    new Set([...folderIds, ...sources.map((s) => s.directoryItemId)]),
-  ).slice(0, 14);
+  //
+  // RELEVANCE FLOOR: only vector hits at/above this cosine score become
+  // context + sources. Without it every weak match (sim ~0.2) was fed to the
+  // model AND listed as a source, so "all my saved articles" showed up at the
+  // bottom of every answer. Structural (folder/title) hits are intentional —
+  // the user named them — so they bypass the floor.
+  const RELEVANCE_FLOOR = 0.35;
+  const relevantVectorIds = sources
+    .filter((s) => s.similarity >= RELEVANCE_FLOOR)
+    .map((s) => s.directoryItemId);
+
+  let orderedIds = Array.from(new Set([...folderIds, ...relevantVectorIds])).slice(0, 10);
+
+  // Don't go empty-handed: if nothing cleared the floor and there were no
+  // structural matches, keep the top few vector hits so we can still answer.
+  if (orderedIds.length === 0 && sources.length > 0) {
+    orderedIds = sources.slice(0, 4).map((s) => s.directoryItemId);
+  }
 
   const contents = await withTimeout(
     fetchItemContents(userId, orderedIds),

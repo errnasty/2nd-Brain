@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ExternalLink,
   Rss,
+  Sparkles,
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
+import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 
 type ArticleData = {
   id: string;
@@ -59,6 +61,7 @@ export function ArticleReader({
   const [content, setContent] = useState<string | null>(null);
   const [loadingContent, setLoadingContent] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
+  const [queryOpen, setQueryOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   const currentIdx = useMemo(
@@ -129,6 +132,7 @@ export function ArticleReader({
   useEffect(() => {
     setExtractError(null);
     setContent(null);
+    setQueryOpen(false);
 
     if (!selectedId) {
       setArticle(null);
@@ -276,6 +280,16 @@ export function ArticleReader({
         <Button
           size="icon"
           variant="ghost"
+          onClick={() => setQueryOpen((v) => !v)}
+          title="Ask about this article"
+          disabled={!article}
+          className={queryOpen ? "text-primary" : ""}
+        >
+          <Sparkles className="h-4 w-4" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={saveToDirectory}
           title="Save to Directory"
           disabled={!article}
@@ -363,6 +377,13 @@ export function ArticleReader({
                 </div>
               )}
               {content && <div dangerouslySetInnerHTML={{ __html: content }} />}
+              {article && queryOpen && (
+                <DocQueryPanel
+                  title={article.title}
+                  content={content ?? article.excerpt ?? ""}
+                  onClose={() => setQueryOpen(false)}
+                />
+              )}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
             </>
           )}
