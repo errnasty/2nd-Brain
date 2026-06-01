@@ -171,9 +171,11 @@ export async function POST(req: Request) {
     ),
   ]);
 
-  // Vector items first (ranked), then any folder-scoped items not already in.
+  // Structural matches (folder/title) FIRST — when the user names a note or
+  // folder, that intent must win over whatever ranked highest by vector
+  // similarity (often unrelated articles). Vector hits fill the remainder.
   const orderedIds = Array.from(
-    new Set([...sources.map((s) => s.directoryItemId), ...folderIds]),
+    new Set([...folderIds, ...sources.map((s) => s.directoryItemId)]),
   ).slice(0, 14);
 
   const contents = await withTimeout(

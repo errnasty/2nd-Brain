@@ -404,45 +404,93 @@ export async function fetchItemContents(
   });
 }
 
+// Words too generic to anchor a structural match on.
+const STRUCT_STOPWORDS = new Set([
+  "the", "a", "an", "my", "me", "i", "in", "on", "of", "to", "for", "and", "or",
+  "about", "more", "depth", "in-depth", "help", "learn", "teach", "explain",
+  "summarise", "summarize", "summary", "note", "notes", "document", "documents",
+  "doc", "docs", "file", "files", "folder", "folders", "everything", "all",
+  "show", "tell", "give", "what", "is", "are", "this", "that", "from", "with",
+]);
+
+function structTokens(text: string): string[] {
+  return Array.from(
+    new Set(
+      text
+        .toLowerCase()
+        .split(/[^a-z0-9]+/i)
+        .filter((t) => t.length >= 3 && !STRUCT_STOPWORDS.has(t)),
+    ),
+  );
+}
+
+// Two tokens "match" if equal or one is a prefix of the other (≥4 chars),
+// so "info" ↔ "information", "geopol" ↔ "geopolitics".
+function tokenMatch(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 4 && long.startsWith(short);
+}
+
+/** Fraction of `nameTokens` that have a match somewhere in `queryTokens`. */
+function coverage(nameTokens: string[], queryTokens: string[]): number {
+  if (nameTokens.length === 0) return 0;
+  let hit = 0;
+  for (const n of nameTokens) if (queryTokens.some((q) => tokenMatch(n, q))) hit += 1;
+  return hit / nameTokens.length;
+}
+
 /**
- * Structural retrieval. "Summarise my notes in the AI & Data Science folder"
- * is NOT a semantic query — vector search ranks by similarity to the question
- * text, so the folder's actual items rarely surface. If the question names a
- * folder (its name appears in the text), return that folder's item ids
- * (including descendant folders) directly. Combined with vector hits in the
- * ask route so "everything in folder X" works.
+ * Structural retrieval — robust to phrasing/abbreviations.
+ *
+ * "Help me learn my Information Ops notes" must surface the "Info Ops Notes"
+ * item even though vector search ranks unrelated articles higher and the folder
+ * is named differently. We fuzzy-match the query's significant tokens against
+ * BOTH folder names and item titles (prefix-aware, stopwords dropped), then
+ * return the matching items' ids (folder matches include descendant folders).
+ * The ask route unions these with vector hits and force-includes their content.
  */
 export async function folderScopedItemIds(
   userId: string,
   query: string,
   cap = 12,
 ): Promise<string[]> {
-  const q = query.toLowerCase();
-  const folders = await db
-    .select({ id: directoryFolders.id, name: directoryFolders.name, parentId: directoryFolders.parentId })
-    .from(directoryFolders)
-    .where(eq(directoryFolders.userId, userId));
+  const qTokens = structTokens(query);
+  if (qTokens.length === 0) return [];
 
-  // Folders whose name (≥3 chars, to avoid trivial matches) appears in the query.
-  const matched = folders.filter(
-    (f) => f.name.trim().length >= 3 && q.includes(f.name.toLowerCase()),
-  );
-  if (matched.length === 0) return [];
+  const [folders, items] = await Promise.all([
+    db
+      .select({ id: directoryFolders.id, name: directoryFolders.name, parentId: directoryFolders.parentId })
+      .from(directoryFolders)
+      .where(eq(directoryFolders.userId, userId)),
+    db
+      .select({ id: directoryItems.id, title: directoryItems.title, folderId: directoryItems.folderId })
+      .from(directoryItems)
+      .where(eq(directoryItems.userId, userId)),
+  ]);
 
-  // Pull in descendant folders too.
-  const wanted = new Set<string>();
+  // 1) Folders whose name strongly overlaps the query (≥50% of name tokens).
+  const matchedFolders = folders.filter((f) => coverage(structTokens(f.name), qTokens) >= 0.5);
+  const wantedFolders = new Set<string>();
   const addWithDescendants = (id: string) => {
-    if (wanted.has(id)) return;
-    wanted.add(id);
+    if (wantedFolders.has(id)) return;
+    wantedFolders.add(id);
     for (const c of folders) if (c.parentId === id) addWithDescendants(c.id);
   };
-  matched.forEach((m) => addWithDescendants(m.id));
+  matchedFolders.forEach((m) => addWithDescendants(m.id));
 
-  const rows = await db
-    .select({ id: directoryItems.id })
-    .from(directoryItems)
-    .where(and(eq(directoryItems.userId, userId), inArray(directoryItems.folderId, Array.from(wanted))))
-    .orderBy(asc(directoryItems.title))
-    .limit(cap);
-  return rows.map((r) => r.id);
+  // 2) Score every item: folder-scope membership OR title overlap.
+  const scored: { id: string; score: number }[] = [];
+  for (const it of items) {
+    let score = 0;
+    if (it.folderId && wantedFolders.has(it.folderId)) score += 1; // in a named folder
+    const titleCov = coverage(structTokens(it.title), qTokens);
+    if (titleCov >= 0.5) score += 1 + titleCov; // title strongly matches
+    if (score > 0) scored.push({ id: it.id, score });
+  }
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, cap)
+    .map((s) => s.id);
 }
