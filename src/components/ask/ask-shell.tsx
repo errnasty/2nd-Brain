@@ -10,6 +10,7 @@ import {
   ChevronDown,
   Cpu,
   FileText,
+  Globe,
   Loader2,
   Newspaper,
   NotebookPen,
@@ -41,16 +42,28 @@ type Source = {
 };
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
+type WebSource = { title: string; url: string };
 
 type Message = {
   id: string;
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  webSources?: WebSource[];
   usage?: Usage;
 };
 
 const USAGE_SENTINEL = "<<<SB_USAGE:";
+const WEBSOURCES_SENTINEL = "<<<SB_WEBSOURCES:";
+
+/** Index of the first sentinel marker present in the buffer, or -1. */
+function firstSentinel(acc: string): number {
+  const a = acc.indexOf(WEBSOURCES_SENTINEL);
+  const b = acc.indexOf(USAGE_SENTINEL);
+  if (a < 0) return b;
+  if (b < 0) return a;
+  return Math.min(a, b);
+}
 
 const SUGGESTIONS = [
   "Summarize what I've read about AI safety this week",
@@ -66,6 +79,7 @@ export function AskShell() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string>(DEFAULT_CHAT_MODEL);
+  const [web, setWeb] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -186,7 +200,7 @@ export function AskShell() {
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: trimmed, history, model: modelId }),
+          body: JSON.stringify({ question: trimmed, history, model: modelId, web }),
           cache: "no-store",
         });
         if (!res.ok) {
@@ -218,7 +232,7 @@ export function AskShell() {
         let frameQueued = false;
         const flush = () => {
           frameQueued = false;
-          const sentinelIdx = acc.indexOf(USAGE_SENTINEL);
+          const sentinelIdx = firstSentinel(acc);
           const display = sentinelIdx >= 0 ? acc.slice(0, sentinelIdx) : acc;
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
@@ -236,18 +250,28 @@ export function AskShell() {
         }
         flush(); // ensure the final chunk is committed
 
-        // Parse the usage sentinel (if present) off the end of the stream.
+        // Parse the trailing sentinels: web sources (cited URLs) + usage.
         let usage: Usage | undefined;
-        const idx = acc.indexOf(USAGE_SENTINEL);
-        if (idx >= 0) {
+        let webSources: WebSource[] | undefined;
+        const wIdx = acc.indexOf(WEBSOURCES_SENTINEL);
+        const uIdx = acc.indexOf(USAGE_SENTINEL);
+        if (wIdx >= 0) {
+          const end = uIdx > wIdx ? uIdx : acc.length;
           try {
-            usage = JSON.parse(acc.slice(idx + USAGE_SENTINEL.length)) as Usage;
+            webSources = JSON.parse(acc.slice(wIdx + WEBSOURCES_SENTINEL.length, end)) as WebSource[];
+          } catch {
+            // ignore malformed web sources
+          }
+        }
+        if (uIdx >= 0) {
+          try {
+            usage = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
           } catch {
             // ignore malformed usage
           }
         }
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, sources, usage } : m)),
+          prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)),
         );
       } catch (err) {
         setError(err instanceof Error ? err.message : "Request failed");
@@ -257,7 +281,7 @@ export function AskShell() {
         inputRef.current?.focus();
       }
     },
-    [messages, streaming, modelId],
+    [messages, streaming, modelId, web],
   );
 
   function clearChat() {
@@ -361,6 +385,16 @@ export function AskShell() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            size="sm"
+            variant={web ? "default" : "outline"}
+            onClick={() => setWeb((w) => !w)}
+            disabled={streaming}
+            className="h-7 gap-1.5 text-xs"
+            title={web ? "Web search on — Claude may search the web (uses a Claude model)" : "Web search off"}
+          >
+            <Globe className="h-3.5 w-3.5" /> Web
+          </Button>
         </div>
         <form
           onSubmit={(e) => {
@@ -478,6 +512,25 @@ function MessageBubble({
                 {Math.round(s.similarity * 100)}%
               </span>
             </button>
+          ))}
+        </div>
+      )}
+      {message.webSources && message.webSources.length > 0 && (
+        <div className="space-y-1 border-t border-border pt-3">
+          <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <Globe className="h-3 w-3" /> Web sources
+          </div>
+          {message.webSources.map((s) => (
+            <a
+              key={s.url}
+              href={s.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex w-full items-center gap-2 rounded-md p-2 text-left text-xs transition-colors hover:bg-accent/50"
+            >
+              <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span className="flex-1 truncate hover:underline">{s.title}</span>
+            </a>
           ))}
         </div>
       )}

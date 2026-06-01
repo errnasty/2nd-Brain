@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Plus, Send, Sparkles, Trash2, X } from "lucide-react";
+import { Globe, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -17,8 +17,19 @@ import {
 
 const MODEL_STORAGE_KEY = "ask.model.v1";
 const USAGE_SENTINEL = "<<<SB_USAGE:";
+const WEBSOURCES_SENTINEL = "<<<SB_WEBSOURCES:";
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
+type WebSource = { title: string; url: string };
+
+/** Index of the first sentinel marker present in the buffer, or -1. */
+function firstSentinel(acc: string): number {
+  const a = acc.indexOf(WEBSOURCES_SENTINEL);
+  const b = acc.indexOf(USAGE_SENTINEL);
+  if (a < 0) return b;
+  if (b < 0) return a;
+  return Math.min(a, b);
+}
 
 function getModel(): string {
   if (typeof window === "undefined") return DEFAULT_CHAT_MODEL;
@@ -53,6 +64,8 @@ export function DocQueryPanel({
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [webSources, setWebSources] = useState<WebSource[]>([]);
+  const [web, setWeb] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [managing, setManaging] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -83,12 +96,13 @@ export function DocQueryPanel({
     setStreaming(true);
     setAnswer("");
     setUsage(null);
+    setWebSources([]);
 
     try {
       const res = await fetch("/api/ask-document", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title, content: plain, question: text, model: getModel() }),
+        body: JSON.stringify({ title, content: plain, question: text, model: getModel(), web }),
         signal: controller.signal,
       });
 
@@ -106,13 +120,24 @@ export function DocQueryPanel({
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        const idx = acc.indexOf(USAGE_SENTINEL);
-        setAnswer(idx >= 0 ? acc.slice(0, idx) : acc);
+        const cut = firstSentinel(acc);
+        setAnswer(cut >= 0 ? acc.slice(0, cut) : acc);
       }
-      const idx = acc.indexOf(USAGE_SENTINEL);
-      if (idx >= 0) {
+
+      // Parse the trailing sentinels: web sources (cited URLs) + token usage.
+      const wIdx = acc.indexOf(WEBSOURCES_SENTINEL);
+      const uIdx = acc.indexOf(USAGE_SENTINEL);
+      if (wIdx >= 0) {
+        const end = uIdx > wIdx ? uIdx : acc.length;
         try {
-          setUsage(JSON.parse(acc.slice(idx + USAGE_SENTINEL.length)) as Usage);
+          setWebSources(JSON.parse(acc.slice(wIdx + WEBSOURCES_SENTINEL.length, end)) as WebSource[]);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (uIdx >= 0) {
+        try {
+          setUsage(JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage);
         } catch {
           /* ignore */
         }
@@ -148,8 +173,19 @@ export function DocQueryPanel({
         <Sparkles className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">Ask about this document</span>
         <button
+          onClick={() => setWeb((w) => !w)}
+          title={web ? "Web search on — Claude may search the web" : "Web search off"}
+          className={`ml-auto inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors ${
+            web
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Globe className="h-3 w-3" /> Web
+        </button>
+        <button
           onClick={() => setManaging((m) => !m)}
-          className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+          className="text-xs text-muted-foreground hover:text-foreground"
         >
           {managing ? "Done" : "Manage prompts"}
         </button>
@@ -222,6 +258,27 @@ export function DocQueryPanel({
                 <span className="text-muted-foreground">Thinking…</span>
               )}
             </div>
+            {webSources.length > 0 && (
+              <div className="mt-3 border-t border-border pt-2">
+                <div className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                  <Globe className="h-3 w-3" /> Web sources
+                </div>
+                <ul className="space-y-0.5">
+                  {webSources.map((s) => (
+                    <li key={s.url} className="truncate text-xs">
+                      <a
+                        href={s.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline underline-offset-2 hover:opacity-80"
+                      >
+                        {s.title}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {usage && (
               <div className="mt-2 text-[10px] uppercase tracking-wider text-muted-foreground">
                 {usage.totalTokens.toLocaleString()} tokens

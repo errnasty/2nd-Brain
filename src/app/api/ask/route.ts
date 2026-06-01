@@ -10,7 +10,8 @@ import {
   type RagSource,
 } from "@/lib/ai/rag";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
-import { getChatModel } from "@/lib/ai/models";
+import { getChatModel, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { streamWebAnswer } from "@/lib/ai/web-answer";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { validateAskBody, withTimeout, TimeoutError } from "./validate";
 
@@ -51,6 +52,15 @@ Rules:
   what the user could add to their library.
 - Be concise. Skip preamble like "Based on the context provided…".`;
 
+// Web-enabled variant: same priorities, plus permission to search the web to
+// fill gaps. The user's own library stays the higher-priority source.
+const SYSTEM_WEB = `${SYSTEM}
+
+WEB SEARCH: You also have a web_search tool. Treat the user's DIRECTORY context
+as the priority, higher-trust source — prefer and lead with it. Use web_search
+only to fill gaps the library can't answer, or to add current/external facts.
+When you use web results, make clear which claims came from the web.`;
+
 type Message = { role: "user" | "assistant"; content: string };
 
 /** Resolve the AI SDK model instance for a requested model id. */
@@ -79,7 +89,7 @@ export async function POST(req: Request) {
     });
   }
 
-  let body: { question?: string; history?: Message[]; model?: string };
+  let body: { question?: string; history?: Message[]; model?: string; web?: boolean };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -93,11 +103,18 @@ export async function POST(req: Request) {
   const question = validated.question;
 
   // Resolve the requested model + verify the matching provider key is present.
+  // Web search is Anthropic-native, so the web path always needs the Claude key
+  // regardless of which chat model was selected.
   const { model, provider } = resolveModel(body.model);
-  if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
+  if (body.web) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return new Response("ANTHROPIC_API_KEY not configured — web search needs a Claude model.", {
+        status: 503,
+      });
+    }
+  } else if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     return new Response("ANTHROPIC_API_KEY not configured.", { status: 503 });
-  }
-  if (provider === "openai" && !process.env.OPENAI_API_KEY) {
+  } else if (provider === "openai" && !process.env.OPENAI_API_KEY) {
     return new Response("OPENAI_API_KEY not configured — pick a Claude model instead.", {
       status: 503,
     });
@@ -225,12 +242,33 @@ export async function POST(req: Request) {
 
   // ── 3. Build messages with history ─────────────────────────────
   const history = (body.history ?? []).slice(-6); // keep recent turns only
+  const userContent = `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}`;
+  const ragHeader = Buffer.from(JSON.stringify(sourceMap)).toString("base64");
+
+  // ── Web-enabled path ────────────────────────────────────────────
+  // Anthropic native web_search. Directory context (above) stays the priority
+  // source; web fills gaps. This path returns a sentinel-framed stream (answer
+  // text + web sources + usage) and is isolated from the AI SDK path below.
+  if (body.web) {
+    const chosen = getChatModel(body.model);
+    const webModelId = chosen.provider === "anthropic" ? chosen.id : DEFAULT_CHAT_MODEL;
+    const webStream = streamWebAnswer({
+      model: webModelId,
+      system: SYSTEM_WEB,
+      userContent,
+      history: history.map((m) => ({ role: m.role, content: m.content })),
+    });
+    return new Response(webStream, {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-rag-sources": ragHeader,
+      },
+    });
+  }
+
   const messages = [
     ...history.map((m) => ({ role: m.role, content: m.content })),
-    {
-      role: "user" as const,
-      content: `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}`,
-    },
+    { role: "user" as const, content: userContent },
   ];
 
   const result = streamText({
@@ -270,7 +308,7 @@ export async function POST(req: Request) {
   return new Response(stream, {
     headers: {
       "content-type": "text/plain; charset=utf-8",
-      "x-rag-sources": Buffer.from(JSON.stringify(sourceMap)).toString("base64"),
+      "x-rag-sources": ragHeader,
     },
   });
 }
