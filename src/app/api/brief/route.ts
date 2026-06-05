@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { and, eq, gte, desc } from "drizzle-orm";
 import { anthropic } from "@ai-sdk/anthropic";
 import { streamText } from "ai";
@@ -8,6 +9,57 @@ import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+const BRIEF_LIMIT = 60;
+
+// Widening windows: last 24h, then a week, then most-recent unread — so the
+// brief still works when the user hasn't synced today. Shared by POST (which
+// builds the brief) and GET (the cheap fingerprint check).
+function briefWindows() {
+  return [
+    { since: new Date(Date.now() - 24 * 60 * 60 * 1000), label: "the last 24 hours" },
+    { since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), label: "the last week" },
+    { since: null as Date | null, label: "your most recent unread" },
+  ];
+}
+
+/** Order-independent hash of the unread-article id set the brief was built on. */
+function fingerprint(ids: string[]): string {
+  return createHash("sha1").update([...ids].sort().join(",")).digest("base64");
+}
+
+/** Cheap id-only mirror of the brief query — used by GET to detect drift. */
+async function unreadBriefIds(userId: string): Promise<string[]> {
+  for (const w of briefWindows()) {
+    const conds = [eq(articles.userId, userId), eq(articles.readStatus, "unread")];
+    if (w.since) conds.push(gte(articles.publishDate, w.since));
+    const rows = await db
+      .select({ id: articles.id })
+      .from(articles)
+      .where(and(...conds))
+      .orderBy(desc(articles.publishDate))
+      .limit(BRIEF_LIMIT);
+    if (rows.length > 0) return rows.map((r) => r.id);
+  }
+  return [];
+}
+
+/**
+ * GET /api/brief — cheap fingerprint of the current unread set (id-only, no
+ * full text, no model). The client compares it against the fingerprint stored
+ * with its cached brief to show a "new articles — regenerate" nudge without
+ * paying for a full regeneration.
+ */
+export async function GET() {
+  let auth;
+  try {
+    auth = await requireUser();
+  } catch {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  const ids = await unreadBriefIds(auth.user.id);
+  return Response.json({ fingerprint: fingerprint(ids), count: ids.length });
+}
 
 // Trailing markers appended after the brief text. The client splits on these
 // and never renders them. Sources go in the body (not a header) because a
@@ -103,14 +155,6 @@ export async function POST(req: Request) {
   }
   const systemPrompt = customPrompt ?? DEFAULT_SYSTEM_PROMPT;
 
-  // Try last 24h first, then widen the window so the brief still works even if
-  // the user hasn't synced today.
-  const windows = [
-    { since: new Date(Date.now() - 24 * 60 * 60 * 1000), label: "the last 24 hours" },
-    { since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), label: "the last week" },
-    { since: null as Date | null, label: "your most recent unread" },
-  ];
-
   async function fetchRows(since: Date | null) {
     const conds = [eq(articles.userId, user.id), eq(articles.readStatus, "unread")];
     if (since) conds.push(gte(articles.publishDate, since));
@@ -127,12 +171,12 @@ export async function POST(req: Request) {
       .innerJoin(feeds, eq(feeds.id, articles.feedId))
       .where(and(...conds))
       .orderBy(desc(articles.publishDate))
-      .limit(60);
+      .limit(BRIEF_LIMIT);
   }
 
   let rows: Awaited<ReturnType<typeof fetchRows>> = [];
-  let windowLabel = windows[0].label;
-  for (const w of windows) {
+  let windowLabel = briefWindows()[0].label;
+  for (const w of briefWindows()) {
     rows = await fetchRows(w.since);
     windowLabel = w.label;
     if (rows.length > 0) break;
@@ -147,6 +191,7 @@ export async function POST(req: Request) {
 
   const articleBlock = buildArticleBlock(rows);
   const periodLine = `\n\n[Briefing window: ${windowLabel}, ${rows.length} unread articles]`;
+  const briefFingerprint = fingerprint(rows.map((r) => r.id));
 
   // Source map for the client, aligned to the [n] numbering in the article
   // block above so the brief's inline references link back to the right item.
@@ -215,6 +260,9 @@ export async function POST(req: Request) {
   });
 
   return new Response(stream, {
-    headers: { "content-type": "text/plain; charset=utf-8" },
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "x-brief-fingerprint": briefFingerprint,
+    },
   });
 }

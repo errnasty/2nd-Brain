@@ -8,6 +8,7 @@ import {
   Check,
   CheckCheck,
   ExternalLink,
+  History,
   Loader2,
   Newspaper,
   RefreshCw,
@@ -18,6 +19,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
@@ -32,8 +41,18 @@ type BriefSource = {
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
 
+type BriefEntry = {
+  generatedAt: string;
+  content: string;
+  sources: BriefSource[];
+  usage: Usage | null;
+  fingerprint: string | null;
+};
+
 const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
 const BRIEF_CACHE_KEY = "brief.cache.v2";
+const BRIEF_HISTORY_KEY = "brief.history.v1";
+const MAX_HISTORY = 10;
 
 // Trailing markers the server appends after the brief text. The client splits
 // on these and never renders them. Mirrors /api/brief.
@@ -84,6 +103,9 @@ export function DailyBrief() {
   const [content, setContent] = useState("");
   const [sources, setSources] = useState<BriefSource[]>([]);
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
+  const [newArticles, setNewArticles] = useState(false);
+  const [history, setHistory] = useState<BriefEntry[]>([]);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -114,11 +136,13 @@ export function DailyBrief() {
           generatedAt: string;
           sources?: BriefSource[];
           usage?: Usage;
+          fingerprint?: string;
         };
         if (parsed.content) {
           setContent(parsed.content);
           setSources(parsed.sources ?? []);
           setUsage(parsed.usage ?? null);
+          setFingerprint(parsed.fingerprint ?? null);
           setGeneratedAt(new Date(parsed.generatedAt));
           setLoading(false);
           setHydratedFromCache(true);
@@ -126,6 +150,12 @@ export function DailyBrief() {
       }
     } catch {
       // ignore parse errors
+    }
+    try {
+      const rawHistory = localStorage.getItem(BRIEF_HISTORY_KEY);
+      if (rawHistory) setHistory(JSON.parse(rawHistory) as BriefEntry[]);
+    } catch {
+      // ignore
     }
   }, []);
 
@@ -135,6 +165,7 @@ export function DailyBrief() {
     setContent("");
     setSources([]);
     setUsage(null);
+    setNewArticles(false);
     setReadIds(new Set());
     try {
       const systemPrompt = (promptOverride ?? savedPrompt).trim();
@@ -155,6 +186,9 @@ export function DailyBrief() {
         setLoading(false);
         return;
       }
+
+      const briefFingerprint = res.headers.get("x-brief-fingerprint");
+      if (briefFingerprint) setFingerprint(briefFingerprint);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -216,10 +250,30 @@ export function DailyBrief() {
             generatedAt: finishedAt.toISOString(),
             sources: briefSources,
             usage: briefUsage,
+            fingerprint: briefFingerprint,
           }),
         );
       } catch {
         // quota errors — silently ignore
+      }
+      // Append to the dated archive (most-recent first, capped).
+      if (displayContent.trim()) {
+        const entry: BriefEntry = {
+          generatedAt: finishedAt.toISOString(),
+          content: displayContent,
+          sources: briefSources,
+          usage: briefUsage,
+          fingerprint: briefFingerprint,
+        };
+        setHistory((prev) => {
+          const next = [entry, ...prev].slice(0, MAX_HISTORY);
+          try {
+            localStorage.setItem(BRIEF_HISTORY_KEY, JSON.stringify(next));
+          } catch {
+            // ignore quota
+          }
+          return next;
+        });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load brief");
@@ -234,6 +288,29 @@ export function DailyBrief() {
     stream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
+
+  // Showing a cached brief? Cheaply ask the server whether the unread set has
+  // drifted (id-only fingerprint, no model). If so, nudge to regenerate
+  // instead of silently showing a stale brief.
+  useEffect(() => {
+    if (!hydratedFromCache || !fingerprint) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/brief", { method: "GET", cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { fingerprint?: string };
+        if (!cancelled && data.fingerprint && data.fingerprint !== fingerprint) {
+          setNewArticles(true);
+        }
+      } catch {
+        // offline / transient — keep showing the cached brief
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydratedFromCache, fingerprint]);
 
   // Mark articles read straight from the brief (optimistic — matches the feeds
   // UI, which also updates optimistically and lets sidebar counts lag).
@@ -275,6 +352,20 @@ export function DailyBrief() {
     setCustomPrompt("");
   }
 
+  // Load an archived brief into view (read-only snapshot; Regenerate still
+  // fetches fresh). Doesn't touch the live cache or history.
+  function viewEntry(e: BriefEntry) {
+    setContent(e.content);
+    setSources(e.sources ?? []);
+    setUsage(e.usage ?? null);
+    setFingerprint(e.fingerprint ?? null);
+    setGeneratedAt(new Date(e.generatedAt));
+    setNewArticles(false);
+    setReadIds(new Set());
+    setError(null);
+    setLoading(false);
+  }
+
   const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
   const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
 
@@ -293,9 +384,9 @@ export function DailyBrief() {
                   ? generatedAt.toLocaleDateString([], { month: "short", day: "numeric" })
                   : generatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
-              {isStale && (
+              {(isStale || newArticles) && (
                 <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-amber-600 dark:text-amber-400">
-                  stale — regenerate
+                  {newArticles ? "new articles — regenerate" : "stale — regenerate"}
                 </span>
               )}
               {savedPrompt && (
@@ -307,6 +398,38 @@ export function DailyBrief() {
           ) : null}
         </div>
         <div className="flex items-center gap-1">
+          {history.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="ghost" title="View an earlier brief">
+                  <History className="mr-1.5 h-3.5 w-3.5" />
+                  History
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel>Recent briefs</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {history.map((e) => {
+                  const d = new Date(e.generatedAt);
+                  return (
+                    <DropdownMenuItem
+                      key={e.generatedAt}
+                      onClick={() => viewEntry(e)}
+                      className="flex items-center justify-between gap-2"
+                    >
+                      <span>
+                        {d.toLocaleDateString([], { month: "short", day: "numeric" })}{" "}
+                        {d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      {generatedAt && d.getTime() === generatedAt.getTime() && (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Button
             size="sm"
             variant="ghost"

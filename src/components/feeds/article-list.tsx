@@ -1,10 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDownUp, Check, CheckCheck, Copy, Loader2, Search, Star, X } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FeedsBulkBar } from "@/components/feeds/feeds-bulk-bar";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -19,11 +21,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import {
+  loadMoreArticlesAction,
   markAllReadAction,
   searchArticlesAction,
   setReadStatusAction,
+  toggleStarredAction,
   type ArticleSearchResult,
 } from "@/app/(app)/feeds/actions";
+
+const FEED_PAGE_SIZE = 100;
 import { toast } from "sonner";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import Image from "next/image";
@@ -62,7 +68,7 @@ export function ArticleList({
   onSelect: (id: string | null) => void;
 }) {
   const router = useRouter();
-  const [, startTransition] = useTransition();
+  const [pending, startTransition] = useTransition();
 
   // Search state
   const [query, setQuery] = useState("");
@@ -70,11 +76,96 @@ export function ArticleList({
   const [results, setResults] = useState<ArticleSearchResult[] | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
+  // Infinite scroll: `items` is the first server page; `extra` holds appended
+  // pages. A reset effect below drops `extra` whenever the server page changes
+  // (new scope or router.refresh), so we never show stale appended rows.
+  const params = useSearchParams();
+  const sort = (params.get("sort") as "newest" | "oldest" | "hot" | null) ?? "newest";
+  const [extra, setExtra] = useState<ArticleListItem[]>([]);
+  const [hasMore, setHasMore] = useState(items.length >= FEED_PAGE_SIZE);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  useEffect(() => {
+    setExtra([]);
+    setHasMore(items.length >= FEED_PAGE_SIZE);
+  }, [items]);
+
+  const allItems = useMemo(() => {
+    if (extra.length === 0) return items;
+    // Guard against a duplicate id sneaking across a page boundary.
+    const seen = new Set(items.map((i) => i.id));
+    return [...items, ...extra.filter((e) => !seen.has(e.id))];
+  }, [items, extra]);
+
   const [optimistic, applyOptimistic] = useOptimistic(
-    items,
+    allItems,
     (state, patch: OptimisticPatch) =>
       state.map((it) => (it.id === patch.id ? { ...it, ...patch } : it)),
   );
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await loadMoreArticlesAction({
+        view,
+        feedId,
+        folderId,
+        sort,
+        offset: items.length + extra.length,
+      });
+      setExtra((prev) => [...prev, ...res.items]);
+      setHasMore(res.hasMore);
+    } catch {
+      setHasMore(false); // stop hammering a failing endpoint
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, view, feedId, folderId, sort, items.length, extra.length]);
+
+  // Multi-select for bulk actions.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const clearSelection = () => setSelected(new Set());
+  const toggleSelect = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  // Drop the selection whenever the list scope changes (different feed/folder/
+  // view) — those ids may no longer be on screen.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [view, feedId, folderId]);
+
+  const selectedIds = useMemo(() => [...selected], [selected]);
+
+  function bulkSetStatus(status: ArticleListItem["readStatus"], verb: string) {
+    if (selectedIds.length === 0) return;
+    startTransition(async () => {
+      selectedIds.forEach((id) => applyOptimistic({ id, readStatus: status }));
+      const res = await setReadStatusAction({ articleIds: selectedIds, status });
+      if (res.ok) {
+        toast.success(`${verb} ${selectedIds.length} article${selectedIds.length === 1 ? "" : "s"}`);
+        clearSelection();
+        if (status === "archived") router.refresh();
+      } else {
+        toast.error(res.error);
+      }
+    });
+  }
+
+  function bulkStar() {
+    if (selectedIds.length === 0) return;
+    startTransition(async () => {
+      selectedIds.forEach((id) => applyOptimistic({ id, starred: true }));
+      await Promise.all(selectedIds.map((id) => toggleStarredAction(id, true)));
+      toast.success(`Starred ${selectedIds.length} article${selectedIds.length === 1 ? "" : "s"}`);
+      clearSelection();
+    });
+  }
 
   // Debounced search
   useEffect(() => {
@@ -221,8 +312,23 @@ export function ArticleList({
           itemTagsById={itemTagsById}
           selectedId={selectedId}
           onOpen={openArticle}
+          selected={selected}
+          onToggleSelect={toggleSelect}
+          onLoadMore={loadMore}
+          loadingMore={loadingMore}
+          canLoadMore={!showingSearch && hasMore}
         />
       )}
+
+      <FeedsBulkBar
+        count={selectedIds.length}
+        pending={pending}
+        onMarkRead={() => bulkSetStatus("read", "Marked read")}
+        onMarkUnread={() => bulkSetStatus("unread", "Marked unread")}
+        onStar={bulkStar}
+        onArchive={() => bulkSetStatus("archived", "Archived")}
+        onClear={clearSelection}
+      />
     </section>
   );
 }
@@ -237,13 +343,24 @@ function VirtualizedArticleList({
   itemTagsById,
   selectedId,
   onOpen,
+  selected,
+  onToggleSelect,
+  onLoadMore,
+  loadingMore,
+  canLoadMore,
 }: {
   items: ArticleListItem[];
   itemTagsById: Record<string, string[]>;
   selectedId: string | null;
   onOpen: (id: string) => void;
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onLoadMore: () => void;
+  loadingMore: boolean;
+  canLoadMore: boolean;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
@@ -251,6 +368,21 @@ function VirtualizedArticleList({
     overscan: 6,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
+
+  // Fetch the next page when the bottom sentinel scrolls into view. Root is the
+  // scroll container; rootMargin pre-loads a bit before the user hits the end.
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !canLoadMore) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) onLoadMore();
+      },
+      { root: parentRef.current, rootMargin: "400px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [canLoadMore, onLoadMore]);
 
   return (
     <div ref={parentRef} className="flex-1 overflow-y-auto">
@@ -265,14 +397,33 @@ function VirtualizedArticleList({
               key={item.id}
               data-index={row.index}
               ref={virtualizer.measureElement}
-              className="absolute left-0 top-0 w-full"
+              className="group absolute left-0 top-0 w-full"
               style={{ transform: `translateY(${row.start}px)` }}
             >
+              {/* Selection checkbox — reveals on hover, or stays once any row
+                  is selected (so the selection set is visible/editable). */}
+              <div
+                className={cn(
+                  "absolute left-1.5 top-1/2 z-10 -translate-y-1/2 transition-opacity",
+                  selected.size > 0 || selected.has(item.id)
+                    ? "opacity-100"
+                    : "opacity-0 group-hover:opacity-100",
+                )}
+              >
+                <Checkbox
+                  checked={selected.has(item.id)}
+                  onCheckedChange={() => onToggleSelect(item.id)}
+                  aria-label="Select article"
+                  className="bg-background"
+                />
+              </div>
               <button
                 onClick={() => onOpen(item.id)}
                 className={cn(
-                  "flex w-full gap-3 px-4 py-4 text-left transition-colors",
+                  "flex w-full gap-3 py-4 pr-4 text-left transition-colors",
+                  selected.size > 0 ? "pl-9" : "pl-4",
                   selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
+                  selected.has(item.id) && "bg-accent/40",
                   item.readStatus === "read" && "opacity-55",
                 )}
               >
@@ -337,6 +488,12 @@ function VirtualizedArticleList({
           );
         })}
       </div>
+      {canLoadMore && (
+        <div ref={sentinelRef} className="flex items-center justify-center py-4 text-xs text-muted-foreground">
+          {loadingMore && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          {loadingMore ? "Loading more…" : ""}
+        </div>
+      )}
     </div>
   );
 }

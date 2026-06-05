@@ -22,14 +22,18 @@ export function cleanHtml(dirty: string | null | undefined): string {
     ]),
     allowedAttributes: {
       ...sanitizeHtml.defaults.allowedAttributes,
-      img: ["src", "srcset", "alt", "title", "width", "height", "loading"],
+      img: ["src", "srcset", "alt", "title", "width", "height", "loading", "decoding"],
       source: ["src", "srcset", "type", "media"],
       a: ["href", "name", "target", "rel"],
     },
     allowedSchemes: ["http", "https", "mailto"],
-    // Force safe link behavior and drop tracking-ish protocol-relative oddities.
     transformTags: {
+      // Force safe link behavior and drop tracking-ish protocol-relative oddities.
       a: sanitizeHtml.simpleTransform("a", { rel: "noopener noreferrer nofollow", target: "_blank" }),
+      // Body images come from arbitrary feeds at full size. Force off-screen
+      // lazy-load + async decode so a long article doesn't fetch/decode every
+      // image up front and block the main thread.
+      img: sanitizeHtml.simpleTransform("img", { loading: "lazy", decoding: "async" }),
     },
     // Drop the entire contents of these rather than leaving stray text.
     nonTextTags: ["style", "script", "textarea", "option", "noscript"],

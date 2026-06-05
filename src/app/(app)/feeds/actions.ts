@@ -1,6 +1,6 @@
 "use server";
 
-import { and, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -367,6 +367,57 @@ export async function searchArticlesAction(input: {
     .where(and(...conds))
     .orderBy(desc(articles.publishDate))
     .limit(80);
+}
+
+// ── Infinite-scroll pagination ─────────────────────────────────────────
+// Mirrors the initial query in feeds/page.tsx (same filters + sort) but with
+// an offset, so the client can append further pages past the first 100.
+
+const FEED_PAGE_SIZE = 100;
+const HOT_WINDOW_DAYS = 3;
+
+export async function loadMoreArticlesAction(input: {
+  view: "unread" | "all" | "starred";
+  feedId?: string | null;
+  folderId?: string | null;
+  sort?: "newest" | "oldest" | "hot";
+  offset: number;
+}): Promise<{ items: ArticleSearchResult[]; hasMore: boolean }> {
+  const { user } = await requireUser();
+  const sort = input.sort ?? "newest";
+
+  const where: SQL[] = [eq(articles.userId, user.id)];
+  if (input.feedId) where.push(eq(articles.feedId, input.feedId));
+  if (input.folderId) where.push(eq(articles.folderId, input.folderId));
+  if (input.view === "unread") where.push(eq(articles.readStatus, "unread"));
+  if (input.view === "starred") where.push(eq(articles.starred, true));
+  if (sort === "hot") {
+    where.push(gte(articles.publishDate, new Date(Date.now() - HOT_WINDOW_DAYS * 86_400_000)));
+  }
+  const orderBy = sort === "oldest" ? asc(articles.publishDate) : desc(articles.publishDate);
+
+  const rows = await db
+    .select({
+      id: articles.id,
+      title: articles.title,
+      excerpt: articles.excerpt,
+      author: articles.author,
+      url: articles.url,
+      publishDate: articles.publishDate,
+      readStatus: articles.readStatus,
+      starred: articles.starred,
+      imageUrl: articles.imageUrl,
+      feedTitle: feeds.title,
+      feedIconUrl: feeds.iconUrl,
+    })
+    .from(articles)
+    .innerJoin(feeds, eq(feeds.id, articles.feedId))
+    .where(and(...where))
+    .orderBy(orderBy)
+    .limit(FEED_PAGE_SIZE)
+    .offset(Math.max(0, input.offset));
+
+  return { items: rows, hasMore: rows.length === FEED_PAGE_SIZE };
 }
 
 // ── AI auto-tagging + smart folder routing ─────────────────────────────

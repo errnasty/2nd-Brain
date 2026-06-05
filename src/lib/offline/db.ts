@@ -91,7 +91,10 @@ export async function writeCachedSidebar(payload: SidebarPayload): Promise<void>
 /** Fetch the latest sidebar from the server and update the mirror. */
 export async function syncSidebar(): Promise<{ folders: CachedFolder[]; tags: CachedTag[] } | null> {
   try {
-    const res = await fetch("/api/sidebar", { cache: "no-store" });
+    // `no-cache` = always revalidate with the server, but on a 304 the browser
+    // replays its cached body — so unchanged trees cost a conditional GET, not
+    // a full payload. (ETag set by /api/sidebar.)
+    const res = await fetch("/api/sidebar", { cache: "no-cache" });
     if (!res.ok) return null;
     const data = (await res.json()) as SidebarPayload;
     await writeCachedSidebar(data);

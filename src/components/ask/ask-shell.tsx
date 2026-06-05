@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -84,6 +84,13 @@ export function AskShell() {
   const [refreshing, setRefreshing] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Stable ref so memoized MessageBubbles don't re-render (and re-parse their
+  // markdown) every time the messages array changes.
+  const openSource = useCallback(
+    (id: string) => router.push(`/directory?item=${id}`),
+    [router],
+  );
 
   // Persist the chosen model across visits
   useEffect(() => {
@@ -334,11 +341,7 @@ export function AskShell() {
         ) : (
           <div className="space-y-6">
             {messages.map((m) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                onOpenSource={(id) => router.push(`/directory?item=${id}`)}
-              />
+              <MessageBubble key={m.id} message={m} onOpenSource={openSource} />
             ))}
             {streaming && (
               <div className="text-xs text-muted-foreground">
@@ -459,7 +462,7 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-function MessageBubble({
+const MessageBubble = memo(function MessageBubble({
   message,
   onOpenSource,
 }: {
@@ -531,7 +534,7 @@ function MessageBubble({
       )}
     </div>
   );
-}
+});
 
 function KindIcon({ kind }: { kind: Source["kind"] }) {
   const cls = "h-3 w-3 shrink-0 text-muted-foreground";
