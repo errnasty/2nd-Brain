@@ -1,38 +1,90 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, RefreshCw, Settings, Sparkles, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  Check,
+  CheckCheck,
+  ExternalLink,
+  Loader2,
+  Newspaper,
+  RefreshCw,
+  Settings,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { SourceRow, SourceBadge } from "@/components/ui/source-list";
+import { setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
 
+type BriefSource = {
+  n: number;
+  id: string;
+  title: string;
+  url: string;
+  feedTitle: string;
+};
+
+type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
+
 const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
-const BRIEF_CACHE_KEY = "brief.cache.v1";
+const BRIEF_CACHE_KEY = "brief.cache.v2";
+
+// Trailing markers the server appends after the brief text. The client splits
+// on these and never renders them. Mirrors /api/brief.
+const BRIEFSOURCES_SENTINEL = "<<<SB_BRIEFSOURCES:";
+const USAGE_SENTINEL = "<<<SB_USAGE:";
+
+/** Index of the first sentinel marker present in the buffer, or -1. */
+function firstSentinel(acc: string): number {
+  const a = acc.indexOf(BRIEFSOURCES_SENTINEL);
+  const b = acc.indexOf(USAGE_SENTINEL);
+  if (a < 0) return b;
+  if (b < 0) return a;
+  return Math.min(a, b);
+}
+
+/** Same calendar day in local time. */
+function isSameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
 
 const DEFAULT_PROMPT_PLACEHOLDER = `You are my personal Second Brain curator. I already receive a highly detailed daily news summary via email, so your goal here is NOT to summarize everything. Your goal is rapid triage and discovery.
 
 Review the provided JSON list of my unread articles and newly uploaded documents from the last 24 hours. Generate a short, punchy dashboard using the following strict format:
 
 ### High-Priority (Read Now)
-Identify the 1-3 most substantial, unique, or high-signal pieces. 
-* Provide the title (linked).
-* Write a 1-sentence hook explaining exactly *why* it's worth my time. 
+Identify the 1-3 most substantial, unique, or high-signal pieces.
+* Provide the title, followed by its bracketed reference number (e.g. [3]) so I can jump to the source.
+* Write a 1-sentence hook explaining exactly *why* it's worth my time.
 * List its primary tag.
 
 ### Thematic Clusters (For Batch Reading)
-Group the remaining worthwhile articles into broad themes (e.g., "4 items on AI Tools", "2 items on Macroeconomics"). 
-* Do not summarize the individual articles. 
+Group the remaining worthwhile articles into broad themes (e.g., "4 items on AI Tools", "2 items on Macroeconomics").
+* Do not summarize the individual articles.
 * Just list the theme, the article count, and a 1-sentence summary of the overarching trend across those articles.
 
 ### Quick Clear (Low Signal / Skip)
-Identify any articles that appear to be clickbait, standard PR announcements, highly repetitive news, or low-value fluff. 
+Identify any articles that appear to be clickbait, standard PR announcements, highly repetitive news, or low-value fluff.
 * List their titles so I can confidently mark them as read or delete them without opening them.
 
 Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
 
 export function DailyBrief() {
+  const router = useRouter();
   const [content, setContent] = useState("");
+  const [sources, setSources] = useState<BriefSource[]>([]);
+  const [usage, setUsage] = useState<Usage | null>(null);
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
@@ -57,9 +109,16 @@ export function DailyBrief() {
     try {
       const raw = localStorage.getItem(BRIEF_CACHE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as { content: string; generatedAt: string };
+        const parsed = JSON.parse(raw) as {
+          content: string;
+          generatedAt: string;
+          sources?: BriefSource[];
+          usage?: Usage;
+        };
         if (parsed.content) {
           setContent(parsed.content);
+          setSources(parsed.sources ?? []);
+          setUsage(parsed.usage ?? null);
           setGeneratedAt(new Date(parsed.generatedAt));
           setLoading(false);
           setHydratedFromCache(true);
@@ -74,6 +133,9 @@ export function DailyBrief() {
     setLoading(true);
     setError(null);
     setContent("");
+    setSources([]);
+    setUsage(null);
+    setReadIds(new Set());
     try {
       const systemPrompt = (promptOverride ?? savedPrompt).trim();
       const res = await fetch("/api/brief", {
@@ -93,23 +155,68 @@ export function DailyBrief() {
         setLoading(false);
         return;
       }
+
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let acc = "";
+
+      // Coalesce renders to one per animation frame instead of one per chunk —
+      // ReactMarkdown re-parses the whole doc on each render, so per-token
+      // updates would re-parse hundreds of times during a long brief.
+      let frameQueued = false;
+      const flush = () => {
+        frameQueued = false;
+        const idx = firstSentinel(acc);
+        setContent(idx >= 0 ? acc.slice(0, idx) : acc);
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        acc += chunk;
-        setContent((prev) => prev + chunk);
+        acc += decoder.decode(value, { stream: true });
+        if (!frameQueued) {
+          frameQueued = true;
+          requestAnimationFrame(flush);
+        }
       }
+      flush(); // commit the final chunk
+
+      // Parse trailing sentinels: source map + token usage.
+      let briefSources: BriefSource[] = [];
+      let briefUsage: Usage | null = null;
+      const bIdx = acc.indexOf(BRIEFSOURCES_SENTINEL);
+      const uIdx = acc.indexOf(USAGE_SENTINEL);
+      if (bIdx >= 0) {
+        const end = uIdx > bIdx ? uIdx : acc.length;
+        try {
+          briefSources = JSON.parse(acc.slice(bIdx + BRIEFSOURCES_SENTINEL.length, end)) as BriefSource[];
+          setSources(briefSources);
+        } catch {
+          // ignore malformed sources
+        }
+      }
+      if (uIdx >= 0) {
+        try {
+          briefUsage = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
+          setUsage(briefUsage);
+        } catch {
+          // ignore malformed usage
+        }
+      }
+
+      const displayContent = firstSentinel(acc) >= 0 ? acc.slice(0, firstSentinel(acc)) : acc;
       const finishedAt = new Date();
       setGeneratedAt(finishedAt);
       // Persist the completed brief so the page hydrates instantly next visit
       try {
         localStorage.setItem(
           BRIEF_CACHE_KEY,
-          JSON.stringify({ content: acc, generatedAt: finishedAt.toISOString() }),
+          JSON.stringify({
+            content: displayContent,
+            generatedAt: finishedAt.toISOString(),
+            sources: briefSources,
+            usage: briefUsage,
+          }),
         );
       } catch {
         // quota errors — silently ignore
@@ -127,6 +234,27 @@ export function DailyBrief() {
     stream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
+
+  // Mark articles read straight from the brief (optimistic — matches the feeds
+  // UI, which also updates optimistically and lets sidebar counts lag).
+  const markRead = useCallback(async (ids: string[]) => {
+    const fresh = ids.filter(Boolean);
+    if (fresh.length === 0) return;
+    setReadIds((prev) => new Set([...prev, ...fresh]));
+    try {
+      const res = await setReadStatusAction({ articleIds: fresh, status: "read" });
+      if (!res.ok) throw new Error(res.error);
+      toast.success(fresh.length > 1 ? `Marked ${fresh.length} read` : "Marked read");
+    } catch {
+      // Revert on failure so the row reappears.
+      setReadIds((prev) => {
+        const next = new Set(prev);
+        fresh.forEach((id) => next.delete(id));
+        return next;
+      });
+      toast.error("Couldn't mark read");
+    }
+  }, []);
 
   function savePrompt() {
     try {
@@ -147,6 +275,9 @@ export function DailyBrief() {
     setCustomPrompt("");
   }
 
+  const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
+  const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
+
   return (
     <article className="prose-reader max-w-none">
       <div className="not-prose mb-6 flex items-center justify-between gap-3">
@@ -155,9 +286,23 @@ export function DailyBrief() {
           {loading ? (
             <span>Generating…</span>
           ) : generatedAt ? (
-            <span>
-              Generated {generatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              {savedPrompt && <span className="ml-2 rounded bg-accent px-1.5 py-0.5 text-[10px] normal-case tracking-normal">custom prompt</span>}
+            <span className="flex items-center gap-2">
+              <span>
+                Generated{" "}
+                {isStale
+                  ? generatedAt.toLocaleDateString([], { month: "short", day: "numeric" })
+                  : generatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+              {isStale && (
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-amber-600 dark:text-amber-400">
+                  stale — regenerate
+                </span>
+              )}
+              {savedPrompt && (
+                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] normal-case tracking-normal">
+                  custom prompt
+                </span>
+              )}
             </span>
           ) : null}
         </div>
@@ -241,9 +386,80 @@ export function DailyBrief() {
       )}
 
       {content && (
-        <div className="whitespace-pre-wrap text-[1.05rem] leading-[1.85]">
-          {content}
+        <div className="prose-reader text-[1.05rem] leading-[1.85]">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           {loading && <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />}
+        </div>
+      )}
+
+      {!loading && usage && usage.totalTokens > 0 && (
+        <div className="not-prose mt-6 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5">
+            Tokens consumed: {usage.totalTokens.toLocaleString()}
+          </span>
+          <span className="opacity-60">
+            ({usage.promptTokens.toLocaleString()} in · {usage.completionTokens.toLocaleString()} out)
+          </span>
+        </div>
+      )}
+
+      {!loading && sources.length > 0 && (
+        <div className="not-prose mt-8 border-t border-border pt-4">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+              <Newspaper className="h-3 w-3" /> Articles in this brief
+            </div>
+            {unreadSourceIds.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 gap-1 px-2 text-[10px]"
+                onClick={() => markRead(unreadSourceIds)}
+                title="Mark every article in this brief as read"
+              >
+                <CheckCheck className="h-3 w-3" /> Mark all read
+              </Button>
+            )}
+          </div>
+          <div className="space-y-1">
+            {sources.map((s) => {
+              const isRead = readIds.has(s.id);
+              return (
+                <div key={s.id} className={isRead ? "opacity-40 transition-opacity" : undefined}>
+                  <SourceRow
+                    badge={<SourceBadge n={s.n} />}
+                    title={s.title}
+                    subtitle={s.feedTitle}
+                    onClick={() => router.push(`/feeds?article=${s.id}`)}
+                    right={
+                      <>
+                        {!isRead && (
+                          <button
+                            onClick={() => markRead([s.id])}
+                            title="Mark read"
+                            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                          >
+                            <Check className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                        {s.url && (
+                          <a
+                            href={s.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title="Open original article"
+                            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </a>
+                        )}
+                      </>
+                    }
+                  />
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </article>

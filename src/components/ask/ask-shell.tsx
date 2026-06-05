@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
+import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
 const MODEL_STORAGE_KEY = "ask.model.v1";
@@ -498,20 +499,18 @@ function MessageBubble({
         <div className="space-y-1 border-t border-border pt-3">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Sources</div>
           {message.sources.map((s) => (
-            <button
+            <SourceRow
               key={s.directoryItemId + s.n}
+              badge={<SourceBadge n={s.n} />}
+              icon={<KindIcon kind={s.kind} />}
+              title={s.title}
+              trailing={
+                <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                  {Math.round(s.similarity * 100)}%
+                </span>
+              }
               onClick={() => onOpenSource(s.directoryItemId)}
-              className="group flex w-full items-center gap-2 rounded-md p-2 text-left text-xs transition-colors hover:bg-accent/50"
-            >
-              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-muted-foreground">
-                {s.n}
-              </span>
-              <KindIcon kind={s.kind} />
-              <span className="flex-1 truncate group-hover:underline">{s.title}</span>
-              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                {Math.round(s.similarity * 100)}%
-              </span>
-            </button>
+            />
           ))}
         </div>
       )}
@@ -521,16 +520,12 @@ function MessageBubble({
             <Globe className="h-3 w-3" /> Web sources
           </div>
           {message.webSources.map((s) => (
-            <a
+            <SourceRow
               key={s.url}
+              icon={<Globe className="h-3 w-3 shrink-0 text-muted-foreground" />}
+              title={s.title}
               href={s.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex w-full items-center gap-2 rounded-md p-2 text-left text-xs transition-colors hover:bg-accent/50"
-            >
-              <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
-              <span className="flex-1 truncate hover:underline">{s.title}</span>
-            </a>
+            />
           ))}
         </div>
       )}
