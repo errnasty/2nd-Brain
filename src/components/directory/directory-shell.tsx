@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ChevronLeft, FileText, GripVertical, LayoutGrid, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { ChevronLeft, FileText, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
 import { DirectoryBoard } from "./directory-board";
+import { GapsDialog } from "./gaps-dialog";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import type { DirectoryFolder } from "@/lib/db/schema";
 import type { ReadingStatus } from "@/lib/directory/query";
@@ -64,6 +65,7 @@ export function DirectoryShell({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"list" | "board">("list");
+  const [gapsOpen, setGapsOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   // Infinite scroll: seed from the server's first page, append more as the
@@ -277,6 +279,15 @@ export function DirectoryShell({
                 <LayoutGrid className="h-3.5 w-3.5" />
               </button>
             </div>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => setGapsOpen(true)}
+              title="Find knowledge gaps"
+            >
+              <Lightbulb className="h-3.5 w-3.5" />
+            </Button>
             <UploadButton onPick={onFilesPicked} />
             <Button
               size="icon"
@@ -323,6 +334,13 @@ export function DirectoryShell({
         selectedIds={Array.from(checkedIds)}
         folders={folders}
         onClear={clearSelection}
+      />
+
+      <GapsDialog
+        open={gapsOpen}
+        onOpenChange={setGapsOpen}
+        folder={activeFolder}
+        tagIds={activeTagIds}
       />
     </>
   );

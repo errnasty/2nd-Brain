@@ -33,6 +33,46 @@ type StreamArgs = {
  * @ai-sdk/anthropic (v1, AI SDK v4) doesn't expose the web-search tool, and a
  * full SDK v5 migration is higher-risk than this opt-in side path.
  */
+/**
+ * Non-streaming web-search synthesis. One Anthropic call with the native
+ * web_search server tool; returns the full text + the URLs actually cited.
+ * Used where we need the whole result at once (e.g. saving it as a note).
+ */
+export async function webAnswerOnce({
+  model,
+  system,
+  userContent,
+}: {
+  model: string;
+  system: string;
+  userContent: string;
+}): Promise<{ text: string; sources: WebSource[] }> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const msg = await client.messages.create({
+    model,
+    max_tokens: MAX_TOKENS,
+    system,
+    messages: [{ role: "user", content: userContent }],
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_SEARCHES }],
+  });
+
+  let text = "";
+  const seen = new Set<string>();
+  const sources: WebSource[] = [];
+  for (const block of msg.content) {
+    if (block.type !== "text") continue;
+    text += block.text;
+    if (!block.citations) continue;
+    for (const c of block.citations) {
+      if (c.type === "web_search_result_location" && c.url && !seen.has(c.url)) {
+        seen.add(c.url);
+        sources.push({ title: c.title ?? c.url, url: c.url });
+      }
+    }
+  }
+  return { text, sources };
+}
+
 export function streamWebAnswer({ model, system, userContent, history }: StreamArgs): ReadableStream<Uint8Array> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();

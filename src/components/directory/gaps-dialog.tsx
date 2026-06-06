@@ -1,0 +1,130 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { Lightbulb, Loader2, Search } from "lucide-react";
+import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
+
+type Gap = { topic: string; why: string };
+
+/**
+ * Knowledge-gap detector dialog. On open it asks /api/gaps for the current
+ * folder/tag scope, then each gap offers a one-click web "Research" that saves
+ * a briefing note into the Directory.
+ */
+export function GapsDialog({
+  open,
+  onOpenChange,
+  folder,
+  tagIds,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  folder: string | null;
+  tagIds: string[];
+}) {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [gaps, setGaps] = useState<Gap[] | null>(null);
+  const [scope, setScope] = useState("");
+  const [researching, setResearching] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    setGaps(null);
+    fetch("/api/gaps", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ folder, tagIds }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        setGaps(res.ok ? (data.gaps ?? []) : []);
+        setScope(data.scope ?? "");
+      })
+      .catch(() => setGaps([]))
+      .finally(() => setLoading(false));
+  }, [open, folder, tagIds]);
+
+  function research(topic: string) {
+    if (researching) return;
+    setResearching(topic);
+    const id = toast.loading(`Researching "${topic}"…`);
+    fetch("/api/gaps/research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ topic, folderId: folder && folder !== "unsorted" ? folder : null }),
+    })
+      .then(async (res) => {
+        const data = await res.json();
+        if (res.ok && data.itemId) {
+          toast.success("Saved research note", { id });
+          onOpenChange(false);
+          router.push(`/directory?item=${data.itemId}`);
+          router.refresh();
+        } else {
+          toast.error(data.error ?? "Research failed", { id });
+        }
+      })
+      .catch((e) => toast.error(e instanceof Error ? e.message : "Research failed", { id }))
+      .finally(() => setResearching(null));
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogPortal>
+        <DialogOverlay />
+        <DialogPrimitive.Content className="fixed left-[50%] top-[50%] z-50 w-full max-w-lg translate-x-[-50%] translate-y-[-50%] overflow-hidden rounded-xl border border-border bg-background p-5 shadow-2xl data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95">
+          <DialogPrimitive.Title className="mb-1 flex items-center gap-2 text-base font-semibold">
+            <Lightbulb className="h-4 w-4" /> Knowledge gaps
+          </DialogPrimitive.Title>
+          <p className="mb-4 text-xs text-muted-foreground">
+            Missing subtopics &amp; counter-perspectives in {scope || "this view"}.
+          </p>
+
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto">
+            {loading ? (
+              <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" /> Analyzing your collection…
+              </div>
+            ) : gaps && gaps.length === 0 ? (
+              <div className="py-6 text-center text-sm text-muted-foreground">
+                No obvious gaps — or not enough items in this view to analyze.
+              </div>
+            ) : (
+              gaps?.map((g) => (
+                <div
+                  key={g.topic}
+                  className="flex items-start gap-3 rounded-md border border-border p-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-medium">{g.topic}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">{g.why}</div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0 gap-1"
+                    disabled={researching !== null}
+                    onClick={() => research(g.topic)}
+                  >
+                    {researching === g.topic ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Search className="h-3.5 w-3.5" />
+                    )}
+                    Research
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogPrimitive.Content>
+      </DialogPortal>
+    </Dialog>
+  );
+}

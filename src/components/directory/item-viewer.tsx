@@ -20,6 +20,7 @@ import {
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
+import { ConnectionsPanel } from "@/components/reader/connections-panel";
 
 type ResolvedLink = { title: string; id: string | null };
 type Backlink = { id: string; title: string; kind: string };
@@ -402,6 +403,9 @@ export function ItemViewer({
               )}
             </div>
           )}
+
+          {/* Implicit connections + tensions (opt-in) */}
+          {!fullLoading && <ConnectionsPanel itemId={item.id} />}
 
           {/* Backlinks — items that link here via [[…]] */}
           {!fullLoading && backlinks.length > 0 && (
