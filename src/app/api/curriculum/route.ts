@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { webAnswerOnce, plainAnswerOnce } from "@/lib/ai/web-answer";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { createNoteAction } from "@/app/(app)/directory/actions";
@@ -10,14 +11,24 @@ export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const SYSTEM = `You research a topic to fill a gap in the user's personal knowledge base.
-Write a concise markdown briefing: a short overview, the key points as bullets,
-and a few open questions to explore further. Use web search for current/factual
-detail and cite as you go. Keep it tight and skimmable.`;
+const SYSTEM = `You are a curriculum designer building a structured learning path.
+
+Organize the path into three markdown sections:
+## Prerequisites
+## Core Concepts
+## Advanced Applications
+
+For each, list concrete subtopics, each with a one-line description.
+- When an existing library item fits a subtopic, link it inline using
+  [[Exact Title]] copied VERBATIM from the provided list (only those titles).
+- Where the library has no coverage, append "(gap)" so the user knows to
+  research it.
+Keep it skimmable. Output clean markdown only — no preamble.`;
 
 /**
- * Research a knowledge gap via web search and save the result as a new note in
- * the Directory (the ground-truth store). One Anthropic call.
+ * Topic deep-dive / curriculum generator. Maps existing Directory items into a
+ * Prereqs→Core→Advanced path via [[wikilinks]], fills gaps (web when enabled),
+ * and saves the result as a living note. One AI call (+ one vector search).
  */
 export async function POST(req: Request) {
   let user;
@@ -42,24 +53,27 @@ export async function POST(req: Request) {
   }
   const topic = (body.topic ?? "").trim();
   if (!topic) return NextResponse.json({ error: "topic required" }, { status: 400 });
-
   const folderId = body.folderId && UUID_RE.test(body.folderId) ? body.folderId : null;
 
-  const userContent = `Topic to research for my knowledge base: ${topic}`;
   try {
-    // Try web search first; if the web_search tool isn't enabled on the org (or
-    // any web error), fall back to a plain completion so a note is still saved.
+    // Existing items to weave into the path as [[wikilinks]].
+    const related = await retrieveFromDirectory(user.id, topic, 15);
+    const seen = new Set<string>();
+    const linkList = related
+      .map((r) => r.title)
+      .filter((t) => (seen.has(t) ? false : (seen.add(t), true)))
+      .map((t) => `[[${t}]]`)
+      .join("\n");
+
+    const userContent = `Topic: ${topic}\n\nExisting library items you may link with [[Exact Title]] (use these titles verbatim, only when relevant):\n${linkList || "(none yet)"}`;
+
     let text = "";
     let sources: { title: string; url: string }[] = [];
     try {
       const r = await webAnswerOnce({ model: DEFAULT_CHAT_MODEL, system: SYSTEM, userContent });
       text = r.text;
       sources = r.sources;
-    } catch (webErr) {
-      console.warn(
-        "gaps/research web search failed, falling back to no-web:",
-        webErr instanceof Error ? webErr.message : webErr,
-      );
+    } catch {
       const r = await plainAnswerOnce({ model: DEFAULT_CHAT_MODEL, system: SYSTEM, userContent });
       text = r.text;
     }
@@ -67,11 +81,14 @@ export async function POST(req: Request) {
 
     const sourcesBlock =
       sources.length > 0
-        ? `\n\n## Sources\n${sources.map((s) => `- [${s.title}](${s.url})`).join("\n")}`
+        ? `\n\n## Further reading\n${sources.map((s) => `- [${s.title}](${s.url})`).join("\n")}`
         : "";
-    const content = `${text}${sourcesBlock}`;
 
-    const r = await createNoteAction({ title: `Research: ${topic}`, content, folderId });
+    const r = await createNoteAction({
+      title: `Curriculum: ${topic}`,
+      content: `${text}${sourcesBlock}`,
+      folderId,
+    });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
     return NextResponse.json({ ok: true, itemId: r.itemId });
   } catch (err) {

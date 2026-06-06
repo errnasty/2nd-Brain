@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Brain, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -17,6 +17,7 @@ import {
   deleteDirectoryItemAction,
   updateNoteAction,
 } from "@/app/(app)/directory/actions";
+import { generateFlashcardsAction } from "@/app/(app)/review/actions";
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
@@ -280,6 +281,21 @@ export function ItemViewer({
           className={queryOpen ? "text-primary" : ""}
         >
           <Sparkles className="h-4 w-4" />
+        </Button>
+
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() =>
+            startTransition(async () => {
+              const r = await generateFlashcardsAction(item.id);
+              if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
+              else toast.error(r.error);
+            })
+          }
+          title="Make flashcards"
+        >
+          <Brain className="h-4 w-4" />
         </Button>
 
         <Button size="icon" variant="ghost" onClick={handleDelete} title="Delete">

@@ -33,6 +33,21 @@ higher-trust source — prefer and lead with it. Use web_search only to fill gap
 the document can't answer or to add current/external context, and make clear
 which claims came from the web.`;
 
+// Socratic tutor: quiz the user instead of answering. The document is provided
+// in the system prompt (once) so multi-turn history stays cheap.
+const SYSTEM_SOCRATIC = `You are a Socratic tutor examining the user on ONE document.
+
+Behaviour:
+- Do NOT lecture or answer for them. Ask ONE focused question at a time about a
+  key concept in the document.
+- When the user answers, briefly evaluate it: what's correct, what's missing or
+  wrong. Give a short score like "3/5".
+- Then ask the next question, progressing from basics to deeper understanding.
+- Pinpoint weak spots and quote the short phrase from the document they should
+  revisit.
+- Keep each turn short. If the user says "start"/"begin" or sends nothing, open
+  with your first question.`;
+
 function resolveModel(modelId: string | undefined): { model: LanguageModelV1; provider: string } {
   const chosen = getChatModel(modelId);
   if (chosen.provider === "openai") {
@@ -41,12 +56,15 @@ function resolveModel(modelId: string | undefined): { model: LanguageModelV1; pr
   return { model: anthropic(chosen.id), provider: "anthropic" };
 }
 
+type Turn = { role: "user" | "assistant"; content: string };
 type Body = {
   title?: string;
   content?: string;
   question?: string;
   model?: string;
   web?: boolean;
+  mode?: "qa" | "socratic";
+  history?: Turn[];
 };
 
 export async function POST(req: Request) {
@@ -76,7 +94,9 @@ export async function POST(req: Request) {
   const title = (body.title ?? "").trim() || "Untitled";
   const content = (body.content ?? "").trim();
 
-  if (!question) return new Response("Question is required.", { status: 400 });
+  const socratic = body.mode === "socratic";
+  if (!socratic && !question)
+    return new Response("Question is required.", { status: 400 });
   if (!content) return new Response("This document has no readable text to query.", { status: 400 });
 
   const { model, provider } = resolveModel(body.model);
@@ -109,12 +129,25 @@ export async function POST(req: Request) {
     );
   }
 
-  const result = streamText({
-    model,
-    system: SYSTEM,
-    messages: [{ role: "user", content: userMessage }],
-    temperature: 0.3,
-  });
+  // Socratic: doc lives in the system prompt (sent once); multi-turn history
+  // keeps the quiz going cheaply. QA: single message with the doc inline.
+  const history = (body.history ?? []).slice(-8);
+  const result = socratic
+    ? streamText({
+        model,
+        system: `${SYSTEM_SOCRATIC}\n\nDOCUMENT (title: ${title}):\n"""\n${docText}\n"""`,
+        messages: [
+          ...history.map((m) => ({ role: m.role, content: m.content })),
+          { role: "user" as const, content: question || "Begin." },
+        ],
+        temperature: 0.5,
+      })
+    : streamText({
+        model,
+        system: SYSTEM,
+        messages: [{ role: "user", content: userMessage }],
+        temperature: 0.3,
+      });
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({

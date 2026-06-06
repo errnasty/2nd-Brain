@@ -8,6 +8,7 @@ import {
   pgEnum,
   pgTable,
   primaryKey,
+  real,
   text,
   timestamp,
   uniqueIndex,
@@ -375,9 +376,34 @@ export type DocumentChunk = typeof documentChunks.$inferSelect;
 export type DirectoryFolder = typeof directoryFolders.$inferSelect;
 export type DirectoryItem = typeof directoryItems.$inferSelect;
 export type DirectoryLink = typeof directoryLinks.$inferSelect;
+// Spaced-repetition flashcards (SM-2). Generated on demand from a Directory item.
+export const directoryFlashcards = pgTable(
+  "directory_flashcards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id").references(() => directoryItems.id, { onDelete: "set null" }),
+    question: text("question").notNull(),
+    answer: text("answer").notNull(),
+    ease: real("ease").default(2.5).notNull(),
+    intervalDays: integer("interval_days").default(0).notNull(),
+    repetitions: integer("repetitions").default(0).notNull(),
+    dueDate: timestamp("due_date", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    dueIdx: index("directory_flashcards_due_idx").on(t.userId, t.dueDate),
+    itemIdx: index("directory_flashcards_item_idx").on(t.itemId),
+  }),
+);
+
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
+export type DirectoryFlashcard = typeof directoryFlashcards.$inferSelect;
 
 export const SCHEMA_INIT_SQL = sql`CREATE EXTENSION IF NOT EXISTS vector;`;
 export { EMBEDDING_DIMS };

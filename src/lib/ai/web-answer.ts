@@ -73,6 +73,33 @@ export async function webAnswerOnce({
   return { text, sources };
 }
 
+/**
+ * Plain (no-tool) one-shot completion. Fallback for environments where the
+ * web_search server tool isn't enabled on the Anthropic org.
+ */
+export async function plainAnswerOnce({
+  model,
+  system,
+  userContent,
+}: {
+  model: string;
+  system: string;
+  userContent: string;
+}): Promise<{ text: string }> {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const msg = await client.messages.create({
+    model,
+    max_tokens: MAX_TOKENS,
+    system,
+    messages: [{ role: "user", content: userContent }],
+  });
+  const text = msg.content
+    .filter((b): b is Extract<typeof b, { type: "text" }> => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+  return { text };
+}
+
 export function streamWebAnswer({ model, system, userContent, history }: StreamArgs): ReadableStream<Uint8Array> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();

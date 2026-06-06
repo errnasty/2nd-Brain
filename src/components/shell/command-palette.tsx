@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
+  Brain,
   CheckSquare,
   FileText,
   FolderTree,
@@ -28,6 +29,7 @@ const NAV: NavCommand[] = [
   { label: "Feeds", href: "/feeds", icon: <Rss className="h-4 w-4" />, keywords: "articles rss reader" },
   { label: "Directory", href: "/directory", icon: <FolderTree className="h-4 w-4" />, keywords: "notes docs folders" },
   { label: "Tasks", href: "/tasks", icon: <CheckSquare className="h-4 w-4" />, keywords: "todo checkbox due" },
+  { label: "Review", href: "/review", icon: <Brain className="h-4 w-4" />, keywords: "flashcards spaced repetition srs" },
   { label: "Ask", href: "/ask", icon: <Search className="h-4 w-4" />, keywords: "chat question rag" },
   { label: "Map", href: "/map", icon: <Network className="h-4 w-4" />, keywords: "graph knowledge" },
   { label: "Tags", href: "/tags", icon: <Hash className="h-4 w-4" />, keywords: "labels taxonomy" },

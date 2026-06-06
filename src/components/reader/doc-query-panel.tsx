@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Globe, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
+import { GraduationCap, Globe, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -73,6 +73,8 @@ export function DocQueryPanel({
   const [usage, setUsage] = useState<Usage | null>(null);
   const [webSources, setWebSources] = useState<WebSource[]>([]);
   const [web, setWeb] = useState(false);
+  const [socratic, setSocratic] = useState(false);
+  const [turns, setTurns] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [managing, setManaging] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -158,6 +160,81 @@ export function DocQueryPanel({
     }
   }
 
+  // Socratic tutor: multi-turn quiz scoped to this document. Sends prior turns
+  // as history; the doc lives server-side in the system prompt (sent once).
+  async function runSocratic(text: string) {
+    if (streaming) return;
+    const plain = toPlainText(content);
+    if (!plain) {
+      toast.error("No readable text in this document yet.");
+      return;
+    }
+    const history = turns;
+    setTurns((t) => [...t, { role: "user", content: text || "Begin." }, { role: "assistant", content: "" }]);
+    setQuestion("");
+    setStreaming(true);
+
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    try {
+      const res = await fetch("/api/ask-document", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title,
+          content: plain,
+          question: text,
+          model: getModel(),
+          mode: "socratic",
+          history,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        const msg = await res.text().catch(() => "");
+        toast.error(msg || `Request failed (${res.status})`);
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        const cut = firstSentinel(acc);
+        const display = cut >= 0 ? acc.slice(0, cut) : acc;
+        setTurns((t) => {
+          const next = [...t];
+          next[next.length - 1] = { role: "assistant", content: display };
+          return next;
+        });
+      }
+    } catch (err) {
+      if ((err as Error)?.name !== "AbortError") {
+        toast.error(err instanceof Error ? err.message : "Request failed");
+      }
+    } finally {
+      setStreaming(false);
+    }
+  }
+
+  function toggleSocratic() {
+    const next = !socratic;
+    setSocratic(next);
+    if (next) {
+      setTurns([]);
+      void runSocratic(""); // open with the first question
+    }
+  }
+
+  function send() {
+    if (socratic) void runSocratic(question);
+    else void ask(question);
+  }
+
   function addPrompt() {
     const label = window.prompt("Prompt name (e.g. 'Tweet thread')")?.trim();
     if (!label) return;
@@ -207,18 +284,33 @@ export function DocQueryPanel({
           <Globe className="h-3 w-3" /> Web
         </button>
         <button
-          onClick={() => setManaging((m) => !m)}
-          className="text-xs text-muted-foreground hover:text-foreground"
+          onClick={toggleSocratic}
+          disabled={streaming}
+          title="Socratic mode — Claude quizzes you on this document"
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors disabled:opacity-50 ${
+            socratic
+              ? "border-primary/40 bg-primary/10 text-primary"
+              : "border-border text-muted-foreground hover:text-foreground"
+          }`}
         >
-          {managing ? "Done" : "Manage prompts"}
+          <GraduationCap className="h-3 w-3" /> Quiz
         </button>
+        {!socratic && (
+          <button
+            onClick={() => setManaging((m) => !m)}
+            className="text-xs text-muted-foreground hover:text-foreground"
+          >
+            {managing ? "Done" : "Manage prompts"}
+          </button>
+        )}
         <button onClick={onClose} className="text-muted-foreground hover:text-foreground" title="Close">
           <X className="h-4 w-4" />
         </button>
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto p-3">
-        {/* Saved prompt presets */}
+        {/* Saved prompt presets (hidden in quiz mode) */}
+        {!socratic && (
         <div className="flex flex-wrap gap-1.5">
           {prompts.map((p) => (
             <span key={p.id} className="inline-flex items-center">
@@ -250,8 +342,36 @@ export function DocQueryPanel({
             </button>
           )}
         </div>
+        )}
 
-        {/* Free-form question */}
+        {/* Socratic transcript */}
+        {socratic && turns.length > 0 && (
+          <div className="space-y-2">
+            {turns.map((t, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "rounded-md p-2.5 text-sm",
+                  t.role === "user" ? "ml-6 bg-accent" : "mr-2 border border-border bg-background",
+                )}
+              >
+                {t.role === "assistant" ? (
+                  <div className="prose-reader prose-sm max-w-none">
+                    {t.content ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{t.content}</ReactMarkdown>
+                    ) : (
+                      <span className="text-muted-foreground">Thinking…</span>
+                    )}
+                  </div>
+                ) : (
+                  t.content
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Free-form question / answer input */}
         <div className="flex items-end gap-2">
           <Textarea
             value={question}
@@ -259,20 +379,24 @@ export function DocQueryPanel({
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
-                ask(question);
+                send();
               }
             }}
-            placeholder="Ask anything about this document… (⌘/Ctrl+Enter)"
+            placeholder={
+              socratic
+                ? "Type your answer… (⌘/Ctrl+Enter)"
+                : "Ask anything about this document… (⌘/Ctrl+Enter)"
+            }
             className="min-h-[2.5rem] flex-1 resize-none text-sm"
             rows={2}
           />
-          <Button size="icon" onClick={() => ask(question)} disabled={streaming || !question.trim()}>
+          <Button size="icon" onClick={send} disabled={streaming || !question.trim()}>
             <Send className="h-4 w-4" />
           </Button>
         </div>
 
-        {/* Answer */}
-        {(answer || streaming) && (
+        {/* Answer (Q&A mode only) */}
+        {!socratic && (answer || streaming) && (
           <div className="rounded-md border border-border bg-background p-3">
             <div className="prose-reader prose-sm max-w-none text-sm">
               {answer ? (

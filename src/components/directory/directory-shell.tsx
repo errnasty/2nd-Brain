@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ChevronLeft, FileText, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { ChevronLeft, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -20,6 +20,7 @@ import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
 import { DirectoryBoard } from "./directory-board";
 import { GapsDialog } from "./gaps-dialog";
+import { CurriculumDialog } from "./curriculum-dialog";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import type { DirectoryFolder } from "@/lib/db/schema";
 import type { ReadingStatus } from "@/lib/directory/query";
@@ -66,6 +67,7 @@ export function DirectoryShell({
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"list" | "board">("list");
   const [gapsOpen, setGapsOpen] = useState(false);
+  const [curriculumOpen, setCurriculumOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   // Infinite scroll: seed from the server's first page, append more as the
@@ -283,6 +285,15 @@ export function DirectoryShell({
               size="icon"
               variant="ghost"
               className="h-7 w-7"
+              onClick={() => setCurriculumOpen(true)}
+              title="Generate curriculum"
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
               onClick={() => setGapsOpen(true)}
               title="Find knowledge gaps"
             >
@@ -341,6 +352,12 @@ export function DirectoryShell({
         onOpenChange={setGapsOpen}
         folder={activeFolder}
         tagIds={activeTagIds}
+      />
+
+      <CurriculumDialog
+        open={curriculumOpen}
+        onOpenChange={setCurriculumOpen}
+        folder={activeFolder}
       />
     </>
   );
