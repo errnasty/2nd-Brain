@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDownUp, Check, CheckCheck, Copy, Loader2, Search, Star, X } from "lucide-react";
+import { ArrowDownUp, Check, CheckCheck, ChevronLeft, Copy, Loader2, Search, Star, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FeedsBulkBar } from "@/components/feeds/feeds-bulk-bar";
 import {
@@ -245,6 +245,14 @@ export function ArticleList({
         selectedId ? "hidden" : "flex",
       )}
     >
+      {/* Mobile: back to the folder list (desktop has the sidebar). */}
+      <button
+        onClick={() => router.push("/feeds")}
+        className="flex items-center gap-1 px-3 pt-3 text-xs text-muted-foreground hover:text-foreground md:hidden"
+      >
+        <ChevronLeft className="h-3.5 w-3.5" /> Folders
+      </button>
+
       {/* Search */}
       <div className="px-3 pt-3">
         <div className="relative">

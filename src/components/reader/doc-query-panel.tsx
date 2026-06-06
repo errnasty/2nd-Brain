@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { Globe, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import {
@@ -50,12 +51,18 @@ function toPlainText(s: string): string {
  * Per-document "Ask about this" panel. Queries Claude scoped to the open
  * document only, with reusable saved prompts (Inoreader-style). Used by both
  * the feeds article reader and the directory item viewer.
+ *
+ * Renders as a right-side drawer (full-width on mobile, ~420px on desktop) so
+ * it sits beside the reading content instead of pushing it. No desktop scrim —
+ * the document stays readable while you ask.
  */
 export function DocQueryPanel({
+  open,
   title,
   content,
   onClose,
 }: {
+  open: boolean;
   title: string;
   content: string;
   onClose: () => void;
@@ -168,7 +175,23 @@ export function DocQueryPanel({
   }
 
   return (
-    <div className="not-prose mt-8 rounded-lg border border-border bg-muted/30">
+    <>
+      {/* Mobile-only scrim. Desktop has none so the document stays interactive. */}
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-black/40 transition-opacity sm:hidden",
+          open ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside
+        className={cn(
+          "not-prose fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border bg-background shadow-xl transition-transform duration-200 sm:w-[420px]",
+          open ? "translate-x-0" : "translate-x-full",
+        )}
+        aria-hidden={!open}
+      >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Sparkles className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">Ask about this document</span>
@@ -194,7 +217,7 @@ export function DocQueryPanel({
         </button>
       </div>
 
-      <div className="space-y-3 p-3">
+      <div className="flex-1 space-y-3 overflow-y-auto p-3">
         {/* Saved prompt presets */}
         <div className="flex flex-wrap gap-1.5">
           {prompts.map((p) => (
@@ -287,6 +310,7 @@ export function DocQueryPanel({
           </div>
         )}
       </div>
-    </div>
+      </aside>
+    </>
   );
 }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  CheckSquare,
   Library,
   MessageCircle,
   Network,
@@ -19,6 +20,7 @@ const nav = [
   { href: "/ask", label: "Ask", icon: MessageCircle },
   { href: "/feeds", label: "Feeds", icon: Rss },
   { href: "/directory", label: "Directory", icon: Library },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/tags", label: "Tags", icon: Tag },
 ];

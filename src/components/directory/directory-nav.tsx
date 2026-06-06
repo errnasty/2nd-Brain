@@ -172,7 +172,9 @@ export function DirectoryNav({
           />
 
           <button
-            onClick={() => setFolder(null)}
+            // scope=all marks an explicit "show everything" so the mobile
+            // drill-down switches from the folder list to the item list.
+            onClick={() => router.push("/directory?scope=all")}
             className={cn(
               "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
               !activeFolder

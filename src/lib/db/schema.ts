@@ -25,6 +25,14 @@ export const directoryItemKindEnum = pgEnum("directory_item_kind", [
   "uploaded_document",
   "user_note",
 ]);
+// Reading pipeline states for Directory items (Kanban). Distinct from the
+// feed `read_status` enum — that's per-article unread/read/archived.
+export const directoryReadingStatusEnum = pgEnum("directory_reading_status", [
+  "inbox",
+  "reading",
+  "done",
+  "review",
+]);
 
 export const profiles = pgTable("profiles", {
   id: uuid("id").primaryKey().notNull(),
@@ -229,6 +237,8 @@ export const directoryItems = pgTable(
     articleId: uuid("article_id").references(() => articles.id, { onDelete: "set null" }),
     documentId: uuid("document_id").references(() => documents.id, { onDelete: "set null" }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    // Reading pipeline (Kanban) state. Defaults to 'inbox' for every item.
+    readingStatus: directoryReadingStatusEnum("reading_status").default("inbox").notNull(),
     // For user_note rows we store the embedding directly here (notes have no
     // separate documents row). For saved_article + uploaded_document this is
     // left null — their embeddings live on article_embeddings / document_chunks.
@@ -238,6 +248,11 @@ export const directoryItems = pgTable(
   },
   (t) => ({
     userKindUpdatedIdx: index("directory_items_user_idx").on(t.userId, t.kind, t.updatedAt),
+    readingStatusIdx: index("directory_items_reading_status_idx").on(
+      t.userId,
+      t.readingStatus,
+      t.updatedAt,
+    ),
     folderIdx: index("directory_items_folder_idx").on(t.folderId),
     articleIdx: index("directory_items_article_idx").on(t.articleId),
     documentIdx: index("directory_items_document_idx").on(t.documentId),
@@ -323,6 +338,34 @@ export const rateLimits = pgTable(
   }),
 );
 
+// Markdown checkbox tasks extracted from Directory items. Materialized so the
+// global / Today view doesn't have to scan every note's content. Re-synced
+// whenever the host item is saved: delete the item's rows, re-insert parsed.
+export const directoryTasks = pgTable(
+  "directory_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => directoryItems.id, { onDelete: "cascade" }),
+    text: text("text").notNull(),
+    done: boolean("done").default(false).notNull(),
+    dueDate: timestamp("due_date", { withTimezone: true, mode: "date" }),
+    // Locate the source line for safe toggle/rewrite back into the markdown.
+    lineIndex: integer("line_index").notNull(),
+    rawLine: text("raw_line").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userIdx: index("directory_tasks_user_idx").on(t.userId, t.done, t.dueDate),
+    itemIdx: index("directory_tasks_item_idx").on(t.itemId),
+  }),
+);
+
 export type Profile = typeof profiles.$inferSelect;
 export type Folder = typeof folders.$inferSelect;
 export type Feed = typeof feeds.$inferSelect;
@@ -334,6 +377,7 @@ export type DirectoryItem = typeof directoryItems.$inferSelect;
 export type DirectoryLink = typeof directoryLinks.$inferSelect;
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
+export type DirectoryTask = typeof directoryTasks.$inferSelect;
 
 export const SCHEMA_INIT_SQL = sql`CREATE EXTENSION IF NOT EXISTS vector;`;
 export { EMBEDDING_DIMS };

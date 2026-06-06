@@ -46,6 +46,7 @@ export default async function DirectoryLayout({ children }: { children: React.Re
     <DirectoryDndShell>
       <ResizableShell
         storageId="directory-shell"
+        mobileRoute="directory"
         nav={
           <DirectoryNav
             folders={folders}

@@ -13,7 +13,11 @@ import { toast } from "sonner";
 import {
   bulkMoveDirectoryItemsAction,
   moveDirectoryFolderToParentAction,
+  updateReadingStatusAction,
 } from "@/app/(app)/directory/actions";
+
+type ReadingStatus = "inbox" | "reading" | "done" | "review";
+const READING_STATUSES: ReadingStatus[] = ["inbox", "reading", "done", "review"];
 
 /**
  * Owns the DnD context for the entire Directory route so an item dragged out
@@ -35,6 +39,19 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
     const targetId = event.over?.id;
     if (!targetId) return;
     const target = String(targetId);
+
+    // Kanban: dropping an item card onto a reading-pipeline column.
+    if (target.startsWith("status:")) {
+      const status = target.slice("status:".length) as ReadingStatus;
+      if (!READING_STATUSES.includes(status)) return;
+      startTransition(async () => {
+        const r = await updateReadingStatusAction({ id: activeId, status });
+        if (r.ok) router.refresh();
+        else toast.error(r.error);
+      });
+      return;
+    }
+
     if (!target.startsWith("folder:")) return;
 
     // Two kinds of drag sources:

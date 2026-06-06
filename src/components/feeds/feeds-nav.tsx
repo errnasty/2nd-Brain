@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import Image from "next/image";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   CheckCheck,
   ChevronDown,
   ChevronRight,
@@ -153,22 +154,37 @@ export function FeedsNav({
             disabled={pending}
             onClick={() =>
               startTransition(async () => {
+                const toastId = toast.loading("Syncing feeds…");
+                let totalSynced = 0;
+                let totalFailed = 0;
                 try {
-                  const r = await syncAllAction();
-                  if (r.ok) {
-                    toast.success(
-                      `Synced ${r.synced} feed${r.synced === 1 ? "" : "s"}` +
-                        (r.failed > 0 ? ` · ${r.failed} failed` : "") +
-                        (r.remaining > 0 ? ` · ${r.remaining} left, tap sync again` : ""),
-                    );
-                  } else if ("alreadyRunning" in r) {
-                    toast.info("A sync is already running — hang tight.");
-                  } else {
-                    toast.error(`Sync failed: ${r.error}`);
+                  // Each call is time-boxed (~8s) and processes the stalest feeds
+                  // first, so loop until nothing is left. Cap iterations as a
+                  // safety net against an unexpected non-decreasing remaining.
+                  for (let i = 0; i < 25; i += 1) {
+                    const r = await syncAllAction();
+                    if (!r.ok) {
+                      if ("alreadyRunning" in r) {
+                        toast.info("A sync is already running — hang tight.", { id: toastId });
+                      } else {
+                        toast.error(`Sync failed: ${r.error}`, { id: toastId });
+                      }
+                      return;
+                    }
+                    totalSynced += r.synced;
+                    totalFailed += r.failed;
+                    if (r.remaining <= 0) break;
+                    toast.loading(`Syncing feeds… ${r.remaining} left`, { id: toastId });
                   }
+                  toast.success(
+                    `Synced ${totalSynced} feed${totalSynced === 1 ? "" : "s"}` +
+                      (totalFailed > 0 ? ` · ${totalFailed} failed (see ⚠ in list)` : ""),
+                    { id: toastId },
+                  );
                 } catch (err) {
                   toast.error(
                     `Sync failed: ${err instanceof Error ? err.message : "unknown error"}.`,
+                    { id: toastId },
                   );
                 }
               })
@@ -611,6 +627,11 @@ function FeedRow({
               />
             ) : (
               <span className="flex-1 truncate text-sm">{feed.title}</span>
+            )}
+            {!renaming && feed.lastError && (
+              <span className="shrink-0" title={`Last sync failed: ${feed.lastError}`}>
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+              </span>
             )}
             {!renaming && count > 0 && (
               <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">

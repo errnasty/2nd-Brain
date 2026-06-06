@@ -403,15 +403,6 @@ export function ItemViewer({
             </div>
           )}
 
-          {/* Per-document query panel */}
-          {queryOpen && (
-            <DocQueryPanel
-              title={title}
-              content={isNote ? content : isDoc ? content || docBody : articleData?.fullText ?? articleData?.excerpt ?? ""}
-              onClose={() => setQueryOpen(false)}
-            />
-          )}
-
           {/* Backlinks — items that link here via [[…]] */}
           {!fullLoading && backlinks.length > 0 && (
             <div className="not-prose mt-10 border-t border-border pt-4">
@@ -435,6 +426,12 @@ export function ItemViewer({
           )}
         </div>
       </ScrollArea>
+      <DocQueryPanel
+        open={queryOpen}
+        title={title}
+        content={isNote ? content : isDoc ? content || docBody : articleData?.fullText ?? articleData?.excerpt ?? ""}
+        onClose={() => setQueryOpen(false)}
+      />
     </section>
   );
 }

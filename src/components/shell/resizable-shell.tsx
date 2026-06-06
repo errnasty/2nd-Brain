@@ -9,6 +9,7 @@ import {
 } from "react-resizable-panels";
 import { PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MobileShell } from "./mobile-shell";
 
 /**
  * Two-pane horizontal split with a draggable handle. Panel widths persist via
@@ -27,6 +28,7 @@ export function ResizableShell({
   defaultNavSize = 22,
   minNavSize = 14,
   maxNavSize = 40,
+  mobileRoute,
 }: {
   nav: ReactNode;
   children: ReactNode;
@@ -34,6 +36,9 @@ export function ResizableShell({
   defaultNavSize?: number;
   minNavSize?: number;
   maxNavSize?: number;
+  /** When set, mobile uses a folders→list→reader drill-down instead of just
+   *  rendering content (the bottom nav can't browse feed/directory folders). */
+  mobileRoute?: "feeds" | "directory";
 }) {
   const panelRef = useRef<ImperativePanelHandle>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -52,6 +57,13 @@ export function ResizableShell({
   }, []);
 
   if (isMobile) {
+    if (mobileRoute) {
+      return (
+        <MobileShell route={mobileRoute} nav={nav}>
+          {children}
+        </MobileShell>
+      );
+    }
     return <div className="h-full w-full overflow-hidden">{children}</div>;
   }
 

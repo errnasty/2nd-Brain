@@ -35,6 +35,7 @@ export default async function FeedsLayout({ children }: { children: React.ReactN
       <UnreadTitle count={totalUnread} />
       <ResizableShell
         storageId="feeds-shell"
+        mobileRoute="feeds"
         nav={<FeedsNav folders={foldersList} feeds={feedsList} unread={unread} />}
       >
         <div className="flex h-full overflow-hidden">{children}</div>

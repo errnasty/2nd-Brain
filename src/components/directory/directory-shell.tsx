@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { FileText, GripVertical, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { ChevronLeft, FileText, GripVertical, LayoutGrid, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -17,8 +18,10 @@ import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
+import { DirectoryBoard } from "./directory-board";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import type { DirectoryFolder } from "@/lib/db/schema";
+import type { ReadingStatus } from "@/lib/directory/query";
 
 export type DirectoryListItem = {
   id: string;
@@ -31,6 +34,7 @@ export type DirectoryListItem = {
   sourceUrl: string | null;
   articleId: string | null;
   documentId: string | null;
+  readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -56,8 +60,10 @@ export function DirectoryShell({
   activeFolder: string | null;
   activeTagIds: string[];
 }) {
+  const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [view, setView] = useState<"list" | "board">("list");
   const [, startTransition] = useTransition();
 
   // Infinite scroll: seed from the server's first page, append more as the
@@ -101,6 +107,12 @@ export function DirectoryShell({
       }
     });
   }, [loadingMore, pageHasMore, activeFolder, activeTagIds, offset]);
+
+  // Board view needs the full set grouped into columns, so eagerly pull all
+  // remaining pages while the board is open (the list view lazy-loads instead).
+  useEffect(() => {
+    if (view === "board" && pageHasMore && !loadingMore) loadMore();
+  }, [view, pageHasMore, loadingMore, loadMore]);
 
   // Clear bulk selection when the visible items list changes (folder/filter switch)
   useEffect(() => {
@@ -210,23 +222,61 @@ export function DirectoryShell({
 
   return (
     <>
-      {/* Items list */}
+      {/* Items list / board */}
       <section
         className={cn(
-          "w-full flex-col border-r border-border md:max-w-sm md:shrink-0 md:flex",
-          // Mobile: hide list when an item is open; reader takes full screen.
+          "w-full flex-col border-r border-border md:flex",
+          view === "board" ? "flex-1" : "md:max-w-sm md:shrink-0",
+          // Mobile: hide when an item is open; reader takes full screen.
           selectedId ? "hidden" : "flex",
         )}
       >
         <div className="flex items-center justify-between px-3 py-3">
-          <div className="text-sm font-semibold">
-            {activeTagIds.length > 0
-              ? `${countLabel} tagged`
-              : activeFolder
-                ? `${countLabel} items`
-                : "All items"}
+          <div className="flex items-center gap-1.5">
+            {/* Mobile: back to the folder list (desktop has the sidebar). */}
+            <button
+              onClick={() => router.push("/directory")}
+              className="-ml-1 text-muted-foreground hover:text-foreground md:hidden"
+              title="Folders"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <div className="text-sm font-semibold">
+              {activeTagIds.length > 0
+                ? `${countLabel} tagged`
+                : activeFolder
+                  ? `${countLabel} items`
+                  : "All items"}
+            </div>
           </div>
           <div className="flex items-center gap-0.5">
+            {/* List / Board toggle */}
+            <div className="mr-1 flex items-center rounded-md border border-border p-0.5">
+              <button
+                onClick={() => setView("list")}
+                title="List view"
+                className={cn(
+                  "rounded p-1 transition-colors",
+                  view === "list"
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <List className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setView("board")}
+                title="Board view (reading pipeline)"
+                className={cn(
+                  "rounded p-1 transition-colors",
+                  view === "board"
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+            </div>
             <UploadButton onPick={onFilesPicked} />
             <Button
               size="icon"
@@ -246,6 +296,8 @@ export function DirectoryShell({
               ? "No items match the selected tags."
               : "No items yet. Create a note, upload a PDF, or save articles from your feeds."}
           </div>
+        ) : view === "board" ? (
+          <DirectoryBoard items={allItems} selectedId={selectedId} onOpen={selectItem} />
         ) : (
           <VirtualizedDirectoryList
             items={allItems}

@@ -377,18 +377,19 @@ export function ArticleReader({
                 </div>
               )}
               {content && <div dangerouslySetInnerHTML={{ __html: content }} />}
-              {article && queryOpen && (
-                <DocQueryPanel
-                  title={article.title}
-                  content={content ?? article.excerpt ?? ""}
-                  onClose={() => setQueryOpen(false)}
-                />
-              )}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
             </>
           )}
         </article>
       </ScrollArea>
+      {article && (
+        <DocQueryPanel
+          open={queryOpen}
+          title={article.title}
+          content={content ?? article.excerpt ?? ""}
+          onClose={() => setQueryOpen(false)}
+        />
+      )}
     </section>
   );
 }

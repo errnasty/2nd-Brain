@@ -2,6 +2,8 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryItems, itemTags, tags } from "@/lib/db/schema";
 
+export type ReadingStatus = "inbox" | "reading" | "done" | "review";
+
 export type DirItem = {
   id: string;
   title: string;
@@ -11,6 +13,7 @@ export type DirItem = {
   sourceUrl: string | null;
   articleId: string | null;
   documentId: string | null;
+  readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -72,6 +75,7 @@ export async function fetchDirectoryPage(
       sourceUrl: directoryItems.sourceUrl,
       articleId: directoryItems.articleId,
       documentId: directoryItems.documentId,
+      readingStatus: directoryItems.readingStatus,
       createdAt: directoryItems.createdAt,
       updatedAt: directoryItems.updatedAt,
     })

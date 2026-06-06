@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { Sidebar } from "@/components/shell/sidebar";
 import { MobileNav } from "@/components/shell/mobile-nav";
 import { CommandPalette } from "@/components/shell/command-palette";
+import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createSupabaseServerClient();
@@ -21,6 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <main className="flex-1 overflow-hidden pb-14 md:pb-0">{children}</main>
       <MobileNav />
       <CommandPalette />
+      <GlobalShortcuts />
     </div>
   );
 }

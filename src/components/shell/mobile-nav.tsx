@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  CheckSquare,
   ChevronRight,
   FolderClosed,
   Inbox,
@@ -21,6 +22,7 @@ import type { CachedFolder } from "@/lib/offline/db";
 const TABS = [
   { href: "/feeds", label: "Feeds", icon: Rss },
   { href: "/directory", label: "Directory", icon: Library },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/ask", label: "Ask", icon: MessageCircle },
   { href: "/tags", label: "Tags", icon: Tag },
 ];

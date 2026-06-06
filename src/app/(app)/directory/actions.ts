@@ -21,6 +21,7 @@ import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
 import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
+import { syncDirectoryTasks } from "@/lib/tasks/sync";
 import { bustMapCache } from "@/lib/map-cache";
 import { fetchDirectoryPage, type DirectoryPage } from "@/lib/directory/query";
 
@@ -302,6 +303,7 @@ export async function createNoteAction(input: { title: string; content?: string;
   // Embed the note in the background so Ask can find it (no await).
   void embedNote(row.id, user.id, parsed.data.title, parsed.data.content ?? null);
   void syncWikilinks(user.id, row.id, parsed.data.content ?? null);
+  void syncDirectoryTasks(user.id, row.id, parsed.data.content ?? null);
 
   bustMapCache(user.id);
   revalidatePath("/directory");
@@ -353,9 +355,10 @@ export async function updateNoteAction(input: {
       .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)))
       .limit(1);
 
-    // Re-derive wikilinks from the new text (notes + docs).
+    // Re-derive wikilinks + tasks from the new text (notes + docs).
     if (contentChanged) {
       void syncWikilinks(user.id, parsed.data.id, parsed.data.content ?? null);
+      void syncDirectoryTasks(user.id, parsed.data.id, parsed.data.content ?? null);
     }
 
     if (row?.kind === "user_note") {
@@ -446,6 +449,32 @@ export async function bulkMoveDirectoryItemsAction(itemIds: string[], folderId: 
   bustMapCache(user.id);
   revalidatePath("/directory");
   return { ok: true as const, count: result.length };
+}
+
+// ── Reading pipeline (Kanban) ────────────────────────────────────────
+
+const READING_STATUSES = ["inbox", "reading", "done", "review"] as const;
+const ReadingStatusSchema = z.object({
+  id: z.string().uuid(),
+  status: z.enum(READING_STATUSES),
+});
+
+/** Move a Directory item to a reading-pipeline column. */
+export async function updateReadingStatusAction(input: {
+  id: string;
+  status: (typeof READING_STATUSES)[number];
+}) {
+  const parsed = ReadingStatusSchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid status" };
+  const { user } = await requireUser();
+  await db
+    .update(directoryItems)
+    // Bump updatedAt so the card floats to the top of its new column
+    // (columns auto-sort by recency).
+    .set({ readingStatus: parsed.data.status, updatedAt: new Date() })
+    .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)));
+  revalidatePath("/directory");
+  return { ok: true as const };
 }
 
 // ── Save an article to the Directory ────────────────────────────────

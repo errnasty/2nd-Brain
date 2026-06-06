@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { SettingsShortcuts } from "@/components/shell/keyboard-shortcuts";
 
 export default async function SettingsPage() {
   const { user } = await requireUser();
@@ -11,6 +12,9 @@ export default async function SettingsPage() {
           <p className="mt-1 text-sm text-muted-foreground">{user.email}</p>
         </header>
         <SettingsForm />
+        <div className="mt-8">
+          <SettingsShortcuts />
+        </div>
       </div>
     </div>
   );
