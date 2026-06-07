@@ -25,6 +25,11 @@
     --input: 38 14% 86%;
     --ring: 24 18% 9%;
     --radius: 0.4rem;
+    /* Warm brass accent — the single highlight color (primary CTAs, active nav).
+       38% L on the 97% L parchment background clears WCAG AA (4.5:1) even for
+       the small bottom-nav labels. */
+    --brand: 30 72% 38%;
+    --brand-foreground: 40 25% 97%;
   }
 
   .dark {
@@ -48,6 +53,9 @@
     --border: 24 6% 17%;
     --input: 24 6% 17%;
     --ring: 40 10% 76%;
+    /* Lighter brass for dark mode (desaturated/raised L for contrast). */
+    --brand: 36 65% 60%;
+    --brand-foreground: 24 8% 8%;
   }
 }
 

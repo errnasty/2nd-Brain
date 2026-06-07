@@ -18,8 +18,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
       <Sidebar userEmail={user.email ?? ""} />
-      {/* pb-14 on mobile keeps content clear of the fixed bottom tab bar */}
-      <main className="flex-1 overflow-hidden pb-14 md:pb-0">{children}</main>
+      {/* On mobile, clear the fixed top app bar and bottom tab bar (+ safe
+          areas). Desktop has neither, so the padding collapses at md+. */}
+      <main className="flex-1 overflow-hidden pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pt-0 md:pb-0">
+        {children}
+      </main>
       <MobileNav />
       <CommandPalette />
       <GlobalShortcuts />

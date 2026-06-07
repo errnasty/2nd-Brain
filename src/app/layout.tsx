@@ -17,7 +17,10 @@ export const viewport: Viewport = {
   ],
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  // Allow pinch-zoom (a11y); cover so env(safe-area-inset-*) resolves on notch
+  // devices for the fixed mobile top/bottom bars.
+  maximumScale: 5,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

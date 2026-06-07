@@ -8,65 +8,192 @@ import {
   FolderClosed,
   GraduationCap,
   Inbox,
-  Layers,
   Library,
+  Menu,
   MessageCircle,
+  MoreHorizontal,
+  Network,
   Rss,
+  Search,
+  Settings,
+  Sparkles,
   Tag,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { useSidebarData } from "@/lib/offline/use-sidebar-data";
 import type { CachedFolder } from "@/lib/offline/db";
 
+// Primary top-level destinations (bottom bar, ≤5 incl. the More button).
 const TABS = [
+  { href: "/today", label: "Today", icon: Sparkles },
   { href: "/feeds", label: "Feeds", icon: Rss },
   { href: "/directory", label: "Directory", icon: Library },
-  { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/ask", label: "Ask", icon: MessageCircle },
-  { href: "/tags", label: "Tags", icon: Tag },
 ];
 
+// Secondary sections — surfaced through the "More" sheet, not the bottom bar.
+const MORE_LINKS = [
+  { href: "/map", label: "Knowledge Map", icon: Network },
+  { href: "/study", label: "Study", icon: GraduationCap },
+  { href: "/tags", label: "Tags", icon: Tag },
+  { href: "/settings", label: "Settings", icon: Settings },
+];
+
+const TITLES: Record<string, string> = {
+  "/today": "Today's Brief",
+  "/feeds": "Feeds",
+  "/directory": "Directory",
+  "/ask": "Ask",
+  "/map": "Knowledge Map",
+  "/study": "Study",
+  "/tags": "Tags",
+  "/settings": "Settings",
+};
+
+function titleFor(pathname: string): string {
+  const hit = Object.keys(TITLES).find((p) => pathname === p || pathname.startsWith(p));
+  return hit ? TITLES[hit] : "Second Brain";
+}
+
 /**
- * Mobile-only (<768px) bottom navigation + slide-out folder drawer.
- * The drawer's folder tree is offline-first: it paints from the IndexedDB
- * mirror immediately and reconciles with the server in the background.
+ * Mobile-only (<768px) chrome: a top app bar (browse drawer · title · search ·
+ * theme) and a bottom tab bar with a More overflow sheet. The folder drawer is
+ * offline-first — it paints from the IndexedDB mirror, then reconciles.
  */
 export function MobileNav() {
   const pathname = usePathname();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const onMoreRoute = MORE_LINKS.some((l) => pathname.startsWith(l.href));
 
   return (
     <>
-      {/* Bottom tab bar */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-border bg-card/95 backdrop-blur md:hidden">
+      {/* Top app bar */}
+      <header
+        className="fixed inset-x-0 top-0 z-40 flex items-center gap-1 border-b border-border bg-card/95 px-1.5 backdrop-blur md:hidden"
+        style={{ height: "calc(3rem + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}
+      >
         <button
           onClick={() => setDrawerOpen(true)}
-          className="flex flex-1 flex-col items-center justify-center gap-0.5 py-2 text-muted-foreground"
-          aria-label="Browse folders"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Browse folders and tags"
         >
-          <Layers className="h-5 w-5" />
-          <span className="text-[10px]">Browse</span>
+          <Menu className="h-[18px] w-[18px]" />
         </button>
+        <span className="flex-1 truncate px-1 text-sm font-semibold tracking-tight">
+          {titleFor(pathname)}
+        </span>
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Search"
+        >
+          <Search className="h-[18px] w-[18px]" />
+        </button>
+        <ThemeToggle />
+      </header>
+
+      {/* Bottom tab bar */}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-border bg-card/95 backdrop-blur md:hidden"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
         {TABS.map(({ href, label, icon: Icon }) => {
           const active = pathname === href || pathname.startsWith(href);
           return (
             <Link
               key={href}
               href={href}
+              aria-current={active ? "page" : undefined}
               className={cn(
-                "flex flex-1 flex-col items-center justify-center gap-0.5 py-2 transition-colors",
-                active ? "text-foreground" : "text-muted-foreground",
+                "relative flex min-h-[3rem] flex-1 flex-col items-center justify-center gap-0.5 py-1.5 transition-colors",
+                active ? "text-brand" : "text-muted-foreground",
               )}
             >
+              {active && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-brand" />}
               <Icon className="h-5 w-5" />
               <span className="text-[10px]">{label}</span>
             </Link>
           );
         })}
+        <button
+          onClick={() => setMoreOpen(true)}
+          aria-label="More sections"
+          className={cn(
+            "relative flex min-h-[3rem] flex-1 flex-col items-center justify-center gap-0.5 py-1.5 transition-colors",
+            onMoreRoute ? "text-brand" : "text-muted-foreground",
+          )}
+        >
+          {onMoreRoute && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-brand" />}
+          <MoreHorizontal className="h-5 w-5" />
+          <span className="text-[10px]">More</span>
+        </button>
       </nav>
 
       <FolderDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+      <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} activePath={pathname} />
+    </>
+  );
+}
+
+function MoreSheet({
+  open,
+  onClose,
+  activePath,
+}: {
+  open: boolean;
+  onClose: () => void;
+  activePath: string;
+}) {
+  return (
+    <>
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-black/50 transition-opacity md:hidden",
+          open ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+        onClick={onClose}
+        aria-hidden
+      />
+      <div
+        className={cn(
+          "fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t border-border bg-card transition-transform duration-200 md:hidden",
+          open ? "translate-y-0" : "translate-y-full",
+        )}
+        style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.5rem)" }}
+        role="dialog"
+        aria-label="More sections"
+        aria-hidden={!open}
+      >
+        <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border" />
+        <div className="flex items-center justify-between px-4 py-3">
+          <span className="text-sm font-semibold">More</span>
+          <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-accent" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <nav className="px-2 pb-2">
+          {MORE_LINKS.map(({ href, label, icon: Icon }) => {
+            const active = activePath.startsWith(href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                onClick={onClose}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-3 text-sm transition-colors",
+                  active ? "bg-accent text-accent-foreground" : "hover:bg-accent",
+                )}
+              >
+                <Icon className="h-5 w-5 text-muted-foreground" />
+                <span>{label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+      </div>
     </>
   );
 }
