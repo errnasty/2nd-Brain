@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Bookmark,
   Check,
   CheckCheck,
   ExternalLink,
@@ -28,7 +29,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
-import { setReadStatusAction } from "@/app/(app)/feeds/actions";
+import { cn } from "@/lib/utils";
+import { setReadStatusAction, toggleStarredAction } from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -107,6 +109,7 @@ export function DailyBrief() {
   const [newArticles, setNewArticles] = useState(false);
   const [history, setHistory] = useState<BriefEntry[]>([]);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
@@ -139,13 +142,20 @@ export function DailyBrief() {
           fingerprint?: string;
         };
         if (parsed.content) {
-          setContent(parsed.content);
-          setSources(parsed.sources ?? []);
-          setUsage(parsed.usage ?? null);
-          setFingerprint(parsed.fingerprint ?? null);
-          setGeneratedAt(new Date(parsed.generatedAt));
-          setLoading(false);
-          setHydratedFromCache(true);
+          const genDate = new Date(parsed.generatedAt);
+          // The brief stays put until the user regenerates — EXCEPT across a day
+          // boundary, where we auto-regenerate. Same day → hydrate from cache.
+          // Prior day → leave hydratedFromCache false so the auto-stream effect
+          // below generates a fresh brief.
+          if (isSameDay(genDate, new Date())) {
+            setContent(parsed.content);
+            setSources(parsed.sources ?? []);
+            setUsage(parsed.usage ?? null);
+            setFingerprint(parsed.fingerprint ?? null);
+            setGeneratedAt(genDate);
+            setLoading(false);
+            setHydratedFromCache(true);
+          }
         }
       }
     } catch {
@@ -167,6 +177,7 @@ export function DailyBrief() {
     setUsage(null);
     setNewArticles(false);
     setReadIds(new Set());
+    setSavedIds(new Set());
     try {
       const systemPrompt = (promptOverride ?? savedPrompt).trim();
       const res = await fetch("/api/brief", {
@@ -289,6 +300,18 @@ export function DailyBrief() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
 
+  // Tab left open across midnight: regenerate when it regains focus on a new
+  // day. (Fresh-open on a new day is handled by the hydrate effect above.)
+  useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState !== "visible") return;
+      if (loading || !generatedAt) return;
+      if (!isSameDay(generatedAt, new Date())) stream();
+    }
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loading, generatedAt, stream]);
+
   // Showing a cached brief? Cheaply ask the server whether the unread set has
   // drifted (id-only fingerprint, no model). If so, nudge to regenerate
   // instead of silently showing a stale brief.
@@ -332,6 +355,29 @@ export function DailyBrief() {
       toast.error("Couldn't mark read");
     }
   }, []);
+
+  // Save an article to "read later" (= star). Optimistic; toggles on re-click.
+  const toggleSaved = useCallback(async (id: string) => {
+    const willSave = !savedIds.has(id);
+    setSavedIds((prev) => {
+      const next = new Set(prev);
+      if (willSave) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+    try {
+      await toggleStarredAction(id, willSave);
+      toast.success(willSave ? "Saved to read later" : "Removed from saved");
+    } catch {
+      setSavedIds((prev) => {
+        const next = new Set(prev);
+        if (willSave) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      toast.error("Couldn't update saved");
+    }
+  }, [savedIds]);
 
   function savePrompt() {
     try {
@@ -439,7 +485,7 @@ export function DailyBrief() {
             <Settings className="mr-1.5 h-3.5 w-3.5" />
             Prompt
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => stream()} disabled={loading}>
+          <Button size="sm" variant="brand" onClick={() => stream()} disabled={loading}>
             {loading ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -475,7 +521,7 @@ export function DailyBrief() {
             <Button size="sm" variant="ghost" onClick={resetPrompt}>
               Reset to default
             </Button>
-            <Button size="sm" onClick={savePrompt}>
+            <Button size="sm" variant="brand" onClick={savePrompt}>
               Save &amp; regenerate
             </Button>
           </div>
@@ -509,14 +555,14 @@ export function DailyBrief() {
       )}
 
       {content && (
-        <div className="prose-reader text-[1.05rem] leading-[1.85]">
+        <div className="prose-reader max-w-[68ch] text-[1.05rem] leading-[1.85]">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           {loading && <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />}
         </div>
       )}
 
       {!loading && usage && usage.totalTokens > 0 && (
-        <div className="not-prose mt-6 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <div className="not-prose mt-6 flex items-center gap-1.5 text-[10px] tabular-nums text-muted-foreground">
           <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5">
             Tokens consumed: {usage.totalTokens.toLocaleString()}
           </span>
@@ -556,6 +602,20 @@ export function DailyBrief() {
                     onClick={() => router.push(`/feeds?article=${s.id}`)}
                     right={
                       <>
+                        <button
+                          onClick={() => toggleSaved(s.id)}
+                          title={savedIds.has(s.id) ? "Saved — remove" : "Save to read later"}
+                          className={cn(
+                            "shrink-0 rounded p-1 transition-opacity hover:bg-accent",
+                            savedIds.has(s.id)
+                              ? "text-brand opacity-100"
+                              : "text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100",
+                          )}
+                        >
+                          <Bookmark
+                            className={cn("h-3.5 w-3.5", savedIds.has(s.id) && "fill-current")}
+                          />
+                        </button>
                         {!isRead && (
                           <button
                             onClick={() => markRead([s.id])}

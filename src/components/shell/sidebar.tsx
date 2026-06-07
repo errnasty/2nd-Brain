@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
+  Bookmark,
   GraduationCap,
   Library,
   MessageCircle,
@@ -19,6 +20,7 @@ const nav = [
   { href: "/today", label: "Today", icon: Sparkles },
   { href: "/ask", label: "Ask", icon: MessageCircle },
   { href: "/feeds", label: "Feeds", icon: Rss },
+  { href: "/feeds?view=starred", label: "Read Later", icon: Bookmark },
   { href: "/directory", label: "Directory", icon: Library },
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/map", label: "Knowledge Map", icon: Network },
@@ -27,6 +29,15 @@ const nav = [
 
 export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
+  const params = useSearchParams();
+  const starred = params.get("view") === "starred";
+
+  function isActive(href: string): boolean {
+    if (href === "/feeds?view=starred") return pathname.startsWith("/feeds") && starred;
+    if (href === "/feeds") return pathname.startsWith("/feeds") && !starred;
+    return pathname === href || (href !== "/" && pathname.startsWith(href));
+  }
+
   return (
     <aside className="hidden w-60 shrink-0 border-r border-border md:flex md:flex-col">
       <div className="px-4 py-5">
@@ -37,7 +48,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
       <ScrollArea className="flex-1">
         <nav className="p-2 space-y-0.5">
           {nav.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href || (href !== "/" && pathname.startsWith(href));
+            const active = isActive(href);
             return (
               <Link
                 key={href}

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDownUp, Check, CheckCheck, ChevronLeft, Copy, Loader2, Search, Star, X } from "lucide-react";
+import { AlignJustify, ArrowDownUp, Check, CheckCheck, ChevronLeft, Copy, Inbox, Loader2, Search, Star, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FeedsBulkBar } from "@/components/feeds/feeds-bulk-bar";
 import {
@@ -122,6 +122,27 @@ export function ArticleList({
       setLoadingMore(false);
     }
   }, [loadingMore, hasMore, view, feedId, folderId, sort, items.length, extra.length]);
+
+  // Row density (compact vs comfortable), persisted locally.
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    try {
+      setCompact(localStorage.getItem("feeds.compact.v1") === "1");
+    } catch {
+      // ignore
+    }
+  }, []);
+  function toggleCompact() {
+    setCompact((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("feeds.compact.v1", next ? "1" : "0");
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }
 
   // Multi-select for bulk actions.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -290,7 +311,7 @@ export function ArticleList({
           <ViewLink view="starred" current={view} label="Starred" />
         </div>
         <div className="flex items-center gap-0.5">
-          <SortControls />
+          <SortControls compact={compact} onToggleCompact={toggleCompact} />
           <Button
             size="sm"
             variant="ghost"
@@ -307,11 +328,35 @@ export function ArticleList({
       <Separator />
 
       {displayed.length === 0 ? (
-        <div className="p-6 text-sm text-muted-foreground">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
           {showingSearch ? (
-            <>No articles match &ldquo;{query}&rdquo;.</>
+            <>
+              <Search className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground">
+                No articles match &ldquo;{query}&rdquo;.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => setQuery("")}>
+                Clear search
+              </Button>
+            </>
           ) : (
-            <>No articles. Try syncing your feeds.</>
+            <>
+              <Inbox className="h-8 w-8 text-muted-foreground/40" />
+              <p className="text-sm font-medium">
+                {view === "unread"
+                  ? "You're all caught up"
+                  : view === "starred"
+                    ? "Nothing saved yet"
+                    : "No articles here"}
+              </p>
+              <p className="max-w-xs text-xs text-muted-foreground">
+                {view === "unread"
+                  ? "No unread articles in this view. Switch to All, or sync your feeds for more."
+                  : view === "starred"
+                    ? "Save articles from your Daily Brief or any reader to read them later."
+                    : "Try syncing your feeds to pull in new articles."}
+              </p>
+            </>
           )}
         </div>
       ) : (
@@ -325,6 +370,7 @@ export function ArticleList({
           onLoadMore={loadMore}
           loadingMore={loadingMore}
           canLoadMore={!showingSearch && hasMore}
+          compact={compact}
         />
       )}
 
@@ -356,6 +402,7 @@ function VirtualizedArticleList({
   onLoadMore,
   loadingMore,
   canLoadMore,
+  compact,
 }: {
   items: ArticleListItem[];
   itemTagsById: Record<string, string[]>;
@@ -366,13 +413,14 @@ function VirtualizedArticleList({
   onLoadMore: () => void;
   loadingMore: boolean;
   canLoadMore: boolean;
+  compact: boolean;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 112,
+    estimateSize: () => (compact ? 56 : 112),
     overscan: 6,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
@@ -391,6 +439,11 @@ function VirtualizedArticleList({
     io.observe(el);
     return () => io.disconnect();
   }, [canLoadMore, onLoadMore]);
+
+  // Row heights change with density — force the virtualizer to re-measure.
+  useEffect(() => {
+    virtualizer.measure();
+  }, [compact, virtualizer]);
 
   return (
     <div ref={parentRef} className="flex-1 overflow-y-auto">
@@ -428,7 +481,8 @@ function VirtualizedArticleList({
               <button
                 onClick={() => onOpen(item.id)}
                 className={cn(
-                  "flex w-full gap-3 py-4 pr-4 text-left transition-colors",
+                  "flex w-full gap-3 pr-4 text-left transition-colors",
+                  compact ? "py-2" : "py-4",
                   selected.size > 0 ? "pl-9" : "pl-4",
                   selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
                   selected.has(item.id) && "bg-accent/40",
@@ -436,7 +490,7 @@ function VirtualizedArticleList({
                 )}
               >
                 <div className="min-w-0 flex-1">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <div className={cn("flex items-center gap-1.5 text-[11px] text-muted-foreground", compact ? "mb-0.5" : "mb-1.5")}>
                     {item.feedIconUrl ? (
                       <Image
                         src={item.feedIconUrl}
@@ -460,12 +514,12 @@ function VirtualizedArticleList({
                   >
                     {item.title}
                   </div>
-                  {item.excerpt && (
+                  {!compact && item.excerpt && (
                     <div className="mt-1.5 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
                       {item.excerpt}
                     </div>
                   )}
-                  {itemTagsById[item.id] && itemTagsById[item.id].length > 0 && (
+                  {!compact && itemTagsById[item.id] && itemTagsById[item.id].length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {itemTagsById[item.id].slice(0, 5).map((tag) => (
                         <span
@@ -478,7 +532,7 @@ function VirtualizedArticleList({
                     </div>
                   )}
                 </div>
-                {item.imageUrl && (
+                {!compact && item.imageUrl && (
                   <Image
                     src={item.imageUrl}
                     alt=""
@@ -538,7 +592,13 @@ const SORT_LABELS: Record<string, string> = {
   hot: "Hot (recent)",
 };
 
-function SortControls() {
+function SortControls({
+  compact,
+  onToggleCompact,
+}: {
+  compact: boolean;
+  onToggleCompact: () => void;
+}) {
   const router = useRouter();
   const params = useSearchParams();
   const sort = params.get("sort") ?? "newest";
@@ -585,6 +645,10 @@ function SortControls() {
         >
           <Copy className="mr-2 h-3.5 w-3.5" />
           Hide duplicates
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem checked={compact} onCheckedChange={onToggleCompact}>
+          <AlignJustify className="mr-2 h-3.5 w-3.5" />
+          Compact rows
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>

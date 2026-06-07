@@ -64,13 +64,15 @@
     @apply border-border;
   }
   html {
-    font-family: Georgia, "Times New Roman", serif;
     /* Global type scale set from Settings. Tailwind is rem-based, so scaling
        the root font-size scales the whole UI. Default 100% (16px). */
     font-size: var(--app-font-scale, 100%);
   }
   body {
     @apply bg-background text-foreground antialiased;
+    /* Body font is switchable from Settings (--app-font-body); Georgia is the
+       default + fallback so text renders before prefs hydrate. */
+    font-family: var(--app-font-body, Georgia, "Times New Roman", serif);
     font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
     text-rendering: optimizeLegibility;
   }
@@ -85,11 +87,21 @@
   kbd {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
+  /* App-wide keyboard focus ring. :where() has zero specificity so components
+     with their own focus styles still win; this only fills the gaps (custom
+     buttons, nav, palette rows) that previously had no visible focus. Mouse
+     users are unaffected — :focus-visible only triggers for keyboard/AT. */
+  :where(a, button, [role="button"], [tabindex="0"]):focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
 }
 
 /* ── Reader ─────────────────────────────────────────────────────────── */
 .prose-reader {
-  font-family: var(--reader-font, Georgia), "Times New Roman", serif;
+  /* Per-article reader override (--reader-font) wins; otherwise inherit the
+     app-wide font chosen in Settings (--app-font-body); Georgia as last resort. */
+  font-family: var(--reader-font, var(--app-font-body, Georgia)), "Times New Roman", serif;
   font-size: var(--reader-font-size, 19px);
   line-height: var(--reader-line-height, 1.85);
   @apply max-w-[68ch] mx-auto;

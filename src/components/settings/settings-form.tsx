@@ -2,20 +2,31 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
-import { Check, Minus, Monitor, Moon, Plus, RotateCcw, Sun } from "lucide-react";
+import { Check, ChevronDown, Minus, Monitor, Moon, Plus, RotateCcw, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import {
+  FONT_FAMILY_DEFAULT,
+  FONT_OPTIONS,
   FONT_SCALE_DEFAULT,
   FONT_SCALE_MAX,
   FONT_SCALE_MIN,
+  getFontFamily,
   getFontScale,
   getReduceMotion,
+  setFontFamily,
   setFontScale,
   setReduceMotion,
+  type FontId,
 } from "@/lib/settings";
 import { toast } from "sonner";
 
@@ -37,12 +48,14 @@ export function SettingsForm() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [fontScale, setFontScaleState] = useState(FONT_SCALE_DEFAULT);
+  const [fontFamily, setFontFamilyState] = useState<FontId>(FONT_FAMILY_DEFAULT);
   const [reduceMotion, setReduceMotionState] = useState(false);
   const [model, setModel] = useState(DEFAULT_CHAT_MODEL);
 
   useEffect(() => {
     setMounted(true);
     setFontScaleState(getFontScale());
+    setFontFamilyState(getFontFamily());
     setReduceMotionState(getReduceMotion());
     try {
       const m = localStorage.getItem(MODEL_STORAGE_KEY);
@@ -58,6 +71,11 @@ export function SettingsForm() {
     setFontScale(next);
   }
 
+  function chooseFont(id: FontId) {
+    setFontFamilyState(id);
+    setFontFamily(id);
+  }
+
   function chooseModel(id: string) {
     setModel(id);
     try {
@@ -71,6 +89,7 @@ export function SettingsForm() {
     setTheme("dark");
     setFontScaleState(FONT_SCALE_DEFAULT);
     setFontScale(FONT_SCALE_DEFAULT);
+    chooseFont(FONT_FAMILY_DEFAULT);
     setReduceMotionState(false);
     setReduceMotion(false);
     chooseModel(DEFAULT_CHAT_MODEL);
@@ -128,6 +147,36 @@ export function SettingsForm() {
               <Plus className="h-3.5 w-3.5" />
             </Button>
           </div>
+        </Row>
+
+        <Separator />
+
+        <Row title="Reading font" desc="Body typeface across the app.">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-8 min-w-[9rem] justify-between gap-2">
+                <span style={{ fontFamily: FONT_OPTIONS.find((f) => f.id === fontFamily)?.stack }}>
+                  {FONT_OPTIONS.find((f) => f.id === fontFamily)?.label}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {FONT_OPTIONS.map((f) => (
+                <DropdownMenuItem
+                  key={f.id}
+                  onClick={() => chooseFont(f.id)}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="flex flex-col" style={{ fontFamily: f.stack }}>
+                    <span className="text-sm">{f.label}</span>
+                    <span className="text-xs text-muted-foreground">Aa — the quick brown fox</span>
+                  </span>
+                  {fontFamily === f.id && <Check className="h-3.5 w-3.5 shrink-0" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </Row>
 
         <Separator />

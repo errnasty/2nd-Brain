@@ -424,6 +424,7 @@ export function AskShell() {
           <Button
             type="submit"
             size="icon"
+            variant="brand"
             className="absolute bottom-2 right-2 h-8 w-8"
             disabled={streaming || !input.trim()}
             title="Send (Enter)"
@@ -480,7 +481,7 @@ const MessageBubble = memo(function MessageBubble({
   }
   return (
     <div className="space-y-3">
-      <div className="prose-reader text-[15px] leading-[1.75]">
+      <div className="prose-reader max-w-[70ch] text-[15px] leading-[1.75]">
         {message.content ? (
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         ) : (
@@ -488,7 +489,7 @@ const MessageBubble = memo(function MessageBubble({
         )}
       </div>
       {message.usage && message.usage.totalTokens > 0 && (
-        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-[10px] tabular-nums text-muted-foreground">
           <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5">
             Tokens consumed: {message.usage.totalTokens.toLocaleString()}
           </span>

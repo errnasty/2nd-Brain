@@ -5,6 +5,41 @@
 
 export const FONT_SCALE_KEY = "app.fontScale.v1"; // percentage, e.g. "100"
 export const REDUCE_MOTION_KEY = "app.reduceMotion.v1"; // "true" | "false"
+export const FONT_FAMILY_KEY = "app.fontFamily.v1"; // FontId
+
+// Body font options. The non-system fonts are loaded by next/font in the root
+// layout, which exposes them as CSS variables (--font-crimson etc.); the stack
+// references those with a Georgia/system fallback so text never goes invisible.
+export type FontId = "georgia" | "crimson" | "lora" | "dmsans";
+
+export const FONT_OPTIONS: { id: FontId; label: string; kind: "Serif" | "Sans"; stack: string }[] = [
+  { id: "georgia", label: "Georgia", kind: "Serif", stack: 'Georgia, "Times New Roman", serif' },
+  { id: "crimson", label: "Crimson Pro", kind: "Serif", stack: 'var(--font-crimson), Georgia, serif' },
+  { id: "lora", label: "Lora", kind: "Serif", stack: 'var(--font-lora), Georgia, serif' },
+  { id: "dmsans", label: "DM Sans", kind: "Sans", stack: 'var(--font-dm-sans), system-ui, sans-serif' },
+];
+
+export const FONT_FAMILY_DEFAULT: FontId = "georgia";
+
+function fontStack(id: FontId): string {
+  return (FONT_OPTIONS.find((f) => f.id === id) ?? FONT_OPTIONS[0]).stack;
+}
+
+export function getFontFamily(): FontId {
+  if (typeof window === "undefined") return FONT_FAMILY_DEFAULT;
+  const raw = localStorage.getItem(FONT_FAMILY_KEY) as FontId | null;
+  return raw && FONT_OPTIONS.some((f) => f.id === raw) ? raw : FONT_FAMILY_DEFAULT;
+}
+
+export function applyFontFamily(id: FontId) {
+  if (typeof document === "undefined") return;
+  document.documentElement.style.setProperty("--app-font-body", fontStack(id));
+}
+
+export function setFontFamily(id: FontId) {
+  localStorage.setItem(FONT_FAMILY_KEY, id);
+  applyFontFamily(id);
+}
 
 export const FONT_SCALE_MIN = 85;
 export const FONT_SCALE_MAX = 130;
@@ -47,4 +82,5 @@ export function setReduceMotion(on: boolean) {
 export function applyStoredSettings() {
   applyFontScale(getFontScale());
   applyReduceMotion(getReduceMotion());
+  applyFontFamily(getFontFamily());
 }

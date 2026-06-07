@@ -1,8 +1,15 @@
 import type { Metadata, Viewport } from "next";
+import { Crimson_Pro, DM_Sans, Lora } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SettingsEffects } from "@/components/settings-effects";
 import { Toaster } from "sonner";
 import "./globals.css";
+
+// Optional body fonts (default stays Georgia/system). next/font self-hosts them
+// and exposes CSS variables the Settings font picker switches between.
+const crimson = Crimson_Pro({ subsets: ["latin"], display: "swap", variable: "--font-crimson" });
+const lora = Lora({ subsets: ["latin"], display: "swap", variable: "--font-lora" });
+const dmSans = DM_Sans({ subsets: ["latin"], display: "swap", variable: "--font-dm-sans" });
 
 export const metadata: Metadata = {
   title: "Second Brain",
@@ -25,8 +32,8 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className="font-serif">
+    <html lang="en" suppressHydrationWarning className={`${crimson.variable} ${lora.variable} ${dmSans.variable}`}>
+      <body>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
           <SettingsEffects />
           {children}

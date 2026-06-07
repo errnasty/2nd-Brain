@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ArticleList, type ArticleListItem } from "./article-list";
 import { ArticleReader } from "./article-reader";
 
@@ -41,17 +41,27 @@ export function FeedsShell({
     return () => window.removeEventListener("popstate", fromUrl);
   }, []);
 
-  // When the article list scope changes (different feed/folder/view), the
-  // previously-selected article may no longer be in `orderedIds`. Clear it.
+  // Clear the open article only when the user actually changes scope
+  // (feed/folder/view) and it's no longer in the new list. We must NOT clear on
+  // mount: a deep link from the Daily Brief (?article=…) often points at an
+  // article outside the current list (read, or older than the 100 loaded), and
+  // the reader fetches it by id regardless — clearing here blanked it.
+  const scopeKey = `${view}|${feedId}|${folderId}`;
+  const prevScope = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedId) return;
-    if (!orderedIds.includes(selectedId)) {
+    if (prevScope.current === null) {
+      prevScope.current = scopeKey; // first mount — keep URL-linked selection
+      return;
+    }
+    if (prevScope.current === scopeKey) return; // same scope (e.g. refresh) — keep
+    prevScope.current = scopeKey;
+    if (selectedId && !orderedIds.includes(selectedId)) {
       setSelectedId(null);
       const url = new URL(window.location.href);
       url.searchParams.delete("article");
       window.history.replaceState(null, "", url.toString());
     }
-  }, [orderedIds, selectedId]);
+  }, [scopeKey, orderedIds, selectedId]);
 
   const onSelect = useCallback((id: string | null) => {
     setSelectedId(id);
