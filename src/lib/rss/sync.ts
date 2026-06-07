@@ -82,9 +82,10 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
   }
 }
 
-// Max feeds processed concurrently. 5 keeps one invocation off any single
-// origin too hard.
-const SYNC_BATCH = 5;
+// Max feeds processed concurrently. Feeds are network-bound (each is a remote
+// fetch+parse), so higher concurrency cuts wall-clock a lot; 12 stays well
+// within socket/memory limits while finishing far more feeds per invocation.
+const SYNC_BATCH = 12;
 
 // Wall-clock budget per invocation. Netlify's sync function cap is 10s (it
 // IGNORES the route's maxDuration export — that's Vercel-only). We stop
@@ -133,6 +134,7 @@ export async function syncAllFeeds(): Promise<{ total: number; processed: number
     .from(feeds)
     .orderBy(STALEST_FIRST);
   const results = await runSyncBatched(all);
+  await purgeOldReadArticles(); // global cleanup on the cron path
   return {
     total: all.length,
     processed: results.length,
@@ -152,6 +154,8 @@ export async function syncUserFeeds(
     .where(eq(feeds.userId, userId))
     .orderBy(STALEST_FIRST);
   const results = await runSyncBatched(all);
+  await purgeOldReadArticles(userId); // keep this user's table lean
+  bustUnreadCounts(userId); // new articles changed the counts
   return {
     total: all.length,
     processed: results.length,
@@ -159,6 +163,39 @@ export async function syncUserFeeds(
     failed: results.filter((r) => r.errored).length,
     results,
   };
+}
+
+// Retention: read/archived articles older than this are purged so the table
+// (and its indexes) stay lean — the main cause of "everything feels slow when
+// I have a lot of articles". Starred and Read-Later items are kept forever.
+const RETENTION_DAYS = 45;
+const PURGE_BATCH = 2000;
+
+/**
+ * Delete a bounded batch of old, already-read articles (never touches unread,
+ * starred, or read-later). Bounded so one run can't lock the table for long;
+ * repeated sync runs catch up. Optionally scoped to a single user.
+ */
+export async function purgeOldReadArticles(userId?: string): Promise<void> {
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const userCond = userId ? sql`and user_id = ${userId}` : sql``;
+  try {
+    await db.execute(sql`
+      delete from articles
+      where id in (
+        select id from articles
+        where read_status in ('read', 'archived')
+          and starred = false
+          and read_later = false
+          and created_at < ${cutoff}
+          ${userCond}
+        limit ${PURGE_BATCH}
+      )
+    `);
+  } catch (err) {
+    // Never let cleanup break a sync.
+    console.warn("purgeOldReadArticles skipped:", err instanceof Error ? err.message : err);
+  }
 }
 
 /** Returns unread counts per feed and per folder for the given user in a single round trip. */
@@ -180,4 +217,25 @@ export async function getUnreadCounts(userId: string) {
     perFolder[folderKey] = (perFolder[folderKey] ?? 0) + r.count;
   }
   return { perFeed, perFolder };
+}
+
+// Short-TTL cache for the unread-count scan, which runs on every Feeds
+// navigation. The scan is O(unread) — at scale it was the main per-load cost.
+// Counts can lag a few seconds; mutating actions call bustUnreadCounts() to
+// refresh immediately where it matters (mark read, sync).
+type CountsData = Awaited<ReturnType<typeof getUnreadCounts>>;
+const countsCache = new Map<string, { at: number; data: CountsData }>();
+const COUNTS_TTL_MS = 15_000;
+
+export async function getUnreadCountsCached(userId: string): Promise<CountsData> {
+  const hit = countsCache.get(userId);
+  if (hit && Date.now() - hit.at < COUNTS_TTL_MS) return hit.data;
+  const data = await getUnreadCounts(userId);
+  countsCache.set(userId, { at: Date.now(), data });
+  return data;
+}
+
+/** Invalidate the cached unread counts for a user after a mutating action. */
+export function bustUnreadCounts(userId: string): void {
+  countsCache.delete(userId);
 }

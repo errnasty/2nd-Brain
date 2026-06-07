@@ -23,7 +23,7 @@ export function FeedsShell({
 }: {
   items: ArticleListItem[];
   itemTagsById: Record<string, string[]>;
-  view: "unread" | "all" | "starred";
+  view: "unread" | "all" | "starred" | "readlater";
   feedId: string | null;
   folderId: string | null;
   orderedIds: string[];

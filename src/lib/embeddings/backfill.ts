@@ -4,8 +4,70 @@ import { documentChunks } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
 import { EMBEDDING_TABLES } from "@/lib/embeddings/tables";
 
-const ARTICLE_BATCH = 16;
-const CHUNK_BATCH = 16;
+// Embedding batch size (one provider call per batch) and how many batches run
+// concurrently. Bigger batches = fewer provider round-trips; concurrency
+// overlaps the network waits. Each batch persists with ONE bulk SQL write
+// instead of a round-trip per row — the previous per-item writes were the main
+// reason "Refresh memory" felt slow.
+const BATCH = 32;
+const EMBED_CONCURRENCY = 3;
+const CHUNK_BATCH = 16; // inline doc/embed helpers below keep their smaller size
+
+/** Run async tasks with a bounded number in flight; preserves result order. */
+async function runPool<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
+  const results = new Array<T>(tasks.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= tasks.length) return;
+      results[i] = await tasks[i]();
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker));
+  return results;
+}
+
+type Embedded<T> = { item: T; text: string; vec: number[] };
+
+/**
+ * Embed `items` in concurrent batches and persist each batch with a single bulk
+ * write (`write`). Returns totals. `failed` counts inputs the provider couldn't
+ * embed.
+ */
+async function embedAndWrite<T>(
+  items: T[],
+  makeText: (t: T) => string,
+  write: (rows: Embedded<T>[]) => Promise<void>,
+  provider: ReturnType<typeof getEmbeddingsProvider>,
+  label: string,
+  progress: (msg: string) => void,
+): Promise<{ embedded: number; failed: number }> {
+  const batches: T[][] = [];
+  for (let i = 0; i < items.length; i += BATCH) batches.push(items.slice(i, i + BATCH));
+
+  let done = 0;
+  const tasks = batches.map((batch) => async () => {
+    const texts = batch.map(makeText);
+    const vectors = await safeEmbedBatch(provider, texts);
+    const rows: Embedded<T>[] = [];
+    let failed = 0;
+    for (let j = 0; j < batch.length; j += 1) {
+      if (vectors[j]) rows.push({ item: batch[j], text: texts[j], vec: vectors[j]! });
+      else failed += 1;
+    }
+    if (rows.length > 0) await write(rows);
+    done += batch.length;
+    progress(`${label}: ${Math.min(done, items.length)}/${items.length}`);
+    return { embedded: rows.length, failed };
+  });
+
+  const parts = await runPool(tasks, EMBED_CONCURRENCY);
+  return parts.reduce(
+    (acc, p) => ({ embedded: acc.embedded + p.embedded, failed: acc.failed + p.failed }),
+    { embedded: 0, failed: 0 },
+  );
+}
 
 /**
  * Embed a batch resiliently. Returns vectors aligned 1:1 with `texts`; any
@@ -94,7 +156,6 @@ export async function ensureVectorSchema(): Promise<void> {
  * This keeps the per-item cost low and matches what the Daily Brief / related-knowledge
  * sidebar will compare against at query time.
  */
-const NOTE_BATCH = 16;
 
 /** Optional progress callback — invoked after each batch so a streaming route
  *  can keep the connection alive past the proxy inactivity timeout. */
@@ -137,27 +198,29 @@ export async function backfillEmbeddings(
       limit ${limit}
     `)) as unknown as ArticleRow[];
 
-    for (let i = 0; i < articleRows.length; i += ARTICLE_BATCH) {
-      const batch = articleRows.slice(i, i + ARTICLE_BATCH);
-      const texts = batch.map((r) =>
-        clampForEmbedding(`${r.title}\n\n${r.excerpt ?? r.full_text?.slice(0, 800) ?? ""}`.trim()),
-      );
-      const vectors = await safeEmbedBatch(provider, texts);
-      for (let j = 0; j < batch.length; j += 1) {
-        if (!vectors[j]) {
-          failed += 1;
-          continue;
-        }
-        const vector = toVectorLiteral(vectors[j]!);
+    const r = await embedAndWrite(
+      articleRows,
+      (a) => clampForEmbedding(`${a.title}\n\n${a.excerpt ?? a.full_text?.slice(0, 800) ?? ""}`.trim()),
+      async (rows) => {
+        const values = sql.join(
+          rows.map(
+            (x) =>
+              sql`(${x.item.id}::uuid, ${userId}::uuid, 0, ${x.text}, ${toVectorLiteral(x.vec)}::vector)`,
+          ),
+          sql`, `,
+        );
         await db.execute(sql`
           insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
-          values (${batch[j].id}, ${userId}, 0, ${texts[j]}, ${vector}::vector)
+          values ${values}
           on conflict (article_id, chunk_index) do nothing
         `);
-        articlesEmbedded += 1;
-      }
-      progress(`Articles: ${Math.min(i + ARTICLE_BATCH, articleRows.length)}/${articleRows.length}`);
-    }
+      },
+      provider,
+      "Articles",
+      progress,
+    );
+    articlesEmbedded += r.embedded;
+    failed += r.failed;
   } catch (err) {
     errors.push(`articles: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -170,21 +233,26 @@ export async function backfillEmbeddings(
       .where(and(eq(documentChunks.userId, userId), isNull(documentChunks.embedding)))
       .limit(limit);
 
-    for (let i = 0; i < missingChunks.length; i += CHUNK_BATCH) {
-      const batch = missingChunks.slice(i, i + CHUNK_BATCH);
-      const texts = batch.map((c) => clampForEmbedding(c.content));
-      const vectors = await safeEmbedBatch(provider, texts);
-      for (let j = 0; j < batch.length; j += 1) {
-        if (!vectors[j]) {
-          failed += 1;
-          continue;
-        }
-        const vector = toVectorLiteral(vectors[j]!);
-        await db.execute(sql`update document_chunks set embedding = ${vector}::vector where id = ${batch[j].id}`);
-        chunksEmbedded += 1;
-      }
-      progress(`Documents: ${Math.min(i + CHUNK_BATCH, missingChunks.length)}/${missingChunks.length} chunks`);
-    }
+    const r = await embedAndWrite(
+      missingChunks,
+      (c) => clampForEmbedding(c.content),
+      async (rows) => {
+        const values = sql.join(
+          rows.map((x) => sql`(${x.item.id}::uuid, ${toVectorLiteral(x.vec)}::vector)`),
+          sql`, `,
+        );
+        await db.execute(sql`
+          update document_chunks as t set embedding = v.emb
+          from (values ${values}) as v(id, emb)
+          where t.id = v.id and t.user_id = ${userId}
+        `);
+      },
+      provider,
+      "Documents",
+      progress,
+    );
+    chunksEmbedded += r.embedded;
+    failed += r.failed;
   } catch (err) {
     errors.push(`chunks: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -200,21 +268,26 @@ export async function backfillEmbeddings(
       limit ${limit}
     `)) as unknown as NoteRow[];
 
-    for (let i = 0; i < missingNotes.length; i += NOTE_BATCH) {
-      const batch = missingNotes.slice(i, i + NOTE_BATCH);
-      const texts = batch.map((n) => clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()));
-      const vectors = await safeEmbedBatch(provider, texts);
-      for (let j = 0; j < batch.length; j += 1) {
-        if (!vectors[j]) {
-          failed += 1;
-          continue;
-        }
-        const vector = toVectorLiteral(vectors[j]!);
-        await db.execute(sql`update directory_items set embedding = ${vector}::vector where id = ${batch[j].id} and user_id = ${userId}`);
-        notesEmbedded += 1;
-      }
-      progress(`Notes: ${Math.min(i + NOTE_BATCH, missingNotes.length)}/${missingNotes.length}`);
-    }
+    const r = await embedAndWrite(
+      missingNotes,
+      (n) => clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()),
+      async (rows) => {
+        const values = sql.join(
+          rows.map((x) => sql`(${x.item.id}::uuid, ${toVectorLiteral(x.vec)}::vector)`),
+          sql`, `,
+        );
+        await db.execute(sql`
+          update directory_items as t set embedding = v.emb
+          from (values ${values}) as v(id, emb)
+          where t.id = v.id and t.user_id = ${userId}
+        `);
+      },
+      provider,
+      "Notes",
+      progress,
+    );
+    notesEmbedded += r.embedded;
+    failed += r.failed;
   } catch (err) {
     errors.push(`notes: ${err instanceof Error ? err.message : String(err)}`);
   }

@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { getCachedBrief, setCachedBrief } from "@/lib/brief-cache";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -143,13 +144,16 @@ export async function POST(req: Request) {
     );
   }
 
-  // Optional user-customized system prompt
+  // Optional user-customized system prompt + a force flag (explicit Regenerate
+  // bypasses the server cache).
   let customPrompt: string | null = null;
+  let force = false;
   try {
-    const body = (await req.json()) as { systemPrompt?: string };
+    const body = (await req.json()) as { systemPrompt?: string; force?: boolean };
     if (typeof body.systemPrompt === "string" && body.systemPrompt.trim().length > 0) {
       customPrompt = body.systemPrompt.trim();
     }
+    force = body.force === true;
   } catch {
     // No body or invalid JSON — use default
   }
@@ -203,6 +207,27 @@ export async function POST(req: Request) {
     feedTitle: r.feedTitle,
   }));
 
+  // Server-side cache: same unread set + same prompt → reuse the brief and skip
+  // the model entirely (unless the user forced a regenerate).
+  const promptHash = createHash("sha1").update(systemPrompt).digest("base64");
+  const cacheKey = `${user.id}:${briefFingerprint}:${promptHash}`;
+  if (!force) {
+    const hit = getCachedBrief(cacheKey);
+    if (hit) {
+      const body =
+        `${hit.content}` +
+        `\n${BRIEFSOURCES_SENTINEL}${JSON.stringify(hit.sourceMap)}` +
+        `\n${USAGE_SENTINEL}${JSON.stringify(hit.usage)}`;
+      return new Response(body, {
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "x-brief-fingerprint": briefFingerprint,
+          "x-brief-cache": "hit",
+        },
+      });
+    }
+  }
+
   // Anthropic prompt caching: cache the large article block so daily reruns (and
   // re-generations within the same conversation window) reuse the same tokens.
   const result = streamText({
@@ -236,7 +261,9 @@ export async function POST(req: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
+        let acc = "";
         for await (const delta of result.textStream) {
+          acc += delta;
           controller.enqueue(encoder.encode(delta));
         }
         controller.enqueue(
@@ -249,6 +276,8 @@ export async function POST(req: Request) {
           totalTokens: usage?.totalTokens ?? 0,
         };
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
+        // Cache the finished brief for reuse on reload / other devices.
+        if (acc.trim()) setCachedBrief(cacheKey, { content: acc, sourceMap, usage: payload });
       } catch (err) {
         controller.enqueue(
           encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),

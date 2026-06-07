@@ -1,6 +1,6 @@
 "use client";
 
-import { Archive, Check, Circle, Loader2, Star, X } from "lucide-react";
+import { Archive, Bookmark, Check, Circle, Loader2, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -14,6 +14,7 @@ export function FeedsBulkBar({
   onMarkRead,
   onMarkUnread,
   onStar,
+  onReadLater,
   onArchive,
   onClear,
 }: {
@@ -22,6 +23,7 @@ export function FeedsBulkBar({
   onMarkRead: () => void;
   onMarkUnread: () => void;
   onStar: () => void;
+  onReadLater: () => void;
   onArchive: () => void;
   onClear: () => void;
 }) {
@@ -40,6 +42,9 @@ export function FeedsBulkBar({
       </Button>
       <Button size="sm" variant="ghost" onClick={onStar} disabled={pending}>
         <Star className="mr-1.5 h-3.5 w-3.5" /> Star
+      </Button>
+      <Button size="sm" variant="ghost" onClick={onReadLater} disabled={pending}>
+        <Bookmark className="mr-1.5 h-3.5 w-3.5" /> Read later
       </Button>
       <Button
         size="sm"

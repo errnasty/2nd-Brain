@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { articles, feeds, folders, itemTags, profiles, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
-import { syncFeed, syncUserFeeds } from "@/lib/rss/sync";
+import { bustUnreadCounts, syncFeed, syncUserFeeds } from "@/lib/rss/sync";
 import { parseOpml } from "@/lib/opml/import";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { routeToFolder } from "@/lib/ai/routing";
@@ -76,6 +76,7 @@ export async function deleteFeedAction(feedId: string) {
 export async function syncFeedAction(feedId: string) {
   const { user } = await requireUser();
   const result = await syncFeed(feedId, user.id);
+  bustUnreadCounts(user.id);
   revalidatePath("/feeds");
   return result;
 }
@@ -164,6 +165,7 @@ export async function setReadStatusAction(input: { articleIds: string[]; status:
     .update(articles)
     .set({ readStatus: parsed.data.status })
     .where(and(eq(articles.userId, user.id), inArray(articles.id, parsed.data.articleIds)));
+  bustUnreadCounts(user.id);
   // NOTE: intentionally no revalidatePath here — the UI already updates
   // optimistically and the unread sidebar counts can lag until the next
   // genuine navigation. This makes opening articles instant.
@@ -177,6 +179,22 @@ export async function toggleStarredAction(articleId: string, starred: boolean) {
     .set({ starred })
     .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)));
   // Same as above — UI is already optimistic.
+}
+
+/**
+ * Add/remove articles from the "Read later" queue (distinct from starred).
+ * Accepts a list so it works for a single Daily-Brief save or a bulk action.
+ */
+export async function setReadLaterAction(input: { articleIds: string[]; readLater: boolean }) {
+  if (!Array.isArray(input.articleIds) || input.articleIds.length === 0) {
+    return { ok: false as const, error: "No articles" };
+  }
+  const { user } = await requireUser();
+  await db
+    .update(articles)
+    .set({ readLater: input.readLater })
+    .where(and(eq(articles.userId, user.id), inArray(articles.id, input.articleIds)));
+  return { ok: true as const };
 }
 
 const CreateFolderSchema = z.object({ name: z.string().trim().min(1).max(60) });
@@ -256,19 +274,20 @@ export async function markFolderReadAction(folderId: string) {
     .update(articles)
     .set({ readStatus: "read" })
     .where(and(eq(articles.userId, user.id), inArray(articles.feedId, folderFeedIds)));
+  bustUnreadCounts(user.id);
   revalidatePath("/feeds");
 }
 
 // ── Mark all read for the current view (entire scope, not just visible) ──
 
 const MarkAllReadSchema = z.object({
-  view: z.enum(["unread", "all", "starred"]),
+  view: z.enum(["unread", "all", "starred", "readlater"]),
   feedId: z.string().uuid().nullish(),
   folderId: z.string().uuid().nullish(),
 });
 
 export async function markAllReadAction(input: {
-  view: "unread" | "all" | "starred";
+  view: "unread" | "all" | "starred" | "readlater";
   feedId?: string | null;
   folderId?: string | null;
 }): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
@@ -293,6 +312,9 @@ export async function markAllReadAction(input: {
   if (parsed.data.view === "starred") {
     conds.push(eq(articles.starred, true));
   }
+  if (parsed.data.view === "readlater") {
+    conds.push(eq(articles.readLater, true));
+  }
 
   const result = await db
     .update(articles)
@@ -300,6 +322,7 @@ export async function markAllReadAction(input: {
     .where(and(...conds))
     .returning({ id: articles.id });
 
+  bustUnreadCounts(user.id);
   revalidatePath("/feeds");
   return { ok: true, count: result.length };
 }
@@ -315,6 +338,8 @@ export type ArticleSearchResult = {
   publishDate: Date | null;
   readStatus: "unread" | "read" | "archived";
   starred: boolean;
+  readLater: boolean;
+  wordCount: number | null;
   imageUrl: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
@@ -322,7 +347,7 @@ export type ArticleSearchResult = {
 
 export async function searchArticlesAction(input: {
   query: string;
-  view: "unread" | "all" | "starred";
+  view: "unread" | "all" | "starred" | "readlater";
   feedId?: string | null;
   folderId?: string | null;
 }): Promise<ArticleSearchResult[]> {
@@ -332,6 +357,7 @@ export async function searchArticlesAction(input: {
 
   const conds: SQL[] = [eq(articles.userId, user.id)];
   if (input.view === "starred") conds.push(eq(articles.starred, true));
+  if (input.view === "readlater") conds.push(eq(articles.readLater, true));
   if (input.feedId) conds.push(eq(articles.feedId, input.feedId));
   else if (input.folderId) {
     const ids = (
@@ -358,6 +384,8 @@ export async function searchArticlesAction(input: {
       publishDate: articles.publishDate,
       readStatus: articles.readStatus,
       starred: articles.starred,
+      readLater: articles.readLater,
+      wordCount: articles.wordCount,
       imageUrl: articles.imageUrl,
       feedTitle: feeds.title,
       feedIconUrl: feeds.iconUrl,
@@ -377,7 +405,7 @@ const FEED_PAGE_SIZE = 100;
 const HOT_WINDOW_DAYS = 3;
 
 export async function loadMoreArticlesAction(input: {
-  view: "unread" | "all" | "starred";
+  view: "unread" | "all" | "starred" | "readlater";
   feedId?: string | null;
   folderId?: string | null;
   sort?: "newest" | "oldest" | "hot";
@@ -391,6 +419,7 @@ export async function loadMoreArticlesAction(input: {
   if (input.folderId) where.push(eq(articles.folderId, input.folderId));
   if (input.view === "unread") where.push(eq(articles.readStatus, "unread"));
   if (input.view === "starred") where.push(eq(articles.starred, true));
+  if (input.view === "readlater") where.push(eq(articles.readLater, true));
   if (sort === "hot") {
     where.push(gte(articles.publishDate, new Date(Date.now() - HOT_WINDOW_DAYS * 86_400_000)));
   }
@@ -406,6 +435,8 @@ export async function loadMoreArticlesAction(input: {
       publishDate: articles.publishDate,
       readStatus: articles.readStatus,
       starred: articles.starred,
+      readLater: articles.readLater,
+      wordCount: articles.wordCount,
       imageUrl: articles.imageUrl,
       feedTitle: feeds.title,
       feedIconUrl: feeds.iconUrl,

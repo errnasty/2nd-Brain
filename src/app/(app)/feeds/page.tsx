@@ -9,7 +9,7 @@ export type FeedSort = "newest" | "oldest" | "hot";
 type Search = Promise<{
   feed?: string;
   folder?: string;
-  view?: "unread" | "all" | "starred";
+  view?: "unread" | "all" | "starred" | "readlater";
   sort?: FeedSort;
   dedupe?: string;
   // `article` is intentionally NOT read here — selection lives in client state
@@ -36,6 +36,7 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
   if (sp.folder) where.push(eq(articles.folderId, sp.folder));
   if (view === "unread") where.push(eq(articles.readStatus, "unread"));
   if (view === "starred") where.push(eq(articles.starred, true));
+  if (view === "readlater") where.push(eq(articles.readLater, true));
   // "Hot" = what's buzzing now: only the last few days, newest first.
   if (sort === "hot") {
     where.push(gte(articles.publishDate, new Date(Date.now() - HOT_WINDOW_DAYS * 86_400_000)));
@@ -55,6 +56,8 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     publishDate: Date | null;
     readStatus: "unread" | "read" | "archived";
     starred: boolean;
+    readLater: boolean;
+    wordCount: number | null;
     imageUrl: string | null;
     feedTitle: string;
     feedIconUrl: string | null;
@@ -72,6 +75,8 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
         publishDate: articles.publishDate,
         readStatus: articles.readStatus,
         starred: articles.starred,
+        readLater: articles.readLater,
+        wordCount: articles.wordCount,
         imageUrl: articles.imageUrl,
         feedTitle: feeds.title,
         feedIconUrl: feeds.iconUrl,

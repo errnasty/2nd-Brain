@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { cn } from "@/lib/utils";
-import { setReadStatusAction, toggleStarredAction } from "@/app/(app)/feeds/actions";
+import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -169,7 +169,7 @@ export function DailyBrief() {
     }
   }, []);
 
-  const stream = useCallback(async (promptOverride?: string) => {
+  const stream = useCallback(async (promptOverride?: string, force = false) => {
     setLoading(true);
     setError(null);
     setContent("");
@@ -183,7 +183,7 @@ export function DailyBrief() {
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(systemPrompt ? { systemPrompt } : {}),
+        body: JSON.stringify({ ...(systemPrompt ? { systemPrompt } : {}), force }),
         cache: "no-store",
       });
       if (!res.ok) {
@@ -356,7 +356,7 @@ export function DailyBrief() {
     }
   }, []);
 
-  // Save an article to "read later" (= star). Optimistic; toggles on re-click.
+  // Save an article to the Read Later queue. Optimistic; toggles on re-click.
   const toggleSaved = useCallback(async (id: string) => {
     const willSave = !savedIds.has(id);
     setSavedIds((prev) => {
@@ -366,8 +366,9 @@ export function DailyBrief() {
       return next;
     });
     try {
-      await toggleStarredAction(id, willSave);
-      toast.success(willSave ? "Saved to read later" : "Removed from saved");
+      const res = await setReadLaterAction({ articleIds: [id], readLater: willSave });
+      if (!res.ok) throw new Error(res.error);
+      toast.success(willSave ? "Saved to Read Later" : "Removed from Read Later");
     } catch {
       setSavedIds((prev) => {
         const next = new Set(prev);
@@ -387,8 +388,8 @@ export function DailyBrief() {
       setSavedPrompt(trimmed);
       setSettingsOpen(false);
       toast.success(trimmed ? "Custom prompt saved" : "Reset to default prompt");
-      // Regenerate with new prompt
-      stream(trimmed);
+      // Regenerate with new prompt (force — bypass server cache)
+      stream(trimmed, true);
     } catch {
       toast.error("Couldn't save prompt");
     }
@@ -485,7 +486,7 @@ export function DailyBrief() {
             <Settings className="mr-1.5 h-3.5 w-3.5" />
             Prompt
           </Button>
-          <Button size="sm" variant="brand" onClick={() => stream()} disabled={loading}>
+          <Button size="sm" variant="brand" onClick={() => stream(undefined, true)} disabled={loading}>
             {loading ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             ) : (

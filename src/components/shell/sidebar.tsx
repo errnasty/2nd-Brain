@@ -20,7 +20,7 @@ const nav = [
   { href: "/today", label: "Today", icon: Sparkles },
   { href: "/ask", label: "Ask", icon: MessageCircle },
   { href: "/feeds", label: "Feeds", icon: Rss },
-  { href: "/feeds?view=starred", label: "Read Later", icon: Bookmark },
+  { href: "/feeds?view=readlater", label: "Read Later", icon: Bookmark },
   { href: "/directory", label: "Directory", icon: Library },
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/map", label: "Knowledge Map", icon: Network },
@@ -30,11 +30,11 @@ const nav = [
 export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
   const params = useSearchParams();
-  const starred = params.get("view") === "starred";
+  const view = params.get("view");
 
   function isActive(href: string): boolean {
-    if (href === "/feeds?view=starred") return pathname.startsWith("/feeds") && starred;
-    if (href === "/feeds") return pathname.startsWith("/feeds") && !starred;
+    if (href === "/feeds?view=readlater") return pathname.startsWith("/feeds") && view === "readlater";
+    if (href === "/feeds") return pathname.startsWith("/feeds") && view !== "readlater";
     return pathname === href || (href !== "/" && pathname.startsWith(href));
   }
 

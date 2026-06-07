@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlignJustify, ArrowDownUp, Check, CheckCheck, ChevronLeft, Copy, Inbox, Loader2, Search, Star, X } from "lucide-react";
+import { AlignJustify, ArrowDownUp, Bookmark, Check, CheckCheck, ChevronLeft, Copy, Inbox, Loader2, Search, Star, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FeedsBulkBar } from "@/components/feeds/feeds-bulk-bar";
 import {
@@ -24,6 +24,7 @@ import {
   loadMoreArticlesAction,
   markAllReadAction,
   searchArticlesAction,
+  setReadLaterAction,
   setReadStatusAction,
   toggleStarredAction,
   type ArticleSearchResult,
@@ -43,12 +44,25 @@ export type ArticleListItem = {
   publishDate: Date | null;
   readStatus: "unread" | "read" | "archived";
   starred: boolean;
+  readLater: boolean;
+  wordCount: number | null;
   imageUrl: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
 };
 
-type OptimisticPatch = { id: string; readStatus?: ArticleListItem["readStatus"]; starred?: boolean };
+/** Estimated read time at ~220 wpm. Returns null for missing/trivial counts. */
+function readMinutes(wordCount: number | null): number | null {
+  if (!wordCount || wordCount < 80) return null;
+  return Math.max(1, Math.round(wordCount / 220));
+}
+
+type OptimisticPatch = {
+  id: string;
+  readStatus?: ArticleListItem["readStatus"];
+  starred?: boolean;
+  readLater?: boolean;
+};
 
 export function ArticleList({
   items,
@@ -62,7 +76,7 @@ export function ArticleList({
   items: ArticleListItem[];
   itemTagsById: Record<string, string[]>;
   selectedId: string | null;
-  view: "unread" | "all" | "starred";
+  view: "unread" | "all" | "starred" | "readlater";
   feedId: string | null;
   folderId: string | null;
   onSelect: (id: string | null) => void;
@@ -163,18 +177,90 @@ export function ArticleList({
 
   const selectedIds = useMemo(() => [...selected], [selected]);
 
+  // Restore a set of articles to their prior read-status (used by Undo).
+  const restoreStatuses = useCallback(
+    (prior: { id: string; status: ArticleListItem["readStatus"] }[]) => {
+      startTransition(async () => {
+        prior.forEach((p) => applyOptimistic({ id: p.id, readStatus: p.status }));
+        const byStatus = new Map<ArticleListItem["readStatus"], string[]>();
+        prior.forEach((p) => byStatus.set(p.status, [...(byStatus.get(p.status) ?? []), p.id]));
+        await Promise.all(
+          [...byStatus].map(([status, ids]) => setReadStatusAction({ articleIds: ids, status })),
+        );
+        router.refresh();
+      });
+    },
+    [applyOptimistic, router],
+  );
+
   function bulkSetStatus(status: ArticleListItem["readStatus"], verb: string) {
     if (selectedIds.length === 0) return;
+    const ids = selectedIds;
+    // Snapshot prior statuses so the action is reversible.
+    const prior = ids.map((id) => ({
+      id,
+      status: optimistic.find((it) => it.id === id)?.readStatus ?? "unread",
+    }));
     startTransition(async () => {
-      selectedIds.forEach((id) => applyOptimistic({ id, readStatus: status }));
-      const res = await setReadStatusAction({ articleIds: selectedIds, status });
+      ids.forEach((id) => applyOptimistic({ id, readStatus: status }));
+      const res = await setReadStatusAction({ articleIds: ids, status });
       if (res.ok) {
-        toast.success(`${verb} ${selectedIds.length} article${selectedIds.length === 1 ? "" : "s"}`);
+        toast.success(`${verb} ${ids.length} article${ids.length === 1 ? "" : "s"}`, {
+          action: { label: "Undo", onClick: () => restoreStatuses(prior) },
+        });
         clearSelection();
         if (status === "archived") router.refresh();
       } else {
         toast.error(res.error);
       }
+    });
+  }
+
+  // Warm the full-text cache when a row is hovered so opening it is instant.
+  const prefetched = useRef<Set<string>>(new Set());
+  const prefetch = useCallback((id: string) => {
+    if (prefetched.current.has(id)) return;
+    prefetched.current.add(id);
+    fetch(`/api/articles/${id}/full-text`, { method: "POST" }).catch(() => {});
+  }, []);
+
+  // Mark a single article read (swipe / auto-read), optimistic + silent.
+  const markReadOne = useCallback(
+    (id: string) => {
+      startTransition(() => applyOptimistic({ id, readStatus: "read" }));
+      setReadStatusAction({ articleIds: [id], status: "read" }).catch(() => {});
+    },
+    [applyOptimistic],
+  );
+
+  // Auto-mark-read as rows scroll above the top (unread view only). Batched +
+  // debounced so a long scroll is one DB write, not dozens.
+  const autoReadPending = useRef<Set<string>>(new Set());
+  const autoReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onAutoRead = useCallback(
+    (ids: string[]) => {
+      const fresh = ids.filter((id) => !autoReadPending.current.has(id));
+      if (fresh.length === 0) return;
+      startTransition(() => {
+        fresh.forEach((id) => {
+          autoReadPending.current.add(id);
+          applyOptimistic({ id, readStatus: "read" });
+        });
+      });
+      if (autoReadTimer.current) clearTimeout(autoReadTimer.current);
+      autoReadTimer.current = setTimeout(() => {
+        const batch = [...autoReadPending.current];
+        autoReadPending.current.clear();
+        if (batch.length > 0) setReadStatusAction({ articleIds: batch, status: "read" }).catch(() => {});
+      }, 800);
+    },
+    [applyOptimistic],
+  );
+
+  function toggleReadLater(id: string, current: boolean) {
+    startTransition(async () => {
+      applyOptimistic({ id, readLater: !current });
+      await setReadLaterAction({ articleIds: [id], readLater: !current });
     });
   }
 
@@ -184,6 +270,17 @@ export function ArticleList({
       selectedIds.forEach((id) => applyOptimistic({ id, starred: true }));
       await Promise.all(selectedIds.map((id) => toggleStarredAction(id, true)));
       toast.success(`Starred ${selectedIds.length} article${selectedIds.length === 1 ? "" : "s"}`);
+      clearSelection();
+    });
+  }
+
+  function bulkReadLater() {
+    if (selectedIds.length === 0) return;
+    const ids = selectedIds;
+    startTransition(async () => {
+      ids.forEach((id) => applyOptimistic({ id, readLater: true }));
+      await setReadLaterAction({ articleIds: ids, readLater: true });
+      toast.success(`Saved ${ids.length} to Read Later`);
       clearSelection();
     });
   }
@@ -309,6 +406,7 @@ export function ArticleList({
           <ViewLink view="unread" current={view} label="Unread" />
           <ViewLink view="all" current={view} label="All" />
           <ViewLink view="starred" current={view} label="Starred" />
+          <ViewLink view="readlater" current={view} label="Read Later" />
         </div>
         <div className="flex items-center gap-0.5">
           <SortControls compact={compact} onToggleCompact={toggleCompact} />
@@ -345,16 +443,20 @@ export function ArticleList({
               <p className="text-sm font-medium">
                 {view === "unread"
                   ? "You're all caught up"
-                  : view === "starred"
-                    ? "Nothing saved yet"
-                    : "No articles here"}
+                  : view === "readlater"
+                    ? "Nothing to read later"
+                    : view === "starred"
+                      ? "Nothing starred yet"
+                      : "No articles here"}
               </p>
               <p className="max-w-xs text-xs text-muted-foreground">
                 {view === "unread"
                   ? "No unread articles in this view. Switch to All, or sync your feeds for more."
-                  : view === "starred"
-                    ? "Save articles from your Daily Brief or any reader to read them later."
-                    : "Try syncing your feeds to pull in new articles."}
+                  : view === "readlater"
+                    ? "Save articles from your Daily Brief (bookmark icon) to queue them here."
+                    : view === "starred"
+                      ? "Star articles you want to keep handy."
+                      : "Try syncing your feeds to pull in new articles."}
               </p>
             </>
           )}
@@ -367,6 +469,11 @@ export function ArticleList({
           onOpen={openArticle}
           selected={selected}
           onToggleSelect={toggleSelect}
+          onToggleReadLater={toggleReadLater}
+          onPrefetch={prefetch}
+          onMarkRead={markReadOne}
+          onAutoRead={onAutoRead}
+          autoRead={view === "unread" && !showingSearch}
           onLoadMore={loadMore}
           loadingMore={loadingMore}
           canLoadMore={!showingSearch && hasMore}
@@ -380,6 +487,7 @@ export function ArticleList({
         onMarkRead={() => bulkSetStatus("read", "Marked read")}
         onMarkUnread={() => bulkSetStatus("unread", "Marked unread")}
         onStar={bulkStar}
+        onReadLater={bulkReadLater}
         onArchive={() => bulkSetStatus("archived", "Archived")}
         onClear={clearSelection}
       />
@@ -399,6 +507,11 @@ function VirtualizedArticleList({
   onOpen,
   selected,
   onToggleSelect,
+  onToggleReadLater,
+  onPrefetch,
+  onMarkRead,
+  onAutoRead,
+  autoRead,
   onLoadMore,
   loadingMore,
   canLoadMore,
@@ -410,6 +523,11 @@ function VirtualizedArticleList({
   onOpen: (id: string) => void;
   selected: Set<string>;
   onToggleSelect: (id: string) => void;
+  onToggleReadLater: (id: string, current: boolean) => void;
+  onPrefetch: (id: string) => void;
+  onMarkRead: (id: string) => void;
+  onAutoRead: (ids: string[]) => void;
+  autoRead: boolean;
   onLoadMore: () => void;
   loadingMore: boolean;
   canLoadMore: boolean;
@@ -417,6 +535,7 @@ function VirtualizedArticleList({
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const lastScrollTop = useRef(0);
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => parentRef.current,
@@ -445,8 +564,30 @@ function VirtualizedArticleList({
     virtualizer.measure();
   }, [compact, virtualizer]);
 
+  // Inbox-zero: mark unread rows read as they scroll above the top (only while
+  // scrolling down, in the unread view).
+  function handleScroll() {
+    const el = parentRef.current;
+    if (!el) return;
+    const top = el.scrollTop;
+    const goingDown = top > lastScrollTop.current + 2;
+    lastScrollTop.current = top;
+    if (!autoRead || !goingDown) return;
+    const past: string[] = [];
+    for (const vi of virtualizer.getVirtualItems()) {
+      if (vi.start + vi.size < top - 4) {
+        const it = items[vi.index];
+        if (it && it.readStatus === "unread") past.push(it.id);
+      }
+    }
+    if (past.length > 0) onAutoRead(past);
+  }
+
+  // One active swipe at a time — track at list level.
+  const touchStart = useRef<{ x: number; y: number; id: string } | null>(null);
+
   return (
-    <div ref={parentRef} className="flex-1 overflow-y-auto">
+    <div ref={parentRef} onScroll={handleScroll} className="flex-1 overflow-y-auto">
       <div
         className="relative w-full divide-y divide-border"
         style={{ height: `${virtualizer.getTotalSize()}px` }}
@@ -460,6 +601,22 @@ function VirtualizedArticleList({
               ref={virtualizer.measureElement}
               className="group absolute left-0 top-0 w-full"
               style={{ transform: `translateY(${row.start}px)` }}
+              onTouchStart={(e) => {
+                const t = e.touches[0];
+                touchStart.current = { x: t.clientX, y: t.clientY, id: item.id };
+              }}
+              onTouchEnd={(e) => {
+                const s = touchStart.current;
+                touchStart.current = null;
+                if (!s || s.id !== item.id) return;
+                const t = e.changedTouches[0];
+                const dx = t.clientX - s.x;
+                const dy = t.clientY - s.y;
+                // Horizontal swipe only: right → mark read, left → read later.
+                if (Math.abs(dx) < 70 || Math.abs(dx) <= Math.abs(dy)) return;
+                if (dx > 0) onMarkRead(item.id);
+                else onToggleReadLater(item.id, item.readLater);
+              }}
             >
               {/* Selection checkbox — reveals on hover, or stays once any row
                   is selected (so the selection set is visible/editable). */}
@@ -480,6 +637,7 @@ function VirtualizedArticleList({
               </div>
               <button
                 onClick={() => onOpen(item.id)}
+                onMouseEnter={() => onPrefetch(item.id)}
                 className={cn(
                   "flex w-full gap-3 pr-4 text-left transition-colors",
                   compact ? "py-2" : "py-4",
@@ -504,6 +662,12 @@ function VirtualizedArticleList({
                     <span className="truncate">{item.feedTitle}</span>
                     <span>·</span>
                     <span className="shrink-0">{formatRelativeTime(item.publishDate)}</span>
+                    {readMinutes(item.wordCount) !== null && (
+                      <>
+                        <span>·</span>
+                        <span className="shrink-0 tabular-nums">≈{readMinutes(item.wordCount)} min</span>
+                      </>
+                    )}
                     {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
                   </div>
                   <div
@@ -546,6 +710,23 @@ function VirtualizedArticleList({
                   />
                 )}
               </button>
+              {/* Read Later toggle — overlay so it doesn't nest in the row button. */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleReadLater(item.id, item.readLater);
+                }}
+                title={item.readLater ? "Remove from Read Later" : "Save to Read Later"}
+                aria-label={item.readLater ? "Remove from Read Later" : "Save to Read Later"}
+                className={cn(
+                  "absolute right-2 top-2 z-10 rounded bg-background/80 p-1 backdrop-blur-sm transition-opacity hover:bg-accent",
+                  item.readLater
+                    ? "text-brand opacity-100"
+                    : "text-muted-foreground opacity-0 group-hover:opacity-100",
+                )}
+              >
+                <Bookmark className={cn("h-3.5 w-3.5", item.readLater && "fill-current")} />
+              </button>
             </div>
           );
         })}
@@ -565,8 +746,8 @@ function ViewLink({
   current,
   label,
 }: {
-  view: "unread" | "all" | "starred";
-  current: "unread" | "all" | "starred";
+  view: "unread" | "all" | "starred" | "readlater";
+  current: "unread" | "all" | "starred" | "readlater";
   label: string;
 }) {
   const params = useSearchParams();

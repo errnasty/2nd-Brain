@@ -118,6 +118,9 @@ export const articles = pgTable(
     publishDate: timestamp("publish_date", { withTimezone: true }),
     readStatus: readStatusEnum("read_status").default("unread").notNull(),
     starred: boolean("starred").default(false).notNull(),
+    // "Read later" queue — distinct from `starred` (a favourite). Saved from the
+    // Daily Brief or reader; surfaced as a Feeds view.
+    readLater: boolean("read_later").default(false).notNull(),
     imageUrl: text("image_url"),
     wordCount: integer("word_count"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -127,6 +130,13 @@ export const articles = pgTable(
     userReadStatusIdx: index("articles_user_status_idx").on(t.userId, t.readStatus, t.publishDate),
     folderIdx: index("articles_folder_idx").on(t.folderId),
     publishIdx: index("articles_publish_idx").on(t.publishDate),
+    readLaterIdx: index("articles_user_readlater_idx")
+      .on(t.userId, t.publishDate.desc())
+      .where(sql`${t.readLater}`),
+    // Supports the retention purge (delete old read, non-kept articles).
+    retentionIdx: index("articles_retention_idx")
+      .on(t.readStatus, t.createdAt)
+      .where(sql`not ${t.starred} and not ${t.readLater}`),
   }),
 );
 

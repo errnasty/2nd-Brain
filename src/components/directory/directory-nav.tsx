@@ -104,6 +104,20 @@ export function DirectoryNav({
     });
   }
 
+  function createSubfolder(parentId: string) {
+    const name = window.prompt("New subfolder name")?.trim();
+    if (!name) return;
+    startTransition(async () => {
+      const r = await createDirectoryFolderAction(name, parentId);
+      if (r.ok) {
+        toast.success(`Folder "${name}" created`);
+        setCollapsed((prev) => ({ ...prev, [parentId]: false })); // reveal the new child
+      } else {
+        toast.error(r.error);
+      }
+    });
+  }
+
   function runAutoOrganize() {
     startTransition(async () => {
       const r = await autoOrganizeDirectoryAction();
@@ -228,6 +242,7 @@ export function DirectoryNav({
               onToggleCollapsed={toggleCollapsed}
               onSelect={setFolder}
               onRequestDelete={(f) => setFolderToDelete(f)}
+              onNewSubfolder={createSubfolder}
             />
           ))}
         </nav>
@@ -283,6 +298,7 @@ function FolderTreeNode({
   onToggleCollapsed,
   onSelect,
   onRequestDelete,
+  onNewSubfolder,
 }: {
   node: FolderNode;
   depth: number;
@@ -292,6 +308,7 @@ function FolderTreeNode({
   onToggleCollapsed: (id: string) => void;
   onSelect: (id: string) => void;
   onRequestDelete: (f: DirectoryFolder) => void;
+  onNewSubfolder: (parentId: string) => void;
 }) {
   const hasChildren = node.children.length > 0;
   const isCollapsed = collapsed[node.folder.id];
@@ -316,6 +333,7 @@ function FolderTreeNode({
             active={activeFolder === node.folder.id}
             onSelect={() => onSelect(node.folder.id)}
             onRequestDelete={() => onRequestDelete(node.folder)}
+            onNewSubfolder={() => onNewSubfolder(node.folder.id)}
           />
         </div>
       </div>
@@ -332,6 +350,7 @@ function FolderTreeNode({
               onToggleCollapsed={onToggleCollapsed}
               onSelect={onSelect}
               onRequestDelete={onRequestDelete}
+              onNewSubfolder={onNewSubfolder}
             />
           ))}
         </div>
@@ -381,12 +400,14 @@ function FolderRow({
   active,
   onSelect,
   onRequestDelete,
+  onNewSubfolder,
 }: {
   folder: DirectoryFolder;
   count: number;
   active: boolean;
   onSelect: () => void;
   onRequestDelete: () => void;
+  onNewSubfolder: () => void;
 }) {
   const [, startTransition] = useTransition();
   const [renaming, setRenaming] = useState(false);
@@ -485,6 +506,10 @@ function FolderRow({
       <ContextMenuContent>
         <ContextMenuLabel className="max-w-[200px] truncate">{folder.name}</ContextMenuLabel>
         <ContextMenuSeparator />
+        <ContextMenuItem onClick={onNewSubfolder}>
+          <Plus className="mr-2 h-3.5 w-3.5" />
+          New subfolder
+        </ContextMenuItem>
         <ContextMenuItem onClick={startRename}>
           <Pencil className="mr-2 h-3.5 w-3.5" />
           Rename folder

@@ -158,17 +158,28 @@ async function autoTagDirectoryItem(userId: string, itemId: string) {
 
 const FolderNameSchema = z.object({ name: z.string().trim().min(1).max(60) });
 
-export async function createDirectoryFolderAction(name: string) {
+export async function createDirectoryFolderAction(name: string, parentId?: string | null) {
   const parsed = FolderNameSchema.safeParse({ name });
   if (!parsed.success) return { ok: false as const, error: "Name required" };
   const { user } = await requireUser();
   try {
+    // Validate the parent belongs to this user (nesting under another folder).
+    let parent: string | null = null;
+    if (parentId) {
+      const [p] = await db
+        .select({ id: directoryFolders.id })
+        .from(directoryFolders)
+        .where(and(eq(directoryFolders.id, parentId), eq(directoryFolders.userId, user.id)))
+        .limit(1);
+      if (!p) return { ok: false as const, error: "Parent folder not found" };
+      parent = p.id;
+    }
     const [row] = await db
       .insert(directoryFolders)
-      .values({ userId: user.id, name: parsed.data.name })
+      .values({ userId: user.id, name: parsed.data.name, parentId: parent })
       .returning({ id: directoryFolders.id });
     bustMapCache(user.id);
-  revalidatePath("/directory");
+    revalidatePath("/directory");
     return { ok: true as const, folderId: row.id };
   } catch {
     return { ok: false as const, error: "Folder already exists" };

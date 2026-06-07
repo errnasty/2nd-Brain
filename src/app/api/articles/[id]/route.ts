@@ -28,6 +28,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       publishDate: articles.publishDate,
       readStatus: articles.readStatus,
       starred: articles.starred,
+      readLater: articles.readLater,
+      wordCount: articles.wordCount,
       fullText: articles.fullText,
       feedId: articles.feedId,
       feedTitle: feeds.title,

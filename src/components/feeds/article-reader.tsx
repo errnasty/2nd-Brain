@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
+  Bookmark,
   BookmarkPlus,
   ChevronLeft,
   ChevronRight,
@@ -17,9 +18,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  setReadLaterAction,
   setReadStatusAction,
   toggleStarredAction,
 } from "@/app/(app)/feeds/actions";
+import { cn } from "@/lib/utils";
 import { saveArticleToDirectoryAction } from "@/app/(app)/directory/actions";
 import { formatRelativeTime } from "@/lib/utils";
 import { toast } from "sonner";
@@ -37,6 +40,8 @@ type ArticleData = {
   publishDate: string | null;
   readStatus: "unread" | "read" | "archived";
   starred: boolean;
+  readLater: boolean;
+  wordCount: number | null;
   fullText: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
@@ -108,6 +113,16 @@ export function ArticleReader({
     });
   }
 
+  function toggleReadLater() {
+    if (!article) return;
+    const next = !article.readLater;
+    setArticle({ ...article, readLater: next });
+    startTransition(async () => {
+      await setReadLaterAction({ articleIds: [article.id], readLater: next });
+      toast.success(next ? "Saved to Read Later" : "Removed from Read Later");
+    });
+  }
+
   useShortcuts(
     {
       j: () => nextId && goToArticle(nextId),
@@ -118,6 +133,7 @@ export function ArticleReader({
       arrowleft: () => prevId && goToArticle(prevId),
       m: () => toggleRead(),
       s: () => toggleStar(),
+      b: () => toggleReadLater(),
       v: () => article && window.open(article.url, "_blank"),
       o: () => article && window.open(article.url, "_blank"),
       escape: close,
@@ -296,6 +312,15 @@ export function ArticleReader({
         >
           <BookmarkPlus className="h-4 w-4" />
         </Button>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={toggleReadLater}
+          title={article?.readLater ? "Remove from Read Later (b)" : "Read later (b)"}
+          disabled={!article}
+        >
+          <Bookmark className={cn("h-4 w-4", article?.readLater && "fill-brand text-brand")} />
+        </Button>
         <Button size="icon" variant="ghost" onClick={toggleStar} title="Star (s)" disabled={!article}>
           <Star className={article?.starred ? "fill-yellow-500 text-yellow-500" : ""} />
         </Button>
@@ -362,6 +387,12 @@ export function ArticleReader({
                 )}
                 {article.author && <span className="text-border">·</span>}
                 <span>{formatRelativeTime(article.publishDate)}</span>
+                {article.wordCount && article.wordCount >= 80 && (
+                  <>
+                    <span className="text-border">·</span>
+                    <span className="tabular-nums">≈{Math.max(1, Math.round(article.wordCount / 220))} min read</span>
+                  </>
+                )}
               </div>
               {loadingContent && !content && (
                 <div className="space-y-3">

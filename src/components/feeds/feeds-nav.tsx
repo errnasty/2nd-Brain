@@ -280,7 +280,9 @@ export function FeedsNav({
               folderFeeds={feeds.filter((f) => f.folderId === folder.id)}
               allFolders={folders}
               unread={unread}
-              collapsed={!!collapsed[folder.id]}
+              // Default to collapsed (undefined === not-yet-toggled) so opening
+              // Feeds shows a tidy folder list; an explicit expand is remembered.
+              collapsed={collapsed[folder.id] ?? true}
               onToggle={() => toggleFolder(folder.id)}
               isDropTarget={dropTarget === folder.id}
               draggingFeed={draggingFeed}
@@ -581,6 +583,24 @@ function FeedRow({
     }
   }
 
+  function resync() {
+    startTransition(async () => {
+      const toastId = toast.loading(`Re-syncing ${feed.title}…`);
+      try {
+        const r = await syncFeedAction(feed.id);
+        if (r.errored) toast.error(`Sync failed: ${r.error}`, { id: toastId });
+        else
+          toast.success(`Synced — ${r.inserted} new article${r.inserted === 1 ? "" : "s"}`, {
+            id: toastId,
+          });
+      } catch (err) {
+        toast.error(`Sync failed: ${err instanceof Error ? err.message : "unknown error"}`, {
+          id: toastId,
+        });
+      }
+    });
+  }
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -629,8 +649,26 @@ function FeedRow({
               <span className="flex-1 truncate text-sm">{feed.title}</span>
             )}
             {!renaming && feed.lastError && (
-              <span className="shrink-0" title={`Last sync failed: ${feed.lastError}`}>
-                <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  resync();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    resync();
+                  }
+                }}
+                className="shrink-0 rounded hover:bg-accent"
+                title={`Last sync failed: ${feed.lastError}. Click to retry.`}
+              >
+                <AlertTriangle
+                  className={cn("h-3.5 w-3.5 text-amber-500", pending && "animate-pulse")}
+                />
               </span>
             )}
             {!renaming && count > 0 && (
