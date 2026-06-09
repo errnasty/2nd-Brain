@@ -2,10 +2,10 @@ import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 
-// Study plans are infrequent + important, so use a capable model first and fall
-// back to the fast one if structured output fails.
-const PRIMARY = "claude-sonnet-4-6";
-const FALLBACK = "claude-haiku-4-5-20251001";
+// Must finish inside the host's ~10s serverless function limit, so use the fast
+// model and bound the output. (Sonnet is too slow here and caused 504s.)
+const MODEL = "claude-haiku-4-5-20251001";
+const MAX_OUTPUT_TOKENS = 3500;
 
 // One study session / task. `dayOffset` is days from the start date — the
 // SERVER turns it into a real due date (models are unreliable at calendar
@@ -24,10 +24,10 @@ const SessionSchema = z.object({
 const StudyPlanSchema = z.object({
   title: z.string().min(1).max(200),
   summary: z.string().max(1000).optional().default(""),
-  sessions: z.array(SessionSchema).min(1).max(120),
+  sessions: z.array(SessionSchema).min(1).max(60),
   milestones: z
     .array(z.object({ label: z.string().min(1).max(200), dayOffset: z.number().int().min(0).max(500) }))
-    .max(30)
+    .max(20)
     .optional(),
 });
 
@@ -58,14 +58,16 @@ export async function generateStudyPlan(input: {
     ? `Hard deadline: day ${input.totalDays} (the last day). Everything must finish by then, with review before it.`
     : `No hard deadline — plan across about ${input.totalDays} days.`;
 
-  const system = `You are an expert learning coach. Design a realistic, followable study plan the user can actually keep up with. Cover EVERY topic the user lists.
+  const system = `You are an expert learning coach. Design a realistic, followable study plan that covers EVERY topic the user lists.
+
+Be concise — aim for the FEWEST sessions that cover everything (roughly 2-4 sessions per topic; keep the total well under 50). This must generate quickly.
 
 Constraints:
 - Budget ≈ ${input.hoursPerWeek} hours per week. Keep the SUM of durationMin within any rolling 7-day window close to that — do not overload.
 - Spread sessions across the available time using "dayOffset" (whole days from the start, 0 = day one). ${deadlineLine}
 - Order topics so prerequisites come first; build up gradually.
-- Insert spaced REVIEW/recap sessions ("review": true) at intervals and especially before the deadline.
-- Give each session a specific, actionable "focus" (what to do/produce).
+- Insert a few spaced REVIEW sessions ("review": true), especially before the deadline.
+- Give each session a short, specific "focus" (what to do/produce).
 - If an existing library item fits, set "link" to its EXACT title from the list below; otherwise set "gap": true. Never invent library titles.`;
 
   const prompt = `Goal: ${goal}
@@ -73,18 +75,12 @@ Constraints:
 Available existing library items (use the exact title in "link" when relevant):
 ${linkList}`;
 
-  const run = (modelId: string) =>
-    generateObject({ model: anthropic(modelId), schema: StudyPlanSchema, system, prompt });
-
-  try {
-    const { object } = await run(PRIMARY);
-    return object;
-  } catch (primaryErr) {
-    console.warn(
-      "generateStudyPlan primary model failed, trying fallback:",
-      primaryErr instanceof Error ? primaryErr.message : primaryErr,
-    );
-    const { object } = await run(FALLBACK);
-    return object;
-  }
+  const { object } = await generateObject({
+    model: anthropic(MODEL),
+    schema: StudyPlanSchema,
+    system,
+    prompt,
+    maxTokens: MAX_OUTPUT_TOKENS,
+  });
+  return object;
 }

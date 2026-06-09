@@ -88,8 +88,9 @@ export async function POST(req: Request) {
       : 5;
 
   try {
-    // Existing items to weave in as [[wikilinks]] (same as curriculum).
-    const related = await retrieveFromDirectory(user.id, goal, 15);
+    // Existing items to weave in as [[wikilinks]]. Best-effort: if retrieval is
+    // slow/unavailable we still generate the plan (don't burn the ~10s budget).
+    const related = await retrieveFromDirectory(user.id, goal, 10).catch(() => []);
     const seen = new Set<string>();
     const contextTitles = related
       .map((r) => r.title)
