@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
-  Bookmark,
   GraduationCap,
   Library,
   MessageCircle,
@@ -20,7 +19,6 @@ const nav = [
   { href: "/today", label: "Today", icon: Sparkles },
   { href: "/ask", label: "Ask", icon: MessageCircle },
   { href: "/feeds", label: "Feeds", icon: Rss },
-  { href: "/feeds?view=readlater", label: "Read Later", icon: Bookmark },
   { href: "/directory", label: "Directory", icon: Library },
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/map", label: "Knowledge Map", icon: Network },
@@ -29,12 +27,8 @@ const nav = [
 
 export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
-  const params = useSearchParams();
-  const view = params.get("view");
 
   function isActive(href: string): boolean {
-    if (href === "/feeds?view=readlater") return pathname.startsWith("/feeds") && view === "readlater";
-    if (href === "/feeds") return pathname.startsWith("/feeds") && view !== "readlater";
     return pathname === href || (href !== "/" && pathname.startsWith(href));
   }
 

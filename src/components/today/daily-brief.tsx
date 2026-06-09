@@ -9,6 +9,7 @@ import {
   Check,
   CheckCheck,
   ExternalLink,
+  GraduationCap,
   History,
   Loader2,
   Newspaper,
@@ -31,6 +32,7 @@ import {
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
+import { fetchCalendarRange } from "@/app/(app)/study/actions";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -108,6 +110,7 @@ export function DailyBrief() {
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [newArticles, setNewArticles] = useState(false);
   const [history, setHistory] = useState<BriefEntry[]>([]);
+  const [studyTasks, setStudyTasks] = useState<{ id: string; text: string }[]>([]);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -299,6 +302,24 @@ export function DailyBrief() {
     stream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
+
+  // Today's study tasks (from study plans saved to the Directory) — surfaced at
+  // the top of the brief so the plan stays visible day-to-day.
+  useEffect(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    let cancelled = false;
+    fetchCalendarRange(start.toISOString(), end.toISOString())
+      .then((entries) => {
+        if (cancelled) return;
+        setStudyTasks(entries.filter((e) => e.kind === "task").map((e) => ({ id: e.id, text: e.text })));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Tab left open across midnight: regenerate when it regains focus on a new
   // day. (Fresh-open on a new day is handled by the hydrate effect above.)
@@ -496,6 +517,26 @@ export function DailyBrief() {
           </Button>
         </div>
       </div>
+
+      {studyTasks.length > 0 && (
+        <div className="not-prose mb-6 rounded-lg border border-border bg-card p-4">
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
+            <GraduationCap className="h-3 w-3" /> Study — due today
+          </div>
+          <div className="space-y-1">
+            {studyTasks.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => router.push("/study?tab=tasks")}
+                className="flex w-full items-start gap-2 rounded-md p-1.5 text-left text-sm transition-colors hover:bg-accent/50"
+              >
+                <span className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-[3px] border border-muted-foreground/50" />
+                <span className="flex-1">{t.text}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {settingsOpen && (
         <div className="not-prose mb-6 rounded-lg border border-border bg-card p-4">

@@ -4,7 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Bookmark,
   ChevronRight,
   FolderClosed,
   GraduationCap,
@@ -36,7 +35,6 @@ const TABS = [
 
 // Secondary sections — surfaced through the "More" sheet, not the bottom bar.
 const MORE_LINKS = [
-  { href: "/feeds?view=readlater", label: "Read Later", icon: Bookmark },
   { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/tags", label: "Tags", icon: Tag },

@@ -7,10 +7,12 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
   Check,
+  CalendarDays,
   ChevronDown,
   Cpu,
   FileText,
   Globe,
+  GraduationCap,
   Loader2,
   Newspaper,
   NotebookPen,
@@ -44,6 +46,13 @@ type Source = {
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
 type WebSource = { title: string; url: string };
+type StudyPlanResult = {
+  itemId: string;
+  title: string;
+  taskCount: number;
+  fromISO: string;
+  toISO: string;
+};
 
 type Message = {
   id: string;
@@ -52,6 +61,7 @@ type Message = {
   sources?: Source[];
   webSources?: WebSource[];
   usage?: Usage;
+  plan?: StudyPlanResult;
 };
 
 const USAGE_SENTINEL = "<<<SB_USAGE:";
@@ -82,15 +92,21 @@ export function AskShell() {
   const [modelId, setModelId] = useState<string>(DEFAULT_CHAT_MODEL);
   const [web, setWeb] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Study-plan mode: the prompt becomes a study goal, generated into a dated
+  // Directory note (+ calendar tasks) instead of a chat answer.
+  const [studyMode, setStudyMode] = useState(false);
+  const [deadline, setDeadline] = useState("");
+  const [hoursPerWeek, setHoursPerWeek] = useState("5");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Stable ref so memoized MessageBubbles don't re-render (and re-parse their
+  // Stable refs so memoized MessageBubbles don't re-render (and re-parse their
   // markdown) every time the messages array changes.
   const openSource = useCallback(
     (id: string) => router.push(`/directory?item=${id}`),
     [router],
   );
+  const openPath = useCallback((path: string) => router.push(path), [router]);
 
   // Persist the chosen model across visits
   useEffect(() => {
@@ -292,6 +308,61 @@ export function AskShell() {
     [messages, streaming, modelId, web],
   );
 
+  // Study-plan mode: one structured call (no streaming). Pushes the goal as a
+  // user message and a result "plan card" assistant message.
+  const sendStudyPlan = useCallback(
+    async (goal: string) => {
+      const trimmed = goal.trim();
+      if (!trimmed || streaming) return;
+      setError(null);
+      setInput("");
+      const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: trimmed };
+      setMessages((prev) => [...prev, userMessage]);
+      setStreaming(true);
+      try {
+        const res = await fetch("/api/study-plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            goal: trimmed,
+            deadline: deadline || undefined,
+            hoursPerWeek: Number(hoursPerWeek) || undefined,
+          }),
+          cache: "no-store",
+        });
+        const data = (await res.json().catch(() => ({}))) as Partial<StudyPlanResult> & {
+          ok?: boolean;
+          error?: string;
+        };
+        if (!res.ok || !data.ok || !data.itemId) {
+          setError(data.error || `HTTP ${res.status}`);
+          return;
+        }
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: "",
+            plan: {
+              itemId: data.itemId,
+              title: data.title ?? "Study plan",
+              taskCount: data.taskCount ?? 0,
+              fromISO: data.fromISO ?? "",
+              toISO: data.toISO ?? "",
+            },
+          },
+        ]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Request failed");
+      } finally {
+        setStreaming(false);
+        inputRef.current?.focus();
+      }
+    },
+    [streaming, deadline, hoursPerWeek],
+  );
+
   function clearChat() {
     setMessages([]);
     setError(null);
@@ -341,7 +412,7 @@ export function AskShell() {
         ) : (
           <div className="space-y-6">
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} onOpenSource={openSource} />
+              <MessageBubble key={m.id} message={m} onOpenSource={openSource} onOpenPath={openPath} />
             ))}
             {streaming && (
               <div className="text-xs text-muted-foreground">
@@ -393,17 +464,54 @@ export function AskShell() {
             size="sm"
             variant={web ? "default" : "outline"}
             onClick={() => setWeb((w) => !w)}
-            disabled={streaming}
+            disabled={streaming || studyMode}
             className="h-7 gap-1.5 text-xs"
             title={web ? "Web search on — Claude may search the web (uses a Claude model)" : "Web search off"}
           >
             <Globe className="h-3.5 w-3.5" /> Web
           </Button>
+          <Button
+            size="sm"
+            variant={studyMode ? "brand" : "outline"}
+            onClick={() => setStudyMode((s) => !s)}
+            disabled={streaming}
+            className="h-7 gap-1.5 text-xs"
+            title="Turn your prompt into a dated study plan saved to your Directory + calendar"
+          >
+            <GraduationCap className="h-3.5 w-3.5" /> Study plan
+          </Button>
         </div>
+        {studyMode && (
+          <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <label className="flex items-center gap-1.5">
+              Deadline
+              <input
+                type="date"
+                value={deadline}
+                onChange={(e) => setDeadline(e.target.value)}
+                disabled={streaming}
+                className="h-7 rounded-md border border-border bg-background px-2 text-foreground"
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              Hours / week
+              <input
+                type="number"
+                min={1}
+                max={40}
+                value={hoursPerWeek}
+                onChange={(e) => setHoursPerWeek(e.target.value)}
+                disabled={streaming}
+                className="h-7 w-16 rounded-md border border-border bg-background px-2 text-foreground tabular-nums"
+              />
+            </label>
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            send(input);
+            if (studyMode) sendStudyPlan(input);
+            else send(input);
           }}
           className="relative"
         >
@@ -414,10 +522,15 @@ export function AskShell() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                send(input);
+                if (studyMode) sendStudyPlan(input);
+                else send(input);
               }
             }}
-            placeholder="Ask anything across your Directory…"
+            placeholder={
+              studyMode
+                ? "Describe your study goal… e.g. Master React hooks"
+                : "Ask anything across your Directory…"
+            }
             className="min-h-[56px] resize-none pr-12 text-[15px]"
             disabled={streaming}
           />
@@ -466,15 +579,47 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
 const MessageBubble = memo(function MessageBubble({
   message,
   onOpenSource,
+  onOpenPath,
 }: {
   message: Message;
   onOpenSource: (directoryItemId: string) => void;
+  onOpenPath: (path: string) => void;
 }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
         <div className="max-w-[80%] rounded-2xl bg-accent px-4 py-2.5 text-sm">
           {message.content}
+        </div>
+      </div>
+    );
+  }
+  if (message.plan) {
+    const p = message.plan;
+    return (
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
+          <GraduationCap className="h-3.5 w-3.5" /> Study plan created
+        </div>
+        <div className="mt-1.5 text-base font-semibold">{p.title}</div>
+        <div className="mt-1 flex items-center gap-2 text-xs tabular-nums text-muted-foreground">
+          <span>{p.taskCount} sessions</span>
+          {p.fromISO && p.toISO && (
+            <>
+              <span>·</span>
+              <span>
+                {p.fromISO} → {p.toISO}
+              </span>
+            </>
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button size="sm" variant="brand" onClick={() => onOpenPath(`/directory?item=${p.itemId}`)}>
+            <NotebookPen className="mr-1.5 h-3.5 w-3.5" /> Open note
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => onOpenPath("/study?tab=calendar")}>
+            <CalendarDays className="mr-1.5 h-3.5 w-3.5" /> View calendar
+          </Button>
         </div>
       </div>
     );
