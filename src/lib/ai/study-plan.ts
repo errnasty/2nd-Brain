@@ -2,10 +2,13 @@ import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 
-// Must finish inside the host's ~10s serverless function limit, so use the fast
-// model and bound the output. (Sonnet is too slow here and caused 504s.)
-const MODEL = "claude-haiku-4-5-20251001";
-const MAX_OUTPUT_TOKENS = 3500;
+// Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
+// bounded output. The desktop app runs the server locally with no such limit,
+// so it uses a stronger model + a bigger budget for a more detailed plan.
+// Override either with STUDY_PLAN_MODEL (e.g. "claude-opus-4-7").
+const isDesktop = process.env.APP_RUNTIME === "desktop";
+const MODEL = process.env.STUDY_PLAN_MODEL || (isDesktop ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001");
+const MAX_OUTPUT_TOKENS = isDesktop ? 8000 : 3500;
 
 // One study session / task. `dayOffset` is days from the start date — the
 // SERVER turns it into a real due date (models are unreliable at calendar
@@ -58,9 +61,13 @@ export async function generateStudyPlan(input: {
     ? `Hard deadline: day ${input.totalDays} (the last day). Everything must finish by then, with review before it.`
     : `No hard deadline — plan across about ${input.totalDays} days.`;
 
+  const detailLine = isDesktop
+    ? `Be thorough and specific — break each topic into concrete sub-skills with detailed, actionable focuses. Use as many sessions as the plan genuinely needs (up to ~50).`
+    : `Be concise — aim for the FEWEST sessions that cover everything (roughly 2-4 sessions per topic; keep the total well under 50). This must generate quickly.`;
+
   const system = `You are an expert learning coach. Design a realistic, followable study plan that covers EVERY topic the user lists.
 
-Be concise — aim for the FEWEST sessions that cover everything (roughly 2-4 sessions per topic; keep the total well under 50). This must generate quickly.
+${detailLine}
 
 Constraints:
 - Budget ≈ ${input.hoursPerWeek} hours per week. Keep the SUM of durationMin within any rolling 7-day window close to that — do not overload.
