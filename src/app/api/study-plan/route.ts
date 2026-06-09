@@ -95,6 +95,7 @@ export async function POST(req: Request) {
       .map((r) => r.title)
       .filter((t) => (seen.has(t) ? false : (seen.add(t), true)));
 
+    // Throws with a specific message on failure; surfaced by the outer catch.
     const plan = await generateStudyPlan({
       goal,
       totalDays,
@@ -102,7 +103,6 @@ export async function POST(req: Request) {
       deadlineISO,
       contextTitles,
     });
-    if (!plan) return NextResponse.json({ error: "Couldn't generate a study plan" }, { status: 502 });
 
     // Sort by dayOffset, compute real due dates, group into weeks.
     const sessions = [...plan.sessions].sort((a, b) => a.dayOffset - b.dayOffset);
