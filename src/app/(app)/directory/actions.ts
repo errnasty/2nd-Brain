@@ -314,7 +314,10 @@ export async function createNoteAction(input: { title: string; content?: string;
   // Embed the note in the background so Ask can find it (no await).
   void embedNote(row.id, user.id, parsed.data.title, parsed.data.content ?? null);
   void syncWikilinks(user.id, row.id, parsed.data.content ?? null);
-  void syncDirectoryTasks(user.id, row.id, parsed.data.content ?? null);
+  // AWAIT (not void): on the serverless study-plan route the function freezes
+  // once it returns, so a floating task-sync would be dropped — leaving the
+  // note's checkbox tasks out of the Study tab / calendar.
+  await syncDirectoryTasks(user.id, row.id, parsed.data.content ?? null);
 
   bustMapCache(user.id);
   revalidatePath("/directory");
@@ -369,7 +372,8 @@ export async function updateNoteAction(input: {
     // Re-derive wikilinks + tasks from the new text (notes + docs).
     if (contentChanged) {
       void syncWikilinks(user.id, parsed.data.id, parsed.data.content ?? null);
-      void syncDirectoryTasks(user.id, parsed.data.id, parsed.data.content ?? null);
+      // Await so the Study tab / calendar reflect the edit before we return.
+      await syncDirectoryTasks(user.id, parsed.data.id, parsed.data.content ?? null);
     }
 
     if (row?.kind === "user_note") {
@@ -609,6 +613,7 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
     }
 
     // 3) Directory item that references the document
+    const itemContent = text.length > 10_000 ? text.slice(0, 10_000) : text;
     const [item] = await db
       .insert(directoryItems)
       .values({
@@ -618,11 +623,15 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
         title,
         documentId: doc.id,
         sourceUrl: null,
-        content: text.length > 10_000 ? text.slice(0, 10_000) : text,
+        content: itemContent,
         metadata: { originalName: file.name, mimeType: file.type, sizeBytes: file.size },
         updatedAt: new Date(),
       })
       .returning({ id: directoryItems.id });
+
+    // Materialize any markdown checkbox tasks (e.g. an uploaded study plan with
+    // `- [ ] … (due: YYYY-MM-DD)` lines) into the Study tab / calendar.
+    await syncDirectoryTasks(user.id, item.id, itemContent);
 
     void autoTagDirectoryItem(user.id, item.id);
     // Embed inline so the doc is answerable in Ask right away (no manual
