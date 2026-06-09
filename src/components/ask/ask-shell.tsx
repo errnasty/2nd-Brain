@@ -338,20 +338,17 @@ export function AskShell() {
           setError(data.error || `HTTP ${res.status}`);
           return;
         }
+        // Extract before the closure so the itemId narrowing isn't lost.
+        const plan: StudyPlanResult = {
+          itemId: data.itemId,
+          title: data.title ?? "Study plan",
+          taskCount: data.taskCount ?? 0,
+          fromISO: data.fromISO ?? "",
+          toISO: data.toISO ?? "",
+        };
         setMessages((prev) => [
           ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: "",
-            plan: {
-              itemId: data.itemId,
-              title: data.title ?? "Study plan",
-              taskCount: data.taskCount ?? 0,
-              fromISO: data.fromISO ?? "",
-              toISO: data.toISO ?? "",
-            },
-          },
+          { id: crypto.randomUUID(), role: "assistant", content: "", plan },
         ]);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Request failed");
