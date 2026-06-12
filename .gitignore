@@ -45,3 +45,6 @@ drizzle/meta
 
 # scratch
 .git-commit-msg.tmp
+
+# Electron build output
+dist-desktop/
