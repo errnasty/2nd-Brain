@@ -2,6 +2,7 @@
   "name": "second-brain",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -10,14 +11,19 @@
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
+    "db:local-schema": "drizzle-kit generate --name local_schema && node electron/bundle-local-schema.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "desktop:dev": "electron .",
+    "desktop:build": "node electron/build.js",
+    "desktop:fix": "node electron/fix-binary.js"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
     "@ai-sdk/openai": "^1.0.0",
     "@anthropic-ai/sdk": "^0.100.1",
     "@dnd-kit/core": "^6.3.1",
+    "@electric-sql/pglite": "^0.3.7",
     "@mozilla/readability": "^0.5.0",
     "@radix-ui/react-checkbox": "^1.3.3",
     "@radix-ui/react-context-menu": "^2.2.16",
@@ -73,6 +79,8 @@
     "@types/sanitize-html": "^2.16.1",
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.28.0",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
     "eslint": "^9",
     "eslint-config-next": "^15.0.3",
     "postcss": "^8.4.49",
@@ -80,5 +88,20 @@
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
     "vitest": "^4.1.7"
+  },
+  "build": {
+    "appId": "com.secondbrain.desktop",
+    "productName": "Second Brain",
+    "directories": { "output": "dist-desktop" },
+    "files": ["electron/**/*"],
+    "extraResources": [
+      { "from": ".next/standalone", "to": "app/.next/standalone" },
+      { "from": ".next/static", "to": "app/.next/standalone/.next/static" },
+      { "from": "public", "to": "app/.next/standalone/public" }
+    ],
+    "asarUnpack": ["**/node_modules/@electric-sql/**"],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg", "category": "public.app-category.productivity" },
+    "linux": { "target": ["AppImage", "deb"], "category": "Utility" }
   }
 }

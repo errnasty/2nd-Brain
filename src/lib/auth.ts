@@ -2,13 +2,30 @@ import { cache } from "react";
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
+const isDesktop = process.env.APP_RUNTIME === "desktop";
+
 /**
  * React.cache() memoizes by argument identity for the lifetime of a single
  * server request. Layout + page + nested server actions all share the same
- * Supabase client + getUser() round-trip instead of running it 2-3 times.
+ * Supabase client + auth round-trip instead of running it 2-3 times.
+ *
+ * Desktop: use getSession() (reads the locally stored token, NO network) so
+ * navigation stays instant/offline; the renderer refreshes the token in the
+ * background while online. Also ensures the local `profiles` row exists.
  */
 const getAuthOnce = cache(async () => {
   const supabase = await createSupabaseServerClient();
+  if (isDesktop) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const user = session?.user ?? null;
+    if (user) {
+      const { ensureLocalProfile } = await import("@/lib/db/local-profile");
+      await ensureLocalProfile(user.id, user.email ?? null);
+    }
+    return { user, supabase };
+  }
   const {
     data: { user },
   } = await supabase.auth.getUser();

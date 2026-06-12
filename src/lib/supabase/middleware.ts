@@ -25,10 +25,22 @@ export async function updateSession(request: NextRequest) {
     },
   );
 
-  // IMPORTANT: do not run code between createServerClient() and getUser().
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // IMPORTANT: do not run code between createServerClient() and the auth call.
+  // Desktop trusts the locally stored session (getSession, no network) so every
+  // navigation isn't gated on a Supabase round-trip; the cloud verifies via
+  // getUser() as before.
+  let user;
+  if (process.env.APP_RUNTIME === "desktop") {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    user = session?.user ?? null;
+  } else {
+    const {
+      data: { user: verified },
+    } = await supabase.auth.getUser();
+    user = verified;
+  }
 
   const pathname = request.nextUrl.pathname;
   const isAuthRoute =

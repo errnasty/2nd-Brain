@@ -32,17 +32,22 @@ npm run desktop:dev
 This launches Electron, which boots the local server in desktop mode
 (`APP_RUNTIME=desktop`) against the embedded PGlite DB and opens the window.
 
-On **first launch** you'll see the login page. Sign in once **while online** with
+On **first launch** the app auto-creates `settings.json` (see §4) and, if your
+Supabase URL/key aren't set yet, shows a dialog with the file path and offers to
+open it. Fill it in (§4), reopen the app, then sign in once **while online** with
 your Supabase account — this establishes your identity and creates your local
 profile. After that, the app trusts the stored session and runs locally.
+
+> The first run seeds `settings.json` from the project's `.env.local` if present,
+> so existing web-app config carries over automatically.
 
 ---
 
 ## 4. Where do the API keys / Supabase URL go?
 
-The desktop app reads them from a local **`settings.json`** that you edit from the
-app menu: **Tools → Open settings file (keys / cloud sync)…** (it creates the file
-with empty fields the first time). After editing, **Tools → Restart app**.
+The desktop app reads them from a local **`settings.json`**, auto-created on first
+launch. Open it any time from the menu: **Tools → Open settings file (keys / cloud
+sync)…**. After editing, **Tools → Restart app** (or reopen the app).
 
 `settings.json` lives in the app's user-data folder:
 

@@ -65,6 +65,7 @@ export const folders = pgTable(
     position: integer("position").default(0).notNull(),
     isInbox: boolean("is_inbox").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     userNameUnique: uniqueIndex("folders_user_name_unique").on(t.userId, t.name),
@@ -90,6 +91,7 @@ export const feeds = pgTable(
     etag: text("etag"),
     lastModified: text("last_modified"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     userUrlUnique: uniqueIndex("feeds_user_url_unique").on(t.userId, t.url),
@@ -124,6 +126,7 @@ export const articles = pgTable(
     imageUrl: text("image_url"),
     wordCount: integer("word_count"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     feedGuidUnique: uniqueIndex("articles_feed_guid_unique").on(t.feedId, t.guid),
@@ -137,6 +140,8 @@ export const articles = pgTable(
     retentionIdx: index("articles_retention_idx")
       .on(t.readStatus, t.createdAt)
       .where(sql`not ${t.starred} and not ${t.readLater}`),
+    // Supports the desktop⇄cloud sync pull ("changed since cursor").
+    userUpdatedIdx: index("articles_user_updated_idx").on(t.userId, t.updatedAt),
   }),
 );
 
@@ -157,6 +162,7 @@ export const documents = pgTable(
     fullText: text("full_text"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     userIdx: index("documents_user_idx").on(t.userId),
@@ -179,6 +185,7 @@ export const documentChunks = pgTable(
     tokenCount: integer("token_count"),
     embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     docChunkUnique: uniqueIndex("doc_chunk_unique").on(t.documentId, t.chunkIndex),
@@ -226,6 +233,7 @@ export const directoryFolders = pgTable(
     position: integer("position").default(0).notNull(),
     isInbox: boolean("is_inbox").default(false).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     userNameUnique: uniqueIndex("directory_folders_user_name_unique").on(t.userId, t.name),
@@ -306,6 +314,7 @@ export const tags = pgTable(
     slug: text("slug").notNull(),
     color: text("color"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     userSlugUnique: uniqueIndex("tags_user_slug_unique").on(t.userId, t.slug),
@@ -326,6 +335,7 @@ export const itemTags = pgTable(
     confidence: integer("confidence"),
     source: text("source").default("user").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.tagId, t.itemKind, t.itemId] }),
@@ -414,6 +424,24 @@ export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
 export type DirectoryFlashcard = typeof directoryFlashcards.$inferSelect;
+
+// ── Sync (desktop ⇄ cloud) ──────────────────────────────────────────────
+// Row deletions recorded by an AFTER DELETE trigger (see migration 0013 /
+// local bootstrap) so the desktop⇄cloud sync can propagate deletes. Exists on
+// BOTH sides. Written only by triggers; read + pruned by the sync engine.
+export const syncTombstones = pgTable(
+  "sync_tombstones",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tableName: text("table_name").notNull(),
+    rowId: uuid("row_id").notNull(),
+    userId: uuid("user_id").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userDeletedIdx: index("sync_tombstones_user_deleted_idx").on(t.userId, t.deletedAt),
+  }),
+);
 
 export const SCHEMA_INIT_SQL = sql`CREATE EXTENSION IF NOT EXISTS vector;`;
 export { EMBEDDING_DIMS };
