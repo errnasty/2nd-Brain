@@ -197,6 +197,20 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+// PGlite is a single-writer embedded DB. A second app instance would spawn a
+// second server opening the same data dir and corrupt/lock it. Refuse to start
+// a second instance; focus the existing window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+app.on("second-instance", () => {
+  const [win] = BrowserWindow.getAllWindows();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
+});
+
 app.whenReady().then(() => {
   buildMenu();
   // First-run guard: without Supabase URL/key the app can't load. Tell the user
