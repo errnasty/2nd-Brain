@@ -1,9 +1,12 @@
 import { requireUser } from "@/lib/auth";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { DesktopSettings } from "@/components/settings/desktop-settings";
+import { OpenInDesktop } from "@/components/settings/open-in-desktop";
 import { SettingsShortcuts } from "@/components/shell/keyboard-shortcuts";
 
 export default async function SettingsPage() {
   const { user } = await requireUser();
+  const isDesktop = process.env.APP_RUNTIME === "desktop";
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10">
@@ -11,6 +14,13 @@ export default async function SettingsPage() {
           <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
           <p className="mt-1 text-sm text-muted-foreground">{user.email}</p>
         </header>
+        {isDesktop ? (
+          <div className="mb-4">
+            <DesktopSettings />
+          </div>
+        ) : (
+          <OpenInDesktop />
+        )}
         <SettingsForm />
         <div className="mt-8">
           <SettingsShortcuts />

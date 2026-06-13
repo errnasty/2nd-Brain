@@ -45,9 +45,15 @@ profile. After that, the app trusts the stored session and runs locally.
 
 ## 4. Where do the API keys / Supabase URL go?
 
-The desktop app reads them from a local **`settings.json`**, auto-created on first
-launch. Open it any time from the menu: **Tools → Open settings file (keys / cloud
-sync)…**. After editing, **Tools → Restart app** (or reopen the app).
+**Easiest: the in-app Settings page.** Open **Settings** in the app — the desktop
+build shows a **Keys & connection** section (Supabase URL/key, Anthropic key,
+embeddings provider, cloud `DATABASE_URL`) plus a **Cloud sync** panel with live
+status and a **Sync now** button. Edit, **Save**, then **Restart now**. No file
+editing required.
+
+Under the hood they're stored in a local **`settings.json`** (auto-created on first
+launch). You can still edit it directly: menu **Tools → Open settings file (keys /
+cloud sync)…**, then **Tools → Restart app**.
 
 `settings.json` lives in the app's user-data folder:
 
@@ -82,8 +88,10 @@ What each one is for:
   there's no serverless time limit. (Optional: `STUDY_PLAN_MODEL` to force e.g.
   `claude-opus-4-7`.)
 - **Embeddings** — set `EMBEDDINGS_PROVIDER=local` to embed on-device with no key
-  (uses the bundled transformers model), **or** provide `OPENAI_API_KEY` /
-  `VOYAGE_API_KEY` and set the provider accordingly.
+  (the `@xenova` model is bundled; the ~130 MB weights download once on first use
+  and cache under `…/Second Brain/models`), **or** provide `OPENAI_API_KEY` /
+  `VOYAGE_API_KEY` and set the provider accordingly. Switching providers later
+  requires re-embedding (vectors from different models aren't comparable).
 - **`DATABASE_URL`** — your cloud Supabase Postgres connection string, used **only
   by sync** (Phase 4). Supabase → Project Settings → **Database** → Connection
   string (URI). Leave blank to run purely local with no cloud sync.
@@ -93,29 +101,50 @@ What each one is for:
 
 ---
 
-## 5. Sync with the cloud (Phase 4 — in progress)
+## 5. Sync with the cloud
 Set `DATABASE_URL` (above) to your Supabase. Sync reconciles the local DB with the
-cloud by last-write-wins (newest `updatedAt` wins) on a background interval.
+cloud by last-write-wins (newest `updatedAt` wins): it runs on launch, every 5 min,
+and on demand (**Sync now** in Settings, or **Tools → Sync now**). Embeddings are
+never synced — they regenerate locally to save bandwidth. Deletes propagate via
+tombstones. The first sync of a full account pulls everything (~tens of thousands of
+rows) in batches; later syncs only move what changed.
 
-**Safety first:** validate against a **throwaway / staging Supabase** project before
-pointing at your real data. Put the staging `DATABASE_URL` + `NEXT_PUBLIC_SUPABASE_*`
-in `settings.json`, confirm changes round-trip both ways, then switch to real creds.
+**Multi-device conflicts.** If you edit the same note on two devices between syncs,
+last-write-wins keeps the newer one — and a banner appears in the app letting you
+**review and copy** the overwritten local version so nothing is silently lost.
+
+> Sync targets whatever `DATABASE_URL` points at. To trial it safely first, point at
+> a throwaway Supabase project, confirm round-trips, then switch to your real creds.
 
 ---
 
 ## 6. Build a distributable installer
 ```bash
+npm run desktop:icons   # regenerate app icons (once / after changing the mark)
 npm run desktop:build
 ```
-Produces an installer in `dist-desktop/` (`.exe`/NSIS on Windows, `.dmg` on macOS,
-AppImage/`.deb` on Linux). Build on the target OS for that OS's installer.
+Produces an installer in `dist-desktop/` (`.exe`/NSIS ~137 MB on Windows, `.dmg` on
+macOS, AppImage/`.deb` on Linux). Build on the target OS for that OS's installer.
+On Windows the installer lands at `dist-desktop\Second Brain Setup <version>.exe`.
+
+### Auto-update (optional)
+The app self-updates from **GitHub Releases** via `electron-updater`. To enable:
+1. In `package.json` → `build.publish`, set `owner` to your GitHub user and `repo`.
+2. `set GH_TOKEN=<a token with repo scope>` and run `npx electron-builder --win --publish always`.
+3. Installed apps then check on launch (and **Tools → Check for updates…**), download
+   in the background, and prompt to restart. Until a release is published this is a
+   harmless no-op.
+
+### Open from the web
+The web app's Settings has **Open in desktop app**, which hands off to the installed
+desktop app via the `secondbrain://` protocol and jumps to the same page.
 
 ---
 
 ## Troubleshooting
 - **`electron/path.txt ENOENT`** → `npm run desktop:fix` (Windows extraction quirk).
-- **AI features say "not configured"** → add the relevant key to `settings.json` →
-  Tools → Restart.
+- **AI features say "not configured"** → add the relevant key in **Settings → Keys &
+  connection** (or `settings.json`), Save, then Restart.
 - **Login keeps redirecting** → you must sign in once online first; check the
   Supabase URL + anon key.
 - **Reset the local DB** → quit the app and delete the `db` folder in the user-data

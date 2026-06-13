@@ -31,6 +31,22 @@ create table if not exists sync_meta (
   value text not null
 );
 
+-- Multi-device edit conflicts: a remote (cloud) edit overwrote a row that was
+-- ALSO edited locally since the last sync (last-write-wins kept the newer one).
+-- Local-only, never synced. The lost local version is captured so the user can
+-- recover it. One active row per note (PK row_id).
+create table if not exists sync_conflicts (
+  row_id uuid primary key,
+  table_name text not null,
+  title text,
+  local_content text,
+  local_updated_at timestamptz,
+  remote_updated_at timestamptz,
+  detected_at timestamptz not null default now(),
+  resolved boolean not null default false
+);
+create index if not exists sync_conflicts_unresolved_idx on sync_conflicts (resolved, detected_at);
+
 create or replace function sync_touch_updated_at() returns trigger as $$
 begin
   if coalesce(current_setting('app.sync_apply', true), '') = '1' then

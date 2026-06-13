@@ -66,6 +66,7 @@ export type SyncSummary = {
   deletesApplied: number;
   deletesPushed: number;
   skipped: number;
+  conflicts: number;
   error?: string;
 };
 
@@ -202,6 +203,7 @@ export async function runSync(): Promise<SyncSummary> {
     deletesApplied: 0,
     deletesPushed: 0,
     skipped: 0,
+    conflicts: 0,
   };
   if (!isDesktop) return { ...s, error: "sync only runs on the desktop build" };
   if (state.running) return { ...s, error: "sync already running" };
@@ -238,6 +240,21 @@ export async function runSync(): Promise<SyncSummary> {
         await tx.query(stmt, [rowJson]);
       });
     }
+    // Apply a whole batch in ONE transaction — ~BATCH× fewer round-trips than a
+    // transaction per row (the first full sync is tens of thousands of rows).
+    // The caller falls back to per-row applyLocal if the batch throws, so one
+    // bad row never drops the other 499.
+    async function applyLocalBatch(stmt: string, rowJsons: string[]) {
+      await localDb.transaction(async (tx) => {
+        await tx.query("set local session_replication_role = replica");
+        for (const rj of rowJsons) await tx.query(stmt, [rj]);
+      });
+    }
+
+    // Watermark for "edited locally since the last sync" — the previous run's
+    // directory_items push cursor. Used to detect multi-device edit conflicts.
+    const itemsPushRaw = await metaGet(pg, "push:directory_items");
+    const itemsSyncedMicros = itemsPushRaw ? String((JSON.parse(itemsPushRaw) as [string, string])[0]) : "-1";
 
     // ── PULL (cloud → local), keyset (updated_at,id) per table ───────
     for (const t of TABLES) {
@@ -265,19 +282,69 @@ export async function runSync(): Promise<SyncSummary> {
         }[];
         if (rows.length === 0) break;
 
-        for (const r of rows) {
-          // PGlite returns jsonb as a string; postgres-js as an object. Normalize.
-          const row = typeof r.row === "string" ? (JSON.parse(r.row) as Record<string, unknown>) : r.row;
-          try {
-            await applyLocal(stmt, JSON.stringify(row));
-            s.pulled += 1;
-            pulledKeys.add(`${t.name}|${t.pk.map((c) => String(row[c])).join("|")}|${r.u}`);
-            if (t.name === "directory_items") {
-              pulledItems.push({ id: String(row.id), content: (row.content as string | null) ?? null });
+        // PGlite returns jsonb as a string; postgres-js as an object. Normalize.
+        const prepared = rows.map((r) => ({
+          row: (typeof r.row === "string" ? JSON.parse(r.row) : r.row) as Record<string, unknown>,
+          u: r.u,
+        }));
+        const note = (p: (typeof prepared)[number]) => {
+          s.pulled += 1;
+          pulledKeys.add(`${t.name}|${t.pk.map((c) => String(p.row[c])).join("|")}|${p.u}`);
+          if (t.name === "directory_items") {
+            pulledItems.push({ id: String(p.row.id), content: (p.row.content as string | null) ?? null });
+          }
+        };
+
+        // Conflict detection (notes only): a row about to be overwritten that
+        // was ALSO edited locally since the last sync (local older → it loses).
+        // One set-based query per batch keeps the hot path fast.
+        if (t.name === "directory_items" && !initial) {
+          const remoteMicros = new Map(prepared.map((p) => [String(p.row.id), p.u]));
+          const ids = JSON.stringify([...remoteMicros.keys()]);
+          const dirty = (await pg.query(
+            `select id::text as id, title, content,
+                    (extract(epoch from updated_at)*1000000)::bigint::text as lu
+             from directory_items
+             where id in (select value::uuid from jsonb_array_elements_text($1::jsonb) as value)
+               and (extract(epoch from updated_at)*1000000)::bigint > $2::bigint`,
+            [ids, itemsSyncedMicros],
+          )) as { rows: { id: string; title: string | null; content: string | null; lu: string }[] };
+          for (const d of dirty.rows) {
+            const rm = remoteMicros.get(d.id);
+            if (rm && BigInt(rm) > BigInt(d.lu)) {
+              try {
+                await pg.query(
+                  `insert into sync_conflicts
+                     (row_id, table_name, title, local_content, local_updated_at, remote_updated_at)
+                   values ($1,'directory_items',$2,$3,
+                           to_timestamp($4::bigint/1000000.0), to_timestamp($5::bigint/1000000.0))
+                   on conflict (row_id) do update set
+                     title=excluded.title, local_content=excluded.local_content,
+                     local_updated_at=excluded.local_updated_at,
+                     remote_updated_at=excluded.remote_updated_at,
+                     detected_at=now(), resolved=false`,
+                  [d.id, d.title, d.content, d.lu, rm],
+                );
+                s.conflicts += 1;
+              } catch (err) {
+                console.warn("[sync] conflict record skip:", err instanceof Error ? err.message : err);
+              }
             }
-          } catch (err) {
-            s.skipped += 1;
-            console.warn(`[sync] pull skip ${t.name}:`, err instanceof Error ? err.message : err);
+          }
+        }
+        try {
+          await applyLocalBatch(stmt, prepared.map((p) => JSON.stringify(p.row)));
+          for (const p of prepared) note(p);
+        } catch {
+          // One row poisoned the batch — replay row-by-row so the rest land.
+          for (const p of prepared) {
+            try {
+              await applyLocal(stmt, JSON.stringify(p.row));
+              note(p);
+            } catch (err) {
+              s.skipped += 1;
+              console.warn(`[sync] pull skip ${t.name}:`, err instanceof Error ? err.message : err);
+            }
           }
         }
         const last = rows[rows.length - 1];
