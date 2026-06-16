@@ -63,6 +63,12 @@ export function TagManager({
     if (!editingId) return;
     const id = editingId;
     const name = editValue.trim();
+    // Don't send an empty name to the server (it would fail validation or blank
+    // the tag) — just cancel the edit.
+    if (!name) {
+      setEditingId(null);
+      return;
+    }
     setEditingId(null);
     startTransition(async () => {
       const r = await renameTagAction({ id, name });
@@ -79,8 +85,13 @@ export function TagManager({
         : `Delete "${tag.name}"?`;
     if (!confirm(msg)) return;
     startTransition(async () => {
-      await deleteTagAction(tag.id);
-      toast.success("Tag deleted");
+      try {
+        await deleteTagAction(tag.id);
+        toast.success("Tag deleted");
+      } catch (e) {
+        // Failed delete must not claim success — the tag is still there.
+        toast.error(`Delete failed: ${e instanceof Error ? e.message : "error"}`);
+      }
     });
   }
 

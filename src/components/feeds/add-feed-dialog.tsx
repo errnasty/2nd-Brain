@@ -99,7 +99,7 @@ export function AddFeedDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending || !url}>
+            <Button type="submit" disabled={pending || !url.trim()}>
               {pending ? "Adding…" : "Add feed"}
             </Button>
           </DialogFooter>

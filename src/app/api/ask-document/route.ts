@@ -124,14 +124,18 @@ export async function POST(req: Request) {
     const chosen = getChatModel(body.model);
     const webModelId = chosen.provider === "anthropic" ? chosen.id : DEFAULT_CHAT_MODEL;
     return new Response(
-      streamWebAnswer({ model: webModelId, system: SYSTEM_WEB, userContent: userMessage }),
+      streamWebAnswer({ model: webModelId, system: SYSTEM_WEB, userContent: userMessage, signal: req.signal }),
       { headers: { "content-type": "text/plain; charset=utf-8" } },
     );
   }
 
   // Socratic: doc lives in the system prompt (sent once); multi-turn history
   // keeps the quiz going cheaply. QA: single message with the doc inline.
-  const history = (body.history ?? []).slice(-8);
+  // Cap each turn server-side (the client posts the whole transcript).
+  const MAX_TURN_CHARS = 4000;
+  const history: Turn[] = (body.history ?? [])
+    .slice(-8)
+    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }));
   const result = socratic
     ? streamText({
         model,
@@ -141,12 +145,14 @@ export async function POST(req: Request) {
           { role: "user" as const, content: question || "Begin." },
         ],
         temperature: 0.5,
+        abortSignal: req.signal,
       })
     : streamText({
         model,
         system: SYSTEM,
         messages: [{ role: "user", content: userMessage }],
         temperature: 0.3,
+        abortSignal: req.signal,
       });
 
   const encoder = new TextEncoder();
@@ -164,11 +170,21 @@ export async function POST(req: Request) {
         };
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
       } catch (err) {
-        controller.enqueue(
-          encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
-        );
+        if (!req.signal.aborted) {
+          try {
+            controller.enqueue(
+              encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
+            );
+          } catch {
+            /* controller closed */
+          }
+        }
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       }
     },
   });

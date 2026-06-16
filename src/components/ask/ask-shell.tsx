@@ -18,6 +18,7 @@ import {
   NotebookPen,
   RefreshCw,
   Sparkles,
+  Square,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
+import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
@@ -64,18 +66,6 @@ type Message = {
   plan?: StudyPlanResult;
 };
 
-const USAGE_SENTINEL = "<<<SB_USAGE:";
-const WEBSOURCES_SENTINEL = "<<<SB_WEBSOURCES:";
-
-/** Index of the first sentinel marker present in the buffer, or -1. */
-function firstSentinel(acc: string): number {
-  const a = acc.indexOf(WEBSOURCES_SENTINEL);
-  const b = acc.indexOf(USAGE_SENTINEL);
-  if (a < 0) return b;
-  if (b < 0) return a;
-  return Math.min(a, b);
-}
-
 const SUGGESTIONS = [
   "Summarize what I've read about AI safety this week",
   "Compare the macro takes across my saved economics articles",
@@ -99,6 +89,19 @@ export function AskShell() {
   const [hoursPerWeek, setHoursPerWeek] = useState("5");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Abort any in-flight stream when the user leaves the page — otherwise the
+  // request runs to completion (burning tokens) and tries to setState on an
+  // unmounted component.
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
+  // Stop a streaming answer on demand (keeps whatever streamed so far).
+  const stop = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   // Stable refs so memoized MessageBubbles don't re-render (and re-parse their
   // markdown) every time the messages array changes.
@@ -220,12 +223,17 @@ export function AskShell() {
       setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
       setStreaming(true);
 
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       try {
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question: trimmed, history, model: modelId, web }),
           cache: "no-store",
+          signal: controller.signal,
         });
         if (!res.ok) {
           const text = await res.text();
@@ -256,8 +264,7 @@ export function AskShell() {
         let frameQueued = false;
         const flush = () => {
           frameQueued = false;
-          const sentinelIdx = firstSentinel(acc);
-          const display = sentinelIdx >= 0 ? acc.slice(0, sentinelIdx) : acc;
+          const display = displayText(acc);
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
           );
@@ -298,6 +305,9 @@ export function AskShell() {
           prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)),
         );
       } catch (err) {
+        // User pressed Stop or navigated away — keep whatever streamed so far,
+        // no error.
+        if ((err as Error)?.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Request failed");
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
       } finally {
@@ -531,16 +541,29 @@ export function AskShell() {
             className="min-h-[56px] resize-none pr-12 text-[15px]"
             disabled={streaming}
           />
-          <Button
-            type="submit"
-            size="icon"
-            variant="brand"
-            className="absolute bottom-2 right-2 h-8 w-8"
-            disabled={streaming || !input.trim()}
-            title="Send (Enter)"
-          >
-            {streaming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-3.5 w-3.5" />}
-          </Button>
+          {streaming ? (
+            <Button
+              type="button"
+              size="icon"
+              variant="brand"
+              className="absolute bottom-2 right-2 h-8 w-8"
+              onClick={stop}
+              title="Stop generating"
+            >
+              <Square className="h-3 w-3 fill-current" />
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="icon"
+              variant="brand"
+              className="absolute bottom-2 right-2 h-8 w-8"
+              disabled={!input.trim()}
+              title="Send (Enter)"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </form>
         <p className="mt-2 text-[10px] text-muted-foreground">
           Enter to send · Shift+Enter for newline

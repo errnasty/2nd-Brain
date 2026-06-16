@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import { saveArticleToDirectoryAction } from "@/app/(app)/directory/actions";
 import { formatRelativeTime } from "@/lib/utils";
+import { runOptimistic } from "@/lib/ui/optimistic";
 import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
@@ -82,9 +83,14 @@ export function ArticleReader({
 
   function toggleStar() {
     if (!article) return;
+    const prev = article;
     const next = !article.starred;
-    setArticle({ ...article, starred: next });
-    startTransition(() => toggleStarredAction(article.id, next));
+    void runOptimistic({
+      apply: () => setArticle({ ...prev, starred: next }),
+      revert: () => setArticle(prev),
+      action: () => toggleStarredAction(prev.id, next),
+      errorPrefix: "Couldn't update star",
+    });
   }
 
   function saveToDirectory() {
@@ -105,21 +111,27 @@ export function ArticleReader({
 
   function toggleRead() {
     if (!article) return;
-    const next = article.readStatus === "read" ? "unread" : "read";
-    setArticle({ ...article, readStatus: next });
-    startTransition(async () => {
-      await setReadStatusAction({ articleIds: [article.id], status: next });
-      toast.success(next === "read" ? "Marked read" : "Marked unread");
+    const prev = article;
+    const next = prev.readStatus === "read" ? "unread" : "read";
+    void runOptimistic({
+      apply: () => setArticle({ ...prev, readStatus: next }),
+      revert: () => setArticle(prev),
+      action: () => setReadStatusAction({ articleIds: [prev.id], status: next }),
+      success: next === "read" ? "Marked read" : "Marked unread",
+      errorPrefix: "Couldn't update read state",
     });
   }
 
   function toggleReadLater() {
     if (!article) return;
-    const next = !article.readLater;
-    setArticle({ ...article, readLater: next });
-    startTransition(async () => {
-      await setReadLaterAction({ articleIds: [article.id], readLater: next });
-      toast.success(next ? "Saved to Read Later" : "Removed from Read Later");
+    const prev = article;
+    const next = !prev.readLater;
+    void runOptimistic({
+      apply: () => setArticle({ ...prev, readLater: next }),
+      revert: () => setArticle(prev),
+      action: () => setReadLaterAction({ articleIds: [prev.id], readLater: next }),
+      success: next ? "Saved to Read Later" : "Removed from Read Later",
+      errorPrefix: "Couldn't update Read Later",
     });
   }
 
@@ -416,6 +428,7 @@ export function ArticleReader({
       {article && (
         <DocQueryPanel
           open={queryOpen}
+          docId={article.id}
           title={article.title}
           content={content ?? article.excerpt ?? ""}
           onClose={() => setQueryOpen(false)}

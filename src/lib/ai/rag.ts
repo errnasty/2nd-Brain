@@ -344,19 +344,22 @@ export async function fetchItemContents(
     article_text: string | null;
   };
 
+  // Cap every text field to MAX_DOC_CHARS IN SQL (left(...)) so a multi-MB
+  // document/article isn't shipped to Node only to be sliced down here. The
+  // model never sees more than this anyway.
   const rows = (await db.execute(sql`
     select
       di.id,
       di.title,
       di.kind,
       di.folder_id,
-      di.content as note_content,
-      coalesce(
+      left(di.content, ${MAX_DOC_CHARS}) as note_content,
+      left(coalesce(
         (select string_agg(c.content, E'\n\n' order by c.chunk_index)
          from document_chunks c where c.document_id = di.document_id),
         d.full_text
-      ) as doc_text,
-      coalesce(a.full_text, a.excerpt) as article_text
+      ), ${MAX_DOC_CHARS}) as doc_text,
+      left(coalesce(a.full_text, a.excerpt), ${MAX_DOC_CHARS}) as article_text
     from directory_items di
     left join documents d on d.id = di.document_id
     left join articles a on a.id = di.article_id

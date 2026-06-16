@@ -230,7 +230,12 @@ export function DirectoryShell({
   }
 
   function onFilesPicked(files: FileList) {
+    const MAX_BYTES = 20 * 1024 * 1024; // matches the server's MAX_UPLOAD_BYTES
     Array.from(files).forEach((file) => {
+      if (file.size > MAX_BYTES) {
+        toast.error(`${file.name} is ${(file.size / 1024 / 1024).toFixed(0)}MB — over the 20MB limit.`);
+        return;
+      }
       const fd = new FormData();
       fd.set("file", file);
       if (targetFolderId) fd.set("folderId", targetFolderId);

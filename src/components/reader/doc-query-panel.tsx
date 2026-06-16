@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import {
   loadDocPrompts,
   saveDocPrompts,
@@ -17,20 +18,9 @@ import {
 } from "@/lib/ai/doc-prompts";
 
 const MODEL_STORAGE_KEY = "ask.model.v1";
-const USAGE_SENTINEL = "<<<SB_USAGE:";
-const WEBSOURCES_SENTINEL = "<<<SB_WEBSOURCES:";
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
 type WebSource = { title: string; url: string };
-
-/** Index of the first sentinel marker present in the buffer, or -1. */
-function firstSentinel(acc: string): number {
-  const a = acc.indexOf(WEBSOURCES_SENTINEL);
-  const b = acc.indexOf(USAGE_SENTINEL);
-  if (a < 0) return b;
-  if (b < 0) return a;
-  return Math.min(a, b);
-}
 
 function getModel(): string {
   if (typeof window === "undefined") return DEFAULT_CHAT_MODEL;
@@ -60,11 +50,16 @@ export function DocQueryPanel({
   open,
   title,
   content,
+  docId,
   onClose,
 }: {
   open: boolean;
   title: string;
   content: string;
+  /** Stable identity of the open doc. Changing it resets the panel (so doc B
+   *  doesn't show doc A's answer). NOT `content`, which changes on every
+   *  keystroke while editing a note. */
+  docId?: string;
   onClose: () => void;
 }) {
   const [prompts, setPrompts] = useState<DocPrompt[]>([]);
@@ -83,10 +78,33 @@ export function DocQueryPanel({
     setPrompts(loadDocPrompts());
   }, []);
 
-  // Drop any in-flight request if the panel unmounts or the doc changes.
+  // Drop any in-flight request if the panel unmounts.
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
+
+  // Reset all answer state when the underlying document changes — otherwise
+  // opening doc B shows doc A's answer/transcript until you ask again.
+  useEffect(() => {
+    abortRef.current?.abort();
+    setAnswer("");
+    setUsage(null);
+    setWebSources([]);
+    setTurns([]);
+    setSocratic(false);
+    setQuestion("");
+    setStreaming(false);
+  }, [docId]);
+
+  // Esc closes the drawer, matching every other overlay (Dialog, command palette).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   async function ask(q: string) {
     const text = q.trim();
@@ -129,8 +147,7 @@ export function DocQueryPanel({
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        const cut = firstSentinel(acc);
-        setAnswer(cut >= 0 ? acc.slice(0, cut) : acc);
+        setAnswer(displayText(acc));
       }
 
       // Parse the trailing sentinels: web sources (cited URLs) + token usage.
@@ -204,8 +221,7 @@ export function DocQueryPanel({
         const { done, value } = await reader.read();
         if (done) break;
         acc += decoder.decode(value, { stream: true });
-        const cut = firstSentinel(acc);
-        const display = cut >= 0 ? acc.slice(0, cut) : acc;
+        const display = displayText(acc);
         setTurns((t) => {
           const next = [...t];
           next[next.length - 1] = { role: "assistant", content: display };
@@ -268,6 +284,10 @@ export function DocQueryPanel({
           open ? "translate-x-0" : "translate-x-full",
         )}
         aria-hidden={!open}
+        // While closed the drawer is off-screen but still in the DOM — inert
+        // pulls its textarea/buttons out of the tab order and blocks pointer
+        // events, so keyboard users don't Tab into an invisible panel.
+        inert={!open}
       >
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Sparkles className="h-4 w-4 text-primary" />

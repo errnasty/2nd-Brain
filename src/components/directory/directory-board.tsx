@@ -1,10 +1,12 @@
 "use client";
 
+import { useEffect, useMemo } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { FileText, Newspaper, NotebookPen } from "lucide-react";
+import { FileText, GripVertical, Newspaper, NotebookPen } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import type { ReadingStatus } from "@/lib/directory/query";
 import type { DirectoryListItem } from "./directory-shell";
+import { useBoardOptimistic } from "./board-optimistic";
 
 const COLUMNS: { id: ReadingStatus; label: string }[] = [
   { id: "inbox", label: "Inbox" },
@@ -35,6 +37,28 @@ export function DirectoryBoard({
   selectedId: string | null;
   onOpen: (id: string) => void;
 }) {
+  const { overrides, revert } = useBoardOptimistic();
+
+  // Apply pending optimistic moves so a just-dropped card shows in its target
+  // column immediately, before the server confirm + router.refresh land.
+  const effItems = useMemo(
+    () =>
+      items.map((i) =>
+        overrides[i.id] && overrides[i.id] !== i.readingStatus
+          ? { ...i, readingStatus: overrides[i.id] }
+          : i,
+      ),
+    [items, overrides],
+  );
+
+  // Once refreshed server data already reflects a pending move, drop the
+  // override so the map doesn't grow.
+  useEffect(() => {
+    for (const i of items) {
+      if (overrides[i.id] && i.readingStatus === overrides[i.id]) revert(i.id);
+    }
+  }, [items, overrides, revert]);
+
   return (
     <div className="flex flex-1 gap-3 overflow-x-auto p-3">
       {COLUMNS.map((col) => (
@@ -42,7 +66,7 @@ export function DirectoryBoard({
           key={col.id}
           status={col.id}
           label={col.label}
-          items={items.filter((i) => i.readingStatus === col.id)}
+          items={effItems.filter((i) => i.readingStatus === col.id)}
           selectedId={selectedId}
           onOpen={onOpen}
         />
@@ -110,15 +134,25 @@ function BoardCard({
   return (
     <div
       ref={setNodeRef}
-      {...attributes}
-      {...listeners}
       onClick={() => onOpen(item.id)}
       className={cn(
-        "cursor-grab rounded-md border border-border bg-background p-2.5 text-left shadow-sm transition-colors hover:bg-accent/50 active:cursor-grabbing",
+        "group relative cursor-pointer rounded-md border border-border bg-background p-2.5 pr-7 text-left shadow-sm transition-colors hover:bg-accent/50",
         selected && "ring-2 ring-primary",
         isDragging && "opacity-40",
       )}
     >
+      {/* Dedicated drag handle. Only this (touch-action: none) starts a drag, so
+          a vertical finger-swipe anywhere else still scrolls the column on touch. */}
+      <button
+        {...attributes}
+        {...listeners}
+        onClick={(e) => e.stopPropagation()}
+        title="Drag to move"
+        aria-label="Drag to move"
+        className="absolute right-1 top-1 cursor-grab touch-none rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 active:cursor-grabbing"
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
       <div className="mb-1 flex items-center gap-1.5 text-[10px] text-muted-foreground">
         {KIND_ICON[item.kind]}
         <span>{formatRelativeTime(item.updatedAt)}</span>

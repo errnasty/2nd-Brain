@@ -42,12 +42,16 @@ async function embedAndWrite<T>(
   provider: ReturnType<typeof getEmbeddingsProvider>,
   label: string,
   progress: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<{ embedded: number; failed: number }> {
   const batches: T[][] = [];
   for (let i = 0; i < items.length; i += BATCH) batches.push(items.slice(i, i + BATCH));
 
   let done = 0;
   const tasks = batches.map((batch) => async () => {
+    // Client disconnected — skip remaining batches instead of burning more
+    // provider calls on a response nobody is reading.
+    if (signal?.aborted) return { embedded: 0, failed: 0 };
     const texts = batch.map(makeText);
     const vectors = await safeEmbedBatch(provider, texts);
     const rows: Embedded<T>[] = [];
@@ -165,6 +169,7 @@ export async function backfillEmbeddings(
   userId: string,
   limit = 500,
   onProgress?: BackfillProgress,
+  signal?: AbortSignal,
 ): Promise<BackfillResult> {
   const progress = (msg: string) => {
     try {
@@ -218,6 +223,7 @@ export async function backfillEmbeddings(
       provider,
       "Articles",
       progress,
+      signal,
     );
     articlesEmbedded += r.embedded;
     failed += r.failed;
@@ -226,6 +232,7 @@ export async function backfillEmbeddings(
   }
 
   // ── Document chunks ──────────────────────────────────────────────
+  if (signal?.aborted) return { articlesEmbedded, chunksEmbedded, notesEmbedded, failed, errors };
   try {
     const missingChunks = await db
       .select({ id: documentChunks.id, content: documentChunks.content })
@@ -250,6 +257,7 @@ export async function backfillEmbeddings(
       provider,
       "Documents",
       progress,
+      signal,
     );
     chunksEmbedded += r.embedded;
     failed += r.failed;
@@ -258,6 +266,7 @@ export async function backfillEmbeddings(
   }
 
   // ── User notes (embedding stored directly on directory_items) ────
+  if (signal?.aborted) return { articlesEmbedded, chunksEmbedded, notesEmbedded, failed, errors };
   try {
     type NoteRow = { id: string; title: string; content: string | null };
     const missingNotes = (await db.execute(sql`
@@ -285,6 +294,7 @@ export async function backfillEmbeddings(
       provider,
       "Notes",
       progress,
+      signal,
     );
     notesEmbedded += r.embedded;
     failed += r.failed;

@@ -36,16 +36,28 @@ export async function POST(req: Request) {
   const userId = user.id;
 
   const encoder = new TextEncoder();
+  // Abort the embedding work + heartbeat when the client disconnects. Hoisted so
+  // cancel() can reach them.
+  const ac = new AbortController();
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  // Mirror a client disconnect (req.signal) into our controller.
+  req.signal.addEventListener("abort", () => ac.abort(), { once: true });
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const write = (s: string) => controller.enqueue(encoder.encode(s));
+      const write = (s: string) => {
+        try {
+          controller.enqueue(encoder.encode(s));
+        } catch {
+          /* stream closed/cancelled */
+        }
+      };
       // Heartbeat: emit a dot every 3s even if a batch is slow, so the proxy
-      // always sees traffic. Cleared when work finishes.
-      const heartbeat = setInterval(() => write("·"), 3000);
+      // always sees traffic. Cleared when work finishes or the client leaves.
+      heartbeat = setInterval(() => write("·"), 3000);
       try {
         write("Refreshing memory…\n");
-        const result = await backfillEmbeddings(userId, limit, (msg) => write(`${msg}\n`));
-        clearInterval(heartbeat);
+        const result = await backfillEmbeddings(userId, limit, (msg) => write(`${msg}\n`), ac.signal);
         const total = result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded;
         write(
           `\nDONE ${JSON.stringify({
@@ -55,11 +67,23 @@ export async function POST(req: Request) {
           })}\n`,
         );
       } catch (err) {
-        clearInterval(heartbeat);
-        write(`\nDONE ${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : "Unknown error" })}\n`);
+        if (!ac.signal.aborted) {
+          write(`\nDONE ${JSON.stringify({ ok: false, error: err instanceof Error ? err.message : "Unknown error" })}\n`);
+        }
       } finally {
-        controller.close();
+        if (heartbeat) clearInterval(heartbeat);
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       }
+    },
+    cancel() {
+      // Client went away — stop the heartbeat and signal the backfill to stop
+      // issuing further provider calls.
+      if (heartbeat) clearInterval(heartbeat);
+      ac.abort();
     },
   });
 

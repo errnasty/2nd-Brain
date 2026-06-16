@@ -7,6 +7,7 @@ import { uploadDocumentAction } from "@/app/(app)/documents/actions";
 import { toast } from "sonner";
 
 const ACCEPT = ".pdf,.md,.markdown,.txt,.epub,application/pdf,application/epub+zip,text/markdown,text/plain";
+const MAX_BYTES = 20 * 1024 * 1024; // matches the server's MAX_UPLOAD_BYTES
 
 export function UploadZone({ folderId }: { folderId?: string | null }) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -14,7 +15,18 @@ export function UploadZone({ folderId }: { folderId?: string | null }) {
   const [pending, startTransition] = useTransition();
 
   async function upload(files: FileList | File[]) {
-    const list = Array.from(files);
+    const all = Array.from(files);
+    if (all.length === 0) return;
+
+    // Reject oversized files up front instead of uploading the whole thing and
+    // failing server-side after a long wait.
+    const list = all.filter((f) => {
+      if (f.size > MAX_BYTES) {
+        toast.error(`${f.name} is ${(f.size / 1024 / 1024).toFixed(0)}MB — over the 20MB limit.`);
+        return false;
+      }
+      return true;
+    });
     if (list.length === 0) return;
 
     startTransition(async () => {

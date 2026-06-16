@@ -79,12 +79,15 @@ export function DesktopSettings() {
 
   const [status, setStatus] = useState<{ running: boolean; last: SyncSummary | null } | null>(null);
   const [syncing, setSyncing] = useState(false);
+  // Which secret keys are already set on disk (the API never returns the values).
+  const [configured, setConfigured] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     fetch("/api/desktop/settings")
       .then((r) => r.json())
       .then((d) => {
         if (d?.env) setEnv({ ...EMPTY, ...d.env });
+        if (d?.configured) setConfigured(d.configured);
       })
       .catch(() => {})
       .finally(() => setLoaded(true));
@@ -230,7 +233,11 @@ export function DesktopSettings() {
               <Input
                 type={f.secret ? "password" : "text"}
                 value={env[f.key]}
-                placeholder={f.placeholder}
+                placeholder={
+                  f.secret && configured[f.key] && !env[f.key]
+                    ? "•••• configured — leave blank to keep"
+                    : f.placeholder
+                }
                 autoComplete="off"
                 spellCheck={false}
                 onChange={(e) => set(f.key, e.target.value)}

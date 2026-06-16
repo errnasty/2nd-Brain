@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { CheckSquare, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,13 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
   const [, startTransition] = useTransition();
   // Optimistic done overrides so the checkbox flips instantly.
   const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+
+  // Clear optimistic overrides once fresh server data arrives (router.refresh
+  // re-renders with a new tasks array). Otherwise the map grows unbounded and a
+  // stale override could mask an out-of-band server change to a task.
+  useEffect(() => {
+    setOverrides({});
+  }, [tasks]);
 
   const withDone = useMemo(
     () => tasks.map((t) => ({ ...t, done: overrides[t.id] ?? t.done })),
@@ -89,6 +96,9 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
             <button
               key={f}
               onClick={() => setFilter(f)}
+              // "today" shows overdue + today, so label it "Due" — calling it
+              // "Today" while listing past-due items read as a mismatch.
+              title={f === "today" ? "Due today or overdue" : undefined}
               className={cn(
                 "rounded px-2.5 py-1 capitalize transition-colors",
                 filter === f
@@ -96,7 +106,7 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {f}
+              {f === "today" ? "Due" : f}
             </button>
           ))}
         </div>

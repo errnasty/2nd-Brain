@@ -20,6 +20,8 @@ type StreamArgs = {
   userContent: string;
   /** Prior conversation turns, oldest first. */
   history?: { role: "user" | "assistant"; content: string }[];
+  /** Aborts the Anthropic stream when the client disconnects. */
+  signal?: AbortSignal;
 };
 
 /**
@@ -100,7 +102,7 @@ export async function plainAnswerOnce({
   return { text };
 }
 
-export function streamWebAnswer({ model, system, userContent, history }: StreamArgs): ReadableStream<Uint8Array> {
+export function streamWebAnswer({ model, system, userContent, history, signal }: StreamArgs): ReadableStream<Uint8Array> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
 
@@ -109,16 +111,23 @@ export function streamWebAnswer({ model, system, userContent, history }: StreamA
     { role: "user" as const, content: userContent },
   ];
 
+  // Hoisted so cancel() can abort the in-flight Anthropic stream.
+  let anthropicStream: ReturnType<typeof client.messages.stream> | null = null;
+
   return new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        const stream = client.messages.stream({
-          model,
-          max_tokens: MAX_TOKENS,
-          system,
-          messages,
-          tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_SEARCHES }],
-        });
+        const stream = client.messages.stream(
+          {
+            model,
+            max_tokens: MAX_TOKENS,
+            system,
+            messages,
+            tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_SEARCHES }],
+          },
+          { signal },
+        );
+        anthropicStream = stream; // hoist the ref so cancel() can abort it
 
         stream.on("text", (delta) => controller.enqueue(encoder.encode(delta)));
 
@@ -147,10 +156,28 @@ export function streamWebAnswer({ model, system, userContent, history }: StreamA
         };
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(usage)}`));
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "unknown";
-        controller.enqueue(encoder.encode(`\n\n_(web search error: ${msg})_`));
+        if (!signal?.aborted) {
+          const msg = err instanceof Error ? err.message : "unknown";
+          try {
+            controller.enqueue(encoder.encode(`\n\n_(web search error: ${msg})_`));
+          } catch {
+            /* controller closed */
+          }
+        }
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
+    cancel() {
+      // Client disconnected — stop the Anthropic generation.
+      try {
+        anthropicStream?.abort();
+      } catch {
+        /* ignore */
       }
     },
   });

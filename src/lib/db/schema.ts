@@ -214,6 +214,9 @@ export const articleEmbeddings = pgTable(
     articleChunkUnique: uniqueIndex("article_chunk_unique").on(t.articleId, t.chunkIndex),
     embeddingIdx: index("article_embeddings_embedding_idx")
       .using("hnsw", t.embedding.op("vector_cosine_ops")),
+    // RAG/related queries filter by user_id; without this the tenant predicate
+    // was an unindexed scan layered on the global HNSW search.
+    userIdx: index("article_embeddings_user_idx").on(t.userId),
   }),
 );
 
@@ -341,6 +344,9 @@ export const itemTags = pgTable(
     pk: primaryKey({ columns: [t.tagId, t.itemKind, t.itemId] }),
     itemIdx: index("item_tags_item_idx").on(t.itemKind, t.itemId),
     userIdx: index("item_tags_user_idx").on(t.userId),
+    // Tag-filter + export workload filters (user_id, item_kind, tag_id) then
+    // groups by item_id. This composite serves that query shape directly.
+    tagFilterIdx: index("item_tags_user_kind_tag_idx").on(t.userId, t.itemKind, t.tagId, t.itemId),
   }),
 );
 

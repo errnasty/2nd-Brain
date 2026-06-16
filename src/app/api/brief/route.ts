@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { and, eq, gte, desc } from "drizzle-orm";
+import { and, eq, gte, desc, sql } from "drizzle-orm";
 import { anthropic } from "@ai-sdk/anthropic";
 import { streamText } from "ai";
 import { db } from "@/lib/db";
@@ -168,7 +168,10 @@ export async function POST(req: Request) {
         title: articles.title,
         url: articles.url,
         excerpt: articles.excerpt,
-        fullText: articles.fullText,
+        // Cap raw full_text in SQL: only ~1500 plain chars per article reach the
+        // model (after stripHtml), so shipping whole multi-MB article bodies for
+        // 60 rows is pure waste. 9000 raw chars leaves headroom for HTML tags.
+        fullText: sql<string | null>`left(${articles.fullText}, 9000)`.as("full_text"),
         feedTitle: feeds.title,
       })
       .from(articles)
@@ -252,6 +255,7 @@ export async function POST(req: Request) {
       },
     ],
     temperature: 0.4,
+    abortSignal: req.signal,
   });
 
   // Stream the brief text, then append source + usage sentinels the client
@@ -279,11 +283,21 @@ export async function POST(req: Request) {
         // Cache the finished brief for reuse on reload / other devices.
         if (acc.trim()) setCachedBrief(cacheKey, { content: acc, sourceMap, usage: payload });
       } catch (err) {
-        controller.enqueue(
-          encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
-        );
+        if (!req.signal.aborted) {
+          try {
+            controller.enqueue(
+              encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
+            );
+          } catch {
+            /* controller closed */
+          }
+        }
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       }
     },
   });

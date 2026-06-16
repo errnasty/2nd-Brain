@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Brain, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
@@ -79,7 +79,29 @@ export function ItemViewer({
   const [fullLoading, setFullLoading] = useState(false);
   const [articleData, setArticleData] = useState<ArticleContent | null>(null);
   const [queryOpen, setQueryOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
+  // Mirrors the live editable buffer so we can flush a pending edit immediately
+  // when switching items / closing / unloading — refs survive the re-render that
+  // a new item triggers, so this still holds the OUTGOING item's text.
+  const editBufRef = useRef<{ id: string; kind: string; title: string; content: string } | null>(null);
+
+  const flushSave = useCallback(() => {
+    const b = editBufRef.current;
+    if (!b || !b.id) return;
+    if (b.kind !== "user_note" && b.kind !== "uploaded_document") return;
+    const t = b.title.trim() || (b.kind === "user_note" ? "Untitled note" : "Untitled");
+    if (t === lastSavedRef.current.title && b.content === lastSavedRef.current.content) return;
+    const id = b.id;
+    const content = b.content;
+    setSaving(true);
+    void updateNoteAction({ id, title: t, content })
+      .then((r) => {
+        if (r.ok) lastSavedRef.current = { title: t, content };
+      })
+      .catch(() => {})
+      .finally(() => setSaving(false));
+  }, []);
 
   // Fetch full content from /api/directory/:id whenever the selected item changes.
   useEffect(() => {
@@ -105,19 +127,31 @@ export function ItemViewer({
         if (data.kind === "user_note") {
           setContent(data.content ?? "");
           lastSavedRef.current = { title: data.title, content: data.content ?? "" };
+          editBufRef.current = { id: data.id, kind: data.kind, title: data.title, content: data.content ?? "" };
         } else if (data.kind === "uploaded_document") {
           // Seed the editor from the FULL doc text (not the truncated preview).
           const body = data.docFullText ?? data.content ?? "";
           setContent(body);
           lastSavedRef.current = { title: data.title, content: body };
+          editBufRef.current = { id: data.id, kind: data.kind, title: data.title, content: body };
         }
       })
       .finally(() => !aborted && setFullLoading(false));
 
     return () => {
       aborted = true;
+      // Switching items inside the 800ms autosave debounce would otherwise drop
+      // the pending edit — flush it now.
+      flushSave();
     };
-  }, [item?.id]);
+  }, [item?.id, flushSave]);
+
+  // Flush a pending edit if the tab/window is closing.
+  useEffect(() => {
+    const onBeforeUnload = () => flushSave();
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [flushSave]);
 
   // For saved articles, hit the existing article endpoints for the rendered body.
   useEffect(() => {
@@ -153,13 +187,19 @@ export function ItemViewer({
     const handle = setTimeout(() => {
       const t = title.trim() || (item.kind === "user_note" ? "Untitled note" : "Untitled");
       const c = content;
-      if (t === lastSavedRef.current.title && c === lastSavedRef.current.content) return;
+      if (t === lastSavedRef.current.title && c === lastSavedRef.current.content) {
+        setDirty(false);
+        return;
+      }
+      setSaving(true);
       startTransition(async () => {
         const r = await updateNoteAction({ id: item.id, title: t, content: c });
         if (r.ok) {
           lastSavedRef.current = { title: t, content: c };
+          editBufRef.current = { id: item.id, kind: item.kind, title: t, content: c };
           setDirty(false);
         }
+        setSaving(false);
       });
     }, 800);
     return () => clearTimeout(handle);
@@ -169,9 +209,15 @@ export function ItemViewer({
     if (!item) return;
     if (!confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
     startTransition(async () => {
-      await deleteDirectoryItemAction(item.id);
-      toast.success("Item deleted");
-      onClose();
+      try {
+        await deleteDirectoryItemAction(item.id);
+        toast.success("Item deleted");
+        onClose();
+      } catch (err) {
+        // Failed delete must NOT claim success or close the viewer — the item is
+        // still there and would reappear on refresh.
+        toast.error(`Delete failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
     });
   }
 
@@ -235,7 +281,13 @@ export function ItemViewer({
           <span className="capitalize">{item.kind.replace("_", " ")}</span>
           <span>·</span>
           <span>{formatRelativeTime(item.updatedAt)}</span>
-          {dirty && <span className="italic">· unsaved</span>}
+          {saving ? (
+            <span className="italic">· Saving…</span>
+          ) : dirty ? (
+            <span className="italic">· unsaved</span>
+          ) : (
+            (isNote || isDoc) && <span className="italic text-muted-foreground/70">· Saved</span>
+          )}
         </div>
 
         {(isNote || isDoc) && (
@@ -343,7 +395,11 @@ export function ItemViewer({
           {(isNote || isDoc) && mode === "edit" ? (
             <Input
               value={title}
-              onChange={(e) => { setTitle(e.target.value); setDirty(true); }}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setDirty(true);
+                editBufRef.current = { id: item.id, kind: item.kind, title: e.target.value, content };
+              }}
               className="border-0 px-0 text-2xl font-bold tracking-tight shadow-none focus-visible:ring-0"
               placeholder="Title"
             />
@@ -365,7 +421,11 @@ export function ItemViewer({
           {isNote && mode === "edit" && (
             <Textarea
               value={content}
-              onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+              onChange={(e) => {
+                setContent(e.target.value);
+                setDirty(true);
+                editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
+              }}
               placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}
               className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
             />
@@ -398,7 +458,11 @@ export function ItemViewer({
           {isDoc && mode === "edit" && (
             <Textarea
               value={content}
-              onChange={(e) => { setContent(e.target.value); setDirty(true); }}
+              onChange={(e) => {
+                setContent(e.target.value);
+                setDirty(true);
+                editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
+              }}
               placeholder="Document text… edits re-index this document for Ask."
               className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
             />
@@ -448,6 +512,7 @@ export function ItemViewer({
       </ScrollArea>
       <DocQueryPanel
         open={queryOpen}
+        docId={item.id}
         title={title}
         content={isNote ? content : isDoc ? content || docBody : articleData?.fullText ?? articleData?.excerpt ?? ""}
         onClose={() => setQueryOpen(false)}

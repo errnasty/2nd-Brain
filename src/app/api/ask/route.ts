@@ -241,7 +241,13 @@ export async function POST(req: Request) {
   }));
 
   // ── 3. Build messages with history ─────────────────────────────
-  const history = (body.history ?? []).slice(-6); // keep recent turns only
+  // Keep recent turns only AND cap each turn's size server-side — the client
+  // sends the whole accumulated transcript, so without this a long conversation
+  // (or a crafted request) inflates the prompt unbounded.
+  const MAX_TURN_CHARS = 4000;
+  const history: Message[] = (body.history ?? [])
+    .slice(-6)
+    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }));
   const userContent = `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}`;
   const ragHeader = Buffer.from(JSON.stringify(sourceMap)).toString("base64");
 
@@ -257,6 +263,7 @@ export async function POST(req: Request) {
       system: SYSTEM_WEB,
       userContent,
       history: history.map((m) => ({ role: m.role, content: m.content })),
+      signal: req.signal,
     });
     return new Response(webStream, {
       headers: {
@@ -276,6 +283,9 @@ export async function POST(req: Request) {
     system: SYSTEM,
     messages,
     temperature: 0.3,
+    // Stop generating (and stop paying for tokens) the moment the client
+    // disconnects — req.signal aborts when the browser cancels the fetch.
+    abortSignal: req.signal,
   });
 
   // Stream the text, then append a usage sentinel the client strips + parses.
@@ -296,11 +306,22 @@ export async function POST(req: Request) {
         };
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
       } catch (err) {
-        controller.enqueue(
-          encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
-        );
+        // On a client disconnect the stream is already gone — don't enqueue.
+        if (!req.signal.aborted) {
+          try {
+            controller.enqueue(
+              encoder.encode(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`),
+            );
+          } catch {
+            /* controller closed */
+          }
+        }
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
       }
     },
   });

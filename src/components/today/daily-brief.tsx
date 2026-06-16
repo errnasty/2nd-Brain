@@ -30,6 +30,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
+import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
@@ -57,20 +58,6 @@ const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
 const BRIEF_CACHE_KEY = "brief.cache.v2";
 const BRIEF_HISTORY_KEY = "brief.history.v1";
 const MAX_HISTORY = 10;
-
-// Trailing markers the server appends after the brief text. The client splits
-// on these and never renders them. Mirrors /api/brief.
-const BRIEFSOURCES_SENTINEL = "<<<SB_BRIEFSOURCES:";
-const USAGE_SENTINEL = "<<<SB_USAGE:";
-
-/** Index of the first sentinel marker present in the buffer, or -1. */
-function firstSentinel(acc: string): number {
-  const a = acc.indexOf(BRIEFSOURCES_SENTINEL);
-  const b = acc.indexOf(USAGE_SENTINEL);
-  if (a < 0) return b;
-  if (b < 0) return a;
-  return Math.min(a, b);
-}
 
 /** Same calendar day in local time. */
 function isSameDay(a: Date, b: Date): boolean {
@@ -214,8 +201,7 @@ export function DailyBrief() {
       let frameQueued = false;
       const flush = () => {
         frameQueued = false;
-        const idx = firstSentinel(acc);
-        setContent(idx >= 0 ? acc.slice(0, idx) : acc);
+        setContent(displayText(acc));
       };
 
       while (true) {
@@ -252,7 +238,7 @@ export function DailyBrief() {
         }
       }
 
-      const displayContent = firstSentinel(acc) >= 0 ? acc.slice(0, firstSentinel(acc)) : acc;
+      const displayContent = displayText(acc);
       const finishedAt = new Date();
       setGeneratedAt(finishedAt);
       // Persist the completed brief so the page hydrates instantly next visit

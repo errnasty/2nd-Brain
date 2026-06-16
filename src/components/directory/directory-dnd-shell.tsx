@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useCallback, useState, useTransition, type ReactNode } from "react";
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
+import { GripVertical } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -15,6 +17,7 @@ import {
   moveDirectoryFolderToParentAction,
   updateReadingStatusAction,
 } from "@/app/(app)/directory/actions";
+import { BoardOptimisticContext } from "./board-optimistic";
 
 type ReadingStatus = "inbox" | "reading" | "done" | "review";
 const READING_STATUSES: ReadingStatus[] = ["inbox", "reading", "done", "review"];
@@ -29,6 +32,17 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
+  // Optimistic Kanban: itemId → the column it was just dropped into (pending the
+  // server confirm). DirectoryBoard reads this to move the card immediately.
+  const [statusOverrides, setStatusOverrides] = useState<Record<string, ReadingStatus>>({});
+  const revertStatus = useCallback((id: string) => {
+    setStatusOverrides((o) => {
+      if (!(id in o)) return o;
+      const next = { ...o };
+      delete next[id];
+      return next;
+    });
+  }, []);
 
   // 4px activation distance so a click that opens an item isn't treated as a drag.
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
@@ -44,10 +58,17 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
     if (target.startsWith("status:")) {
       const status = target.slice("status:".length) as ReadingStatus;
       if (!READING_STATUSES.includes(status)) return;
+      // Optimistic move: the card jumps to the target column now. The board
+      // clears the override once refreshed data confirms it; on error we revert.
+      setStatusOverrides((o) => ({ ...o, [activeId]: status }));
       startTransition(async () => {
         const r = await updateReadingStatusAction({ id: activeId, status });
-        if (r.ok) router.refresh();
-        else toast.error(r.error);
+        if (r.ok) {
+          router.refresh();
+        } else {
+          revertStatus(activeId);
+          toast.error(r.error);
+        }
       });
       return;
     }
@@ -76,17 +97,26 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Item drag onto a folder (or Unsorted)
+    // Item drag onto a folder (or Unsorted). The action throws (rather than
+    // returning ok:false) on a server error, so guard it — otherwise the card
+    // just snaps back with no toast and the drop looks eaten.
     startTransition(async () => {
-      const r = await bulkMoveDirectoryItemsAction([activeId], folderTargetId);
-      if (r.ok) {
-        toast.success(folderTargetId ? "Moved" : "Moved to Unsorted");
-        router.refresh();
+      try {
+        const r = await bulkMoveDirectoryItemsAction([activeId], folderTargetId);
+        if (r.ok) {
+          toast.success(folderTargetId ? "Moved" : "Moved to Unsorted");
+          router.refresh();
+        } else {
+          toast.error("Couldn't move the item.");
+        }
+      } catch (err) {
+        toast.error(`Move failed: ${err instanceof Error ? err.message : "unknown error"}`);
       }
     });
   }
 
   return (
+    <BoardOptimisticContext.Provider value={{ overrides: statusOverrides, revert: revertStatus }}>
     <DndContext
       sensors={sensors}
       onDragStart={(e) => setActiveItemId(String(e.active.id))}
@@ -97,6 +127,19 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
       <div className="contents" data-dragging-id={activeItemId ?? undefined}>
         {children}
       </div>
+      {/* Floating card under the cursor. Renders independently of the source row,
+          so the drag survives the row virtualizing out of a long scrolled list
+          (which previously aborted the drag), and gives obvious "I'm moving this"
+          feedback instead of the source just going opacity-40 in place. */}
+      <DragOverlay dropAnimation={null}>
+        {activeItemId && !activeItemId.startsWith("folder-drag:") ? (
+          <div className="pointer-events-none flex items-center gap-2 rounded-md border border-primary/40 bg-background px-3 py-2 text-sm shadow-lg">
+            <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
+            Moving item…
+          </div>
+        ) : null}
+      </DragOverlay>
     </DndContext>
+    </BoardOptimisticContext.Provider>
   );
 }
