@@ -257,6 +257,8 @@ function Row({
 }) {
   return (
     <button
+      // Keep the keyboard-highlighted row visible inside the scroll container.
+      ref={activeRow ? (el) => el?.scrollIntoView({ block: "nearest" }) : undefined}
       onMouseEnter={onHover}
       onClick={onClick}
       className={cn(

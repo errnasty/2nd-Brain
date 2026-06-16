@@ -37,6 +37,7 @@ import {
   renameDirectoryFolderAction,
 } from "@/app/(app)/directory/actions";
 import type { DirectoryFolder } from "@/lib/db/schema";
+import { usePromptText } from "@/components/ui/app-dialogs";
 import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { ExportDialog } from "./export-dialog";
 
@@ -54,6 +55,7 @@ export function DirectoryNav({
 }) {
   const router = useRouter();
   const params = useSearchParams();
+  const promptText = usePromptText();
   const [pending, startTransition] = useTransition();
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -104,8 +106,8 @@ export function DirectoryNav({
     });
   }
 
-  function createSubfolder(parentId: string) {
-    const name = window.prompt("New subfolder name")?.trim();
+  async function createSubfolder(parentId: string) {
+    const name = (await promptText({ title: "New subfolder", placeholder: "Folder name" }))?.trim();
     if (!name) return;
     startTransition(async () => {
       const r = await createDirectoryFolderAction(name, parentId);
@@ -120,16 +122,23 @@ export function DirectoryNav({
 
   function runAutoOrganize() {
     startTransition(async () => {
-      const r = await autoOrganizeDirectoryAction();
-      if (!r.ok) return;
-      if (r.total === 0) {
-        toast.success("Nothing to organize — every item is already in a folder");
-      } else {
-        const folderMsg =
-          r.foldersCreated.length > 0
-            ? ` · created ${r.foldersCreated.length} folder${r.foldersCreated.length === 1 ? "" : "s"}: ${r.foldersCreated.join(", ")}`
-            : "";
-        toast.success(`Auto-organized ${r.routed} of ${r.total} items${folderMsg}`);
+      try {
+        const r = await autoOrganizeDirectoryAction();
+        if (!r.ok) {
+          toast.error("Auto-organize failed. Try again.");
+          return;
+        }
+        if (r.total === 0) {
+          toast.success("Nothing to organize — every item is already in a folder");
+        } else {
+          const folderMsg =
+            r.foldersCreated.length > 0
+              ? ` · created ${r.foldersCreated.length} folder${r.foldersCreated.length === 1 ? "" : "s"}: ${r.foldersCreated.join(", ")}`
+              : "";
+          toast.success(`Auto-organized ${r.routed} of ${r.total} items${folderMsg}`);
+        }
+      } catch (e) {
+        toast.error(`Auto-organize failed: ${e instanceof Error ? e.message : "error"}`);
       }
     });
   }

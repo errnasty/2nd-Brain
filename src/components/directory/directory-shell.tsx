@@ -16,6 +16,7 @@ import {
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
 import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
+import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
 import { toast } from "sonner";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
@@ -200,13 +201,20 @@ export function DirectoryShell({
     },
     [allItems, selectedId, selectItem],
   );
-  useShortcuts({
-    j: () => moveSelection(1),
-    k: () => moveSelection(-1),
-    arrowdown: () => moveSelection(1),
-    arrowup: () => moveSelection(-1),
-    escape: () => selectItem(null),
-  });
+  // Escape always closes the open item.
+  useShortcuts({ escape: () => selectItem(null) });
+  // Item navigation only when NO item is open — otherwise ↓/↑/j/k would jump
+  // items (and preventDefault would block scrolling) instead of letting the
+  // reader scroll. Matches the Feeds behaviour.
+  useShortcuts(
+    {
+      j: () => moveSelection(1),
+      k: () => moveSelection(-1),
+      arrowdown: () => moveSelection(1),
+      arrowup: () => moveSelection(-1),
+    },
+    !selectedId,
+  );
 
   // "unsorted" is a UI-only view, not a real folder id. New items created
   // there must land with folderId = null, never the literal "unsorted"
@@ -230,10 +238,10 @@ export function DirectoryShell({
   }
 
   function onFilesPicked(files: FileList) {
-    const MAX_BYTES = 20 * 1024 * 1024; // matches the server's MAX_UPLOAD_BYTES
+    const max = maxUploadBytes(); // platform-aware: ~4.5MB on hosted web, 20MB on desktop
     Array.from(files).forEach((file) => {
-      if (file.size > MAX_BYTES) {
-        toast.error(`${file.name} is ${(file.size / 1024 / 1024).toFixed(0)}MB — over the 20MB limit.`);
+      if (file.size > max) {
+        toast.error(`${file.name} is ${(file.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabel()} limit.`);
         return;
       }
       const fd = new FormData();

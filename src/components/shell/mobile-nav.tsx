@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -138,6 +138,18 @@ export function MobileNav() {
   );
 }
 
+/** Close an overlay on Escape while it's open (parity with Radix Dialog). */
+function useEscClose(open: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+}
+
 function MoreSheet({
   open,
   onClose,
@@ -147,6 +159,7 @@ function MoreSheet({
   onClose: () => void;
   activePath: string;
 }) {
+  useEscClose(open, onClose);
   return (
     <>
       <div
@@ -166,6 +179,7 @@ function MoreSheet({
         role="dialog"
         aria-label="More sections"
         aria-hidden={!open}
+        inert={!open}
       >
         <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-border" />
         <div className="flex items-center justify-between px-4 py-3">
@@ -211,6 +225,7 @@ function FolderDrawer({ open, onClose }: { open: boolean; onClose: () => void })
   const router = useRouter();
   const { folders, tags, syncing } = useSidebarData();
   const byParent = buildTree(folders);
+  useEscClose(open, onClose);
 
   function go(href: string) {
     onClose();
@@ -257,6 +272,7 @@ function FolderDrawer({ open, onClose }: { open: boolean; onClose: () => void })
           open ? "translate-x-0" : "-translate-x-full",
         )}
         aria-hidden={!open}
+        inert={!open}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold">Browse</span>

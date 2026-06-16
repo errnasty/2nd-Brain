@@ -15,6 +15,7 @@ import {
   bulkDeleteDirectoryItemsAction,
   bulkMoveDirectoryItemsAction,
 } from "@/app/(app)/directory/actions";
+import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
 import type { DirectoryFolder } from "@/lib/db/schema";
 
@@ -27,33 +28,53 @@ export function BulkActionBar({
   folders: DirectoryFolder[];
   onClear: () => void;
 }) {
+  const confirm = useConfirm();
   const [pending, startTransition] = useTransition();
   const count = selectedIds.length;
   if (count === 0) return null;
 
-  function handleMassDelete() {
-    if (!confirm(`Delete ${count} item${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
+  async function handleMassDelete() {
+    const ok = await confirm({
+      title: `Delete ${count} item${count === 1 ? "" : "s"}?`,
+      body: "This cannot be undone.",
+      destructive: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     startTransition(async () => {
-      const r = await bulkDeleteDirectoryItemsAction(selectedIds);
-      if (r.ok) {
-        toast.success(`Deleted ${r.count} item${r.count === 1 ? "" : "s"}`);
-        onClear();
+      try {
+        const r = await bulkDeleteDirectoryItemsAction(selectedIds);
+        if (r.ok) {
+          toast.success(`Deleted ${r.count} item${r.count === 1 ? "" : "s"}`);
+          onClear();
+        } else {
+          toast.error("Couldn't delete the selected items.");
+        }
+      } catch (e) {
+        // Keep the selection so the user can retry.
+        toast.error(`Delete failed: ${e instanceof Error ? e.message : "error"}`);
       }
     });
   }
 
   function handleMassMove(folderId: string | null, folderName: string) {
     startTransition(async () => {
-      const r = await bulkMoveDirectoryItemsAction(selectedIds, folderId);
-      if (r.ok) {
-        toast.success(`Moved ${r.count} item${r.count === 1 ? "" : "s"} to ${folderName}`);
-        onClear();
+      try {
+        const r = await bulkMoveDirectoryItemsAction(selectedIds, folderId);
+        if (r.ok) {
+          toast.success(`Moved ${r.count} item${r.count === 1 ? "" : "s"} to ${folderName}`);
+          onClear();
+        } else {
+          toast.error("Couldn't move the selected items.");
+        }
+      } catch (e) {
+        toast.error(`Move failed: ${e instanceof Error ? e.message : "error"}`);
       }
     });
   }
 
   return (
-    <div className="pointer-events-auto fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur">
+    <div className="pointer-events-auto fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-2xl border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur md:bottom-6 md:flex-nowrap md:rounded-full">
       <span className="text-sm font-medium">
         {count} selected
       </span>

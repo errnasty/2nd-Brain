@@ -266,22 +266,42 @@ export function ArticleList({
 
   function bulkStar() {
     if (selectedIds.length === 0) return;
+    const ids = selectedIds;
+    // Snapshot prior star state so a failed write reverts instead of leaving a
+    // false "Starred N" that the next refresh silently undoes.
+    const prior = ids.map((id) => ({ id, starred: optimistic.find((it) => it.id === id)?.starred ?? false }));
     startTransition(async () => {
-      selectedIds.forEach((id) => applyOptimistic({ id, starred: true }));
-      await Promise.all(selectedIds.map((id) => toggleStarredAction(id, true)));
-      toast.success(`Starred ${selectedIds.length} article${selectedIds.length === 1 ? "" : "s"}`);
-      clearSelection();
+      ids.forEach((id) => applyOptimistic({ id, starred: true }));
+      try {
+        // toggleStarredAction throws on failure (returns void), so Promise.all
+        // rejecting is our only failure signal — caught below to revert.
+        await Promise.all(ids.map((id) => toggleStarredAction(id, true)));
+        toast.success(`Starred ${ids.length} article${ids.length === 1 ? "" : "s"}`);
+        clearSelection();
+      } catch (e) {
+        prior.forEach((p) => applyOptimistic({ id: p.id, starred: p.starred }));
+        toast.error(`Couldn't star: ${e instanceof Error ? e.message : "error"}`);
+      }
     });
   }
 
   function bulkReadLater() {
     if (selectedIds.length === 0) return;
     const ids = selectedIds;
+    const prior = ids.map((id) => ({ id, readLater: optimistic.find((it) => it.id === id)?.readLater ?? false }));
     startTransition(async () => {
       ids.forEach((id) => applyOptimistic({ id, readLater: true }));
-      await setReadLaterAction({ articleIds: ids, readLater: true });
-      toast.success(`Saved ${ids.length} to Read Later`);
-      clearSelection();
+      try {
+        const res = await setReadLaterAction({ articleIds: ids, readLater: true });
+        if (res && typeof res === "object" && "ok" in res && !res.ok) {
+          throw new Error((res as { error?: string }).error ?? "Couldn't save");
+        }
+        toast.success(`Saved ${ids.length} to Read Later`);
+        clearSelection();
+      } catch (e) {
+        prior.forEach((p) => applyOptimistic({ id: p.id, readLater: p.readLater }));
+        toast.error(`Couldn't save: ${e instanceof Error ? e.message : "error"}`);
+      }
     });
   }
 
@@ -657,6 +677,10 @@ function VirtualizedArticleList({
                         height={12}
                         className="rounded-sm"
                         unoptimized
+                        onError={(e) => {
+                          // Dead favicon → hide instead of a broken-image glyph.
+                          (e.target as HTMLImageElement).style.display = "none";
+                        }}
                       />
                     ) : null}
                     <span className="truncate">{item.feedTitle}</span>

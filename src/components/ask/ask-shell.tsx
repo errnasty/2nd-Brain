@@ -329,6 +329,13 @@ export function AskShell() {
       const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: trimmed };
       setMessages((prev) => [...prev, userMessage]);
       setStreaming(true);
+
+      // Wire the AbortController so the Stop button actually cancels the (slow)
+      // study-plan request — previously Stop showed but did nothing here.
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
       try {
         const res = await fetch("/api/study-plan", {
           method: "POST",
@@ -339,6 +346,7 @@ export function AskShell() {
             hoursPerWeek: Number(hoursPerWeek) || undefined,
           }),
           cache: "no-store",
+          signal: controller.signal,
         });
         const data = (await res.json().catch(() => ({}))) as Partial<StudyPlanResult> & {
           ok?: boolean;
@@ -361,6 +369,7 @@ export function AskShell() {
           { id: crypto.randomUUID(), role: "assistant", content: "", plan },
         ]);
       } catch (err) {
+        if ((err as Error)?.name === "AbortError") return; // user pressed Stop
         setError(err instanceof Error ? err.message : "Request failed");
       } finally {
         setStreaming(false);

@@ -12,6 +12,7 @@ import {
   mergeTagsAction,
   renameTagAction,
 } from "@/app/(app)/tags/actions";
+import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
 import type { Tag } from "@/lib/db/schema";
 
@@ -25,6 +26,7 @@ export function TagManager({
   usage: Record<string, Usage>;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -77,13 +79,18 @@ export function TagManager({
     });
   }
 
-  function handleDelete(tag: Tag) {
+  async function handleDelete(tag: Tag) {
     const count = usage[tag.id]?.total ?? 0;
-    const msg =
-      count > 0
-        ? `Delete "${tag.name}"? This will unlink it from ${count} item${count === 1 ? "" : "s"} (the items themselves are kept).`
-        : `Delete "${tag.name}"?`;
-    if (!confirm(msg)) return;
+    const ok = await confirm({
+      title: `Delete "${tag.name}"?`,
+      body:
+        count > 0
+          ? `This unlinks it from ${count} item${count === 1 ? "" : "s"} (the items themselves are kept).`
+          : undefined,
+      destructive: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     startTransition(async () => {
       try {
         await deleteTagAction(tag.id);
@@ -95,7 +102,7 @@ export function TagManager({
     });
   }
 
-  function handleMerge() {
+  async function handleMerge() {
     const ids = Array.from(checked);
     if (ids.length < 2) return;
     const selectedTags = tags.filter((t) => ids.includes(t.id));
@@ -104,13 +111,12 @@ export function TagManager({
       (a, b) => (usage[b.id]?.total ?? 0) - (usage[a.id]?.total ?? 0),
     )[0];
     const sources = ids.filter((id) => id !== target.id);
-    if (
-      !confirm(
-        `Merge ${sources.length} tag${sources.length === 1 ? "" : "s"} into "${target.name}"? ` +
-          `Items keep their links under "${target.name}"; the others are deleted.`,
-      )
-    )
-      return;
+    const ok = await confirm({
+      title: `Merge ${sources.length} tag${sources.length === 1 ? "" : "s"} into "${target.name}"?`,
+      body: `Items keep their links under "${target.name}"; the others are deleted.`,
+      confirmLabel: "Merge",
+    });
+    if (!ok) return;
     startTransition(async () => {
       const r = await mergeTagsAction({ targetId: target.id, sourceIds: sources });
       if (r.ok) {
@@ -122,16 +128,28 @@ export function TagManager({
     });
   }
 
-  function handleBulkDelete() {
+  async function handleBulkDelete() {
     const ids = Array.from(checked);
     if (ids.length === 0) return;
-    if (!confirm(`Delete ${ids.length} tag${ids.length === 1 ? "" : "s"}? Links to items will be removed; the items themselves are kept.`))
-      return;
+    const ok = await confirm({
+      title: `Delete ${ids.length} tag${ids.length === 1 ? "" : "s"}?`,
+      body: "Links to items will be removed; the items themselves are kept.",
+      destructive: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     startTransition(async () => {
-      const r = await bulkDeleteTagsAction(ids);
-      if (r.ok) {
-        toast.success(`Deleted ${r.count} tag${r.count === 1 ? "" : "s"}`);
-        setChecked(new Set());
+      try {
+        const r = await bulkDeleteTagsAction(ids);
+        if (r.ok) {
+          toast.success(`Deleted ${r.count} tag${r.count === 1 ? "" : "s"}`);
+          setChecked(new Set());
+        } else {
+          toast.error("Couldn't delete the selected tags.");
+        }
+      } catch (e) {
+        // Keep the selection for retry.
+        toast.error(`Delete failed: ${e instanceof Error ? e.message : "error"}`);
       }
     });
   }
@@ -259,7 +277,7 @@ export function TagManager({
       </div>
 
       {checked.size > 0 && (
-        <div className="pointer-events-auto fixed bottom-6 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur">
+        <div className="pointer-events-auto fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-2xl border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur md:bottom-6 md:flex-nowrap md:rounded-full">
           <span className="text-sm font-medium">{checked.size} selected</span>
           <span className="h-4 w-px bg-border" />
           {checked.size > 1 && (

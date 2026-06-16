@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { usePromptText } from "@/components/ui/app-dialogs";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import {
   loadDocPrompts,
@@ -62,6 +63,7 @@ export function DocQueryPanel({
   docId?: string;
   onClose: () => void;
 }) {
+  const promptText = usePromptText();
   const [prompts, setPrompts] = useState<DocPrompt[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -251,10 +253,16 @@ export function DocQueryPanel({
     else void ask(question);
   }
 
-  function addPrompt() {
-    const label = window.prompt("Prompt name (e.g. 'Tweet thread')")?.trim();
+  async function addPrompt() {
+    const label = (await promptText({ title: "New saved prompt", placeholder: "Prompt name (e.g. Tweet thread)" }))?.trim();
     if (!label) return;
-    const body = window.prompt("The instruction sent to Claude about this document:")?.trim();
+    const body = (
+      await promptText({
+        title: "Prompt instruction",
+        description: "The instruction sent to Claude about this document.",
+        placeholder: "e.g. Summarise this as a tweet thread",
+      })
+    )?.trim();
     if (!body) return;
     const next = [...prompts, { id: newPromptId(), label, prompt: body }];
     setPrompts(next);

@@ -18,6 +18,7 @@ import {
   updateNoteAction,
 } from "@/app/(app)/directory/actions";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
@@ -70,6 +71,7 @@ export function ItemViewer({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const confirm = useConfirm();
   const [, startTransition] = useTransition();
   const [mode, setMode] = useState<"preview" | "edit">("preview");
   const [title, setTitle] = useState("");
@@ -205,9 +207,15 @@ export function ItemViewer({
     return () => clearTimeout(handle);
   }, [title, content, dirty, item?.id, item?.kind]);
 
-  function handleDelete() {
+  async function handleDelete() {
     if (!item) return;
-    if (!confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: `Delete "${item.title}"?`,
+      body: "This cannot be undone.",
+      destructive: true,
+      confirmLabel: "Delete",
+    });
+    if (!ok) return;
     startTransition(async () => {
       try {
         await deleteDirectoryItemAction(item.id);

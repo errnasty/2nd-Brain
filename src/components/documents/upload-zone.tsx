@@ -1,28 +1,34 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Upload, FileText, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { uploadDocumentAction } from "@/app/(app)/documents/actions";
+import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
 import { toast } from "sonner";
 
 const ACCEPT = ".pdf,.md,.markdown,.txt,.epub,application/pdf,application/epub+zip,text/markdown,text/plain";
-const MAX_BYTES = 20 * 1024 * 1024; // matches the server's MAX_UPLOAD_BYTES
 
 export function UploadZone({ folderId }: { folderId?: string | null }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [pending, startTransition] = useTransition();
+  // Computed after mount so the SSR (web) and client (desktop) labels don't
+  // mismatch — the limit depends on window.desktop.
+  const [limitLabel, setLimitLabel] = useState("");
+  useEffect(() => setLimitLabel(maxUploadLabel()), []);
 
   async function upload(files: FileList | File[]) {
     const all = Array.from(files);
     if (all.length === 0) return;
 
-    // Reject oversized files up front instead of uploading the whole thing and
-    // failing server-side after a long wait.
+    // Reject oversized files up front. On the hosted web app the platform's
+    // serverless body cap is well below 20MB, so this is the REAL limit — without
+    // it the upload dies with an opaque 413 the action never sees.
+    const max = maxUploadBytes();
     const list = all.filter((f) => {
-      if (f.size > MAX_BYTES) {
-        toast.error(`${f.name} is ${(f.size / 1024 / 1024).toFixed(0)}MB — over the 20MB limit.`);
+      if (f.size > max) {
+        toast.error(`${f.name} is ${(f.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabel()} limit.`);
         return false;
       }
       return true;
@@ -69,7 +75,12 @@ export function UploadZone({ folderId }: { folderId?: string | null }) {
         className="hidden"
         accept={ACCEPT}
         multiple
-        onChange={(e) => e.target.files && upload(e.target.files)}
+        onChange={(e) => {
+          if (e.target.files) upload(e.target.files);
+          // Reset so re-picking the SAME file (e.g. after a failed upload) still
+          // fires a change event.
+          e.target.value = "";
+        }}
       />
       {pending ? (
         <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
@@ -83,9 +94,7 @@ export function UploadZone({ folderId }: { folderId?: string | null }) {
         <FileText className="h-3 w-3" />
         <span>PDF · Markdown · Text · ePub</span>
       </div>
-      <div className="text-[11px] text-muted-foreground">
-        Max 20MB locally · ~4.5MB on Vercel free/pro
-      </div>
+      <div className="text-[11px] text-muted-foreground">{limitLabel && `Max ${limitLabel} per file`}</div>
     </div>
   );
 }
