@@ -9,7 +9,16 @@ import { toast } from "sonner";
 import { GRADES } from "@/lib/srs/sm2";
 import { gradeCardAction, type DueCard } from "@/app/(app)/review/actions";
 
-export function ReviewView({ cards, total }: { cards: DueCard[]; total: number }) {
+export function ReviewView({
+  cards,
+  total,
+  due,
+}: {
+  cards: DueCard[];
+  total: number;
+  /** True number of cards due (the session only loads the first ~50). */
+  due: number;
+}) {
   const router = useRouter();
   const [queue, setQueue] = useState<DueCard[]>(cards);
   const [showAnswer, setShowAnswer] = useState(false);
@@ -17,16 +26,25 @@ export function ReviewView({ cards, total }: { cards: DueCard[]; total: number }
   const [, startTransition] = useTransition();
 
   const current = queue[0];
+  // Live backlog: the true due count minus what we've graded this session.
+  const remainingDue = Math.max(0, due - reviewed);
 
   function grade(quality: number) {
     if (!current) return;
-    const id = current.id;
+    const card = current;
     setQueue((q) => q.slice(1));
     setShowAnswer(false);
     setReviewed((n) => n + 1);
     startTransition(async () => {
-      const r = await gradeCardAction({ id, quality });
-      if (!r.ok) toast.error(r.error);
+      const r = await gradeCardAction({ id: card.id, quality });
+      if (!r.ok) {
+        // Server rejected the grade — put the card back so it isn't silently
+        // lost from the session, and undo the optimistic counters.
+        setQueue((q) => [card, ...q]);
+        setReviewed((n) => Math.max(0, n - 1));
+        setShowAnswer(true);
+        toast.error(r.error);
+      }
     });
   }
 
@@ -40,13 +58,20 @@ export function ReviewView({ cards, total }: { cards: DueCard[]; total: number }
   }
 
   if (!current) {
+    // We only load the first ~50 due cards per session; if more remain due,
+    // don't claim "all caught up" — invite loading the next batch.
+    const moreDue = remainingDue > 0;
     return (
       <Empty
-        title="All caught up 🎉"
-        body={`Reviewed ${reviewed} card${reviewed === 1 ? "" : "s"}. Nothing else is due right now.`}
+        title={moreDue ? "Batch done" : "All caught up 🎉"}
+        body={
+          moreDue
+            ? `Reviewed ${reviewed}. ${remainingDue} more due — load the next batch.`
+            : `Reviewed ${reviewed} card${reviewed === 1 ? "" : "s"}. Nothing else is due right now.`
+        }
         action={
           <Button variant="outline" onClick={() => router.refresh()} className="gap-1.5">
-            <RotateCcw className="h-3.5 w-3.5" /> Check again
+            <RotateCcw className="h-3.5 w-3.5" /> {moreDue ? "Load next batch" : "Check again"}
           </Button>
         }
       />
@@ -59,7 +84,7 @@ export function ReviewView({ cards, total }: { cards: DueCard[]; total: number }
         <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
           <Brain className="h-5 w-5" /> Review
         </h1>
-        <div className="text-xs text-muted-foreground">{queue.length} due</div>
+        <div className="text-xs text-muted-foreground">{remainingDue} due</div>
       </div>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-8">

@@ -4,7 +4,7 @@ import { and, asc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { directoryItems, directoryTasks } from "@/lib/db/schema";
+import { directoryItems, directoryTasks, documents } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { toggleTaskInContent } from "@/lib/tasks/parse";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
@@ -18,8 +18,14 @@ export type TaskRow = {
   dueDate: Date | null;
 };
 
-/** All of the user's tasks with their host item title, for the global view. */
-export async function fetchTasks(userId: string): Promise<TaskRow[]> {
+/**
+ * The user's tasks with their host item title, for the global view. Ordered
+ * open-first then by due date, and capped so a heavy library (many study plans /
+ * imported checklists) can't load thousands of rows into the Tasks tab — the cap
+ * only sheds the oldest *completed* tasks. (Full open/done/date bucketed paging
+ * is a follow-up; see the feasibility notes.)
+ */
+export async function fetchTasks(userId: string, limit = 1000): Promise<TaskRow[]> {
   const rows = await db
     .select({
       id: directoryTasks.id,
@@ -36,7 +42,8 @@ export async function fetchTasks(userId: string): Promise<TaskRow[]> {
       asc(directoryTasks.done),
       sql`${directoryTasks.dueDate} asc nulls last`,
       asc(directoryTasks.text),
-    );
+    )
+    .limit(limit);
   return rows;
 }
 
@@ -64,21 +71,54 @@ export async function toggleTaskAction(input: { id: string; done: boolean }) {
   if (!task) return { ok: false as const, error: "Task not found" };
 
   const [item] = await db
-    .select({ content: directoryItems.content })
+    .select({
+      kind: directoryItems.kind,
+      content: directoryItems.content,
+      documentId: directoryItems.documentId,
+    })
     .from(directoryItems)
     .where(and(eq(directoryItems.id, task.itemId), eq(directoryItems.userId, user.id)))
     .limit(1);
 
+  // For uploaded documents the reader renders documents.full_text and
+  // directory_items.content is only a 10k preview, so the checkbox must be
+  // flipped in full_text — otherwise the document keeps showing the old state.
+  const isDoc = item?.kind === "uploaded_document" && !!item.documentId;
+  let docFullText: string | null = null;
+  if (isDoc) {
+    const [doc] = await db
+      .select({ fullText: documents.fullText })
+      .from(documents)
+      .where(and(eq(documents.id, item!.documentId!), eq(documents.userId, user.id)))
+      .limit(1);
+    docFullText = doc?.fullText ?? null;
+  }
+
+  const source = isDoc ? docFullText : item?.content ?? null;
   const newContent =
-    item?.content != null
-      ? toggleTaskInContent(item.content, task.lineIndex, task.rawLine, parsed.data.done)
+    source != null
+      ? toggleTaskInContent(source, task.lineIndex, task.rawLine, parsed.data.done)
       : null;
 
   if (newContent != null) {
-    await db
-      .update(directoryItems)
-      .set({ content: newContent, updatedAt: new Date() })
-      .where(and(eq(directoryItems.id, task.itemId), eq(directoryItems.userId, user.id)));
+    if (isDoc) {
+      // Update the authoritative document body + keep the item preview in sync.
+      // Skip re-chunk/re-embed (unlike a real edit): toggling a checkbox doesn't
+      // change what the document means for retrieval.
+      await db
+        .update(documents)
+        .set({ fullText: newContent })
+        .where(and(eq(documents.id, item!.documentId!), eq(documents.userId, user.id)));
+      await db
+        .update(directoryItems)
+        .set({ content: newContent.slice(0, 10_000), updatedAt: new Date() })
+        .where(and(eq(directoryItems.id, task.itemId), eq(directoryItems.userId, user.id)));
+    } else {
+      await db
+        .update(directoryItems)
+        .set({ content: newContent, updatedAt: new Date() })
+        .where(and(eq(directoryItems.id, task.itemId), eq(directoryItems.userId, user.id)));
+    }
     await syncDirectoryTasks(user.id, task.itemId, newContent);
   } else {
     // Content drifted — keep the views consistent by flipping the flag only.

@@ -25,18 +25,32 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   let tasks: TaskRow[] = [];
   let dueCards: DueCard[] = [];
   let totalCards = 0;
+  let dueCardsCount = 0;
   let calendar: CalendarEntry[] = [];
 
-  try {
-    [stats, tasks, dueCards, { total: totalCards }, calendar] = await Promise.all([
-      fetchStudyStats(user.id),
-      fetchTasks(user.id),
-      fetchDueCards(user.id),
-      fetchCardStats(user.id),
-      fetchCalendar(user.id, from.toISOString(), to.toISOString()),
-    ]);
-  } catch (err) {
-    console.error("StudyPage fetch failed:", err instanceof Error ? err.message : err);
+  // allSettled (not Promise.all): one failing panel query must not blank the
+  // whole Study hub. Each panel falls back to its own empty default.
+  const [statsR, tasksR, dueR, cardStatsR, calR] = await Promise.allSettled([
+    fetchStudyStats(user.id),
+    fetchTasks(user.id),
+    fetchDueCards(user.id),
+    fetchCardStats(user.id),
+    fetchCalendar(user.id, from.toISOString(), to.toISOString()),
+  ]);
+  if (statsR.status === "fulfilled") stats = statsR.value;
+  if (tasksR.status === "fulfilled") tasks = tasksR.value;
+  if (dueR.status === "fulfilled") dueCards = dueR.value;
+  if (cardStatsR.status === "fulfilled") {
+    totalCards = cardStatsR.value.total;
+    dueCardsCount = cardStatsR.value.due;
+  }
+  if (calR.status === "fulfilled") calendar = calR.value;
+  for (const [name, r] of [
+    ["stats", statsR], ["tasks", tasksR], ["due", dueR], ["cardStats", cardStatsR], ["calendar", calR],
+  ] as const) {
+    if (r.status === "rejected") {
+      console.error(`StudyPage ${name} fetch failed:`, r.reason instanceof Error ? r.reason.message : r.reason);
+    }
   }
 
   return (
@@ -46,6 +60,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
       tasks={tasks}
       dueCards={dueCards}
       totalCards={totalCards}
+      dueCount={dueCardsCount}
       calendar={calendar}
     />
   );

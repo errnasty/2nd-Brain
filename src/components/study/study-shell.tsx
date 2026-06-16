@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BarChart3, Brain, CalendarDays, CheckSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatsOverview } from "./stats-overview";
@@ -31,6 +31,7 @@ export function StudyShell({
   tasks,
   dueCards,
   totalCards,
+  dueCount,
   calendar,
 }: {
   defaultTab: StudyTab;
@@ -38,9 +39,17 @@ export function StudyShell({
   tasks: TaskRow[];
   dueCards: DueCard[];
   totalCards: number;
+  dueCount: number;
   calendar: CalendarEntry[];
 }) {
   const [tab, setTab] = useState<StudyTab>(defaultTab);
+
+  // Keep the active tab in sync when navigation changes ?tab= (e.g. clicking a
+  // calendar entry does router.push("/study?tab=review")). The server re-renders
+  // with a new defaultTab; without this the view would stay stuck on Calendar.
+  useEffect(() => {
+    setTab(defaultTab);
+  }, [defaultTab]);
 
   function select(next: StudyTab) {
     setTab(next);
@@ -72,7 +81,7 @@ export function StudyShell({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "overview" && <StatsOverview stats={stats} />}
         {tab === "tasks" && <TasksView tasks={tasks} />}
-        {tab === "review" && <ReviewView cards={dueCards} total={totalCards} />}
+        {tab === "review" && <ReviewView cards={dueCards} total={totalCards} due={dueCount} />}
         {tab === "calendar" && <CalendarView initial={calendar} />}
       </div>
     </div>

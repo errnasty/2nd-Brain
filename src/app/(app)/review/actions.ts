@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { directoryFlashcards, directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { generateFlashcards } from "@/lib/ai/flashcards";
+import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { scheduleSm2 } from "@/lib/srs/sm2";
 
 export type DueCard = {
@@ -51,17 +52,25 @@ export async function fetchCardStats(userId: string): Promise<{ total: number; d
 /** Generate flashcards from a Directory item (manual trigger). */
 export async function generateFlashcardsAction(itemId: string) {
   const { user } = await requireUser();
-  const [item] = await db
-    .select({ title: directoryItems.title, content: directoryItems.content })
-    .from(directoryItems)
-    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)))
-    .limit(1);
-  if (!item) return { ok: false as const, error: "Item not found" };
 
-  const cards = await generateFlashcards(item.title, item.content ?? "");
+  // Resolve the authoritative source text by kind: notes use content, documents
+  // use documents.full_text, saved articles use the article body. Reading
+  // directory_items.content directly produced ZERO cards for saved articles
+  // (they carry no content) and partial/stale text for documents.
+  const resolved = await getDirectoryItemStudyText(user.id, itemId);
+  if (!resolved) return { ok: false as const, error: "Item not found" };
+
+  const cards = await generateFlashcards(resolved.title, resolved.text);
   if (cards.length === 0)
     return { ok: false as const, error: "Couldn't generate cards (no text or AI unavailable)" };
 
+  // Idempotent regenerate: replace this item's existing cards so retries and
+  // study-plan re-seeds never duplicate. Only runs after a successful
+  // generation, so a transient AI failure can't wipe an existing deck. (Resets
+  // SM-2 scheduling for this item's cards — expected for a regenerate.)
+  await db
+    .delete(directoryFlashcards)
+    .where(and(eq(directoryFlashcards.userId, user.id), eq(directoryFlashcards.itemId, itemId)));
   await db.insert(directoryFlashcards).values(
     cards.map((c) => ({ userId: user.id, itemId, question: c.question, answer: c.answer })),
   );

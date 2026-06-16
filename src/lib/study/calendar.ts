@@ -16,6 +16,15 @@ export function localKey(d: Date): string {
 }
 
 /**
+ * UTC YYYY-MM-DD key. Task due dates are date-only values persisted at UTC
+ * midnight; bucketing/formatting them in the browser's local zone shifts a
+ * (due: 30th) task to the 29th in the Americas. Read them back in UTC instead.
+ */
+export function utcKey(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/**
  * 6×7 month grid (Sunday-first) covering `month` (0-based) of `year`, padded
  * with the trailing/leading days of adjacent months.
  */

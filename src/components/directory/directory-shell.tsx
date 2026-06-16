@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   createNoteAction,
+  fetchDirectoryItemByIdAction,
   loadMoreDirectoryItemsAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
@@ -145,16 +146,40 @@ export function DirectoryShell({
     return () => window.removeEventListener("popstate", fromUrl);
   }, []);
 
-  // Clear selection if no longer in the visible list
+  // A selected item that isn't in the loaded list/filter (e.g. opened from a
+  // Task's "open source", or an older item past the first page). Fetch it by id
+  // and render it directly instead of dropping the selection.
+  const [hydratedItem, setHydratedItem] = useState<DirectoryListItem | null>(null);
+
   useEffect(() => {
-    if (!selectedId) return;
-    if (!allItems.some((i) => i.id === selectedId)) {
-      setSelectedId(null);
-      const url = new URL(window.location.href);
-      url.searchParams.delete("item");
-      window.history.replaceState(null, "", url.toString());
+    if (!selectedId) {
+      setHydratedItem(null);
+      return;
     }
-  }, [allItems, selectedId]);
+    if (allItems.some((i) => i.id === selectedId)) {
+      setHydratedItem(null); // it's in the list — no standalone hydration needed
+      return;
+    }
+    if (hydratedItem?.id === selectedId) return; // already hydrated
+    let cancelled = false;
+    fetchDirectoryItemByIdAction(selectedId)
+      .then((item) => {
+        if (cancelled) return;
+        if (item) {
+          setHydratedItem(item as DirectoryListItem);
+        } else {
+          // Truly gone (deleted) — clear the dangling selection.
+          setSelectedId(null);
+          const url = new URL(window.location.href);
+          url.searchParams.delete("item");
+          window.history.replaceState(null, "", url.toString());
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [allItems, selectedId, hydratedItem]);
 
   const selectItem = useCallback((id: string | null) => {
     setSelectedId(id);
@@ -218,8 +243,10 @@ export function DirectoryShell({
   }
 
   const selectedItem = useMemo(
-    () => allItems.find((i) => i.id === selectedId) ?? null,
-    [allItems, selectedId],
+    () =>
+      allItems.find((i) => i.id === selectedId) ??
+      (hydratedItem?.id === selectedId ? hydratedItem : null),
+    [allItems, selectedId, hydratedItem],
   );
 
   const countLabel = `${allItems.length}${pageHasMore ? "+" : ""}`;

@@ -136,8 +136,11 @@ export async function POST(req: Request) {
     const r = await createNoteAction({ title: plan.title, content, folderId });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
 
-    // Seed the SM-2 review queue (best-effort — never fail the request on this).
-    void generateFlashcardsAction(r.itemId).catch(() => {});
+    // Seed the SM-2 review queue. AWAIT (not fire-and-forget): on serverless the
+    // function can be frozen/killed the moment it returns, dropping a floating
+    // promise — so "plan created" would succeed but the deck would never seed.
+    // .catch keeps it best-effort: a flashcard failure never fails the request.
+    await generateFlashcardsAction(r.itemId).catch(() => {});
 
     return NextResponse.json({
       ok: true,

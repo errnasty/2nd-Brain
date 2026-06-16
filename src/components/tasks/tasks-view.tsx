@@ -6,23 +6,23 @@ import { CheckSquare, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
+import { localKey, utcKey } from "@/lib/study/calendar";
 import { toggleTaskAction, type TaskRow } from "@/app/(app)/tasks/actions";
 
 type Filter = "today" | "open" | "done" | "all";
 
-function startOfToday(): number {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
-  return d.getTime();
-}
-
-/** Bucket label for an open task by due date relative to now. */
+/**
+ * Bucket an open task by its due date relative to today. Due dates are date-only
+ * values stored at UTC midnight, so compare calendar dates (UTC due vs the
+ * user's local today) as YYYY-MM-DD strings — comparing raw timestamps shifts a
+ * (due: 30th) task across the day boundary in the Americas.
+ */
 function bucketOf(due: Date | null): "Overdue" | "Today" | "Upcoming" | "No date" {
   if (!due) return "No date";
-  const end = startOfToday();
-  const t = new Date(due).getTime();
-  if (t < new Date().setHours(0, 0, 0, 0)) return "Overdue";
-  if (t <= end) return "Today";
+  const dueKey = utcKey(new Date(due));
+  const todayKey = localKey(new Date());
+  if (dueKey < todayKey) return "Overdue";
+  if (dueKey === todayKey) return "Today";
   return "Upcoming";
 }
 
@@ -151,7 +151,8 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
                           {t.itemTitle}
                           {t.dueDate && (
                             <span className="ml-2">
-                              · due {new Date(t.dueDate).toLocaleDateString()}
+                              · due{" "}
+                              {new Date(t.dueDate).toLocaleDateString(undefined, { timeZone: "UTC" })}
                             </span>
                           )}
                         </button>

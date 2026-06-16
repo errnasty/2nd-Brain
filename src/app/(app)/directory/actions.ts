@@ -23,7 +23,7 @@ import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
 import { bustMapCache } from "@/lib/map-cache";
-import { fetchDirectoryPage, type DirectoryPage } from "@/lib/directory/query";
+import { fetchDirectoryPage, type DirectoryPage, type DirItem } from "@/lib/directory/query";
 
 /** Infinite-scroll: fetch the next page of directory items for the shell. */
 export async function loadMoreDirectoryItemsAction(input: {
@@ -39,6 +39,34 @@ export async function loadMoreDirectoryItemsAction(input: {
     offset: input.offset,
     limit: input.limit,
   });
+}
+
+/**
+ * Fetch a single directory item by id (same shape as a list row). Used to open
+ * an item linked from elsewhere (e.g. a Task's "open source") that may not be on
+ * the Directory's currently-loaded page/filter — without it the viewer would
+ * close because the item isn't in the in-memory list.
+ */
+export async function fetchDirectoryItemByIdAction(itemId: string): Promise<DirItem | null> {
+  const { user } = await requireUser();
+  const [row] = await db
+    .select({
+      id: directoryItems.id,
+      title: directoryItems.title,
+      preview: sql<string | null>`substring(${directoryItems.content}, 1, 240)`.as("preview"),
+      kind: directoryItems.kind,
+      folderId: directoryItems.folderId,
+      sourceUrl: directoryItems.sourceUrl,
+      articleId: directoryItems.articleId,
+      documentId: directoryItems.documentId,
+      readingStatus: directoryItems.readingStatus,
+      createdAt: directoryItems.createdAt,
+      updatedAt: directoryItems.updatedAt,
+    })
+    .from(directoryItems)
+    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)))
+    .limit(1);
+  return (row as DirItem) ?? null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -630,8 +658,11 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
       .returning({ id: directoryItems.id });
 
     // Materialize any markdown checkbox tasks (e.g. an uploaded study plan with
-    // `- [ ] … (due: YYYY-MM-DD)` lines) into the Study tab / calendar.
-    await syncDirectoryTasks(user.id, item.id, itemContent);
+    // `- [ ] … (due: YYYY-MM-DD)` lines) into the Study tab / calendar. Parse
+    // from the FULL text (not the 10k preview) so line indices match
+    // documents.full_text — that's what toggleTaskAction flips for documents,
+    // and it captures tasks past the preview cutoff.
+    await syncDirectoryTasks(user.id, item.id, text);
 
     void autoTagDirectoryItem(user.id, item.id);
     // Embed inline so the doc is answerable in Ask right away (no manual

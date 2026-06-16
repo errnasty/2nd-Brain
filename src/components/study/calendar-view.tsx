@@ -29,11 +29,14 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
 
   const grid = useMemo(() => buildMonthGrid(year, month), [year, month]);
 
-  // Bucket entries by local day key.
+  // Bucket entries by day key. Tasks are date-only values stored at UTC
+  // midnight, so bucket them by their UTC calendar date (the YYYY-MM-DD prefix)
+  // — otherwise a US-timezone browser renders a (due: 30th) task on the 29th.
+  // Flashcards carry a real timestamp, so their local day is correct.
   const byDay = useMemo(() => {
     const m = new Map<string, CalendarEntry[]>();
     for (const e of entries) {
-      const k = localKey(new Date(e.due));
+      const k = e.kind === "task" ? e.due.slice(0, 10) : localKey(new Date(e.due));
       (m.get(k) ?? m.set(k, []).get(k)!).push(e);
     }
     return m;
