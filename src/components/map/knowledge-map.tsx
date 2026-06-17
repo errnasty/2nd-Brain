@@ -54,10 +54,10 @@ function nodeColorFor(node: MapNode): string {
       return "#9ca3af";
   }
 }
-function nodeRadiusFor(node: MapNode): number {
-  if (node.kind === "folder") return 10;
-  if (node.kind === "tag") return 7;
-  return 4;
+function nodeRadiusFor(node: MapNode, degree = 0): number {
+  // Visual weight by connection count (Obsidian-style): well-connected hubs grow.
+  const base = node.kind === "folder" ? 8 : node.kind === "tag" ? 5 : 3;
+  return base + Math.sqrt(degree) * 1.2;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -166,8 +166,24 @@ export function KnowledgeMap() {
     [],
   );
 
+  // Connection count per node — drives node size + label weight.
+  const degreeMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (!data) return map;
+    for (const link of data.links) {
+      const src = typeof link.source === "string" ? link.source : (link.source as MapNode).id;
+      const tgt = typeof link.target === "string" ? link.target : (link.target as MapNode).id;
+      map[src] = (map[src] ?? 0) + 1;
+      map[tgt] = (map[tgt] ?? 0) + 1;
+    }
+    return map;
+  }, [data]);
+
   const itemNodeColor = useCallback((n: object) => nodeColorFor(n as MapNode), []);
-  const itemNodeSize = useCallback((n: object) => nodeRadiusFor(n as MapNode), []);
+  const itemNodeSize = useCallback(
+    (n: object) => nodeRadiusFor(n as MapNode, degreeMap[(n as MapNode).id] ?? 0),
+    [degreeMap],
+  );
   const nodeLabel = useCallback((n: object) => (n as MapNode).label, []);
 
   // Memoize the graph data to prevent re-layout
@@ -221,27 +237,32 @@ export function KnowledgeMap() {
             backgroundColor="transparent"
             cooldownTime={1500}
             cooldownTicks={200}
-            warmupTicks={20}
-            d3AlphaDecay={0.04}
-            d3VelocityDecay={0.35}
+            warmupTicks={60}
+            d3AlphaDecay={0.02}
+            d3VelocityDecay={0.25}
             onNodeClick={onNodeClick as (n: object) => void}
-            nodeCanvasObjectMode={(node) => {
-              // Only paint the custom label layer when the user is zoomed in enough.
-              // At low zoom we let the library's default circle render — that means
-              // labels skip painting entirely on the most-expensive frames.
-              return "after";
-            }}
+            nodeCanvasObjectMode="after"
             nodeCanvasObject={(node, ctx, globalScale) => {
               const n = node as MapNode;
-              // Folders always labelled; tags/items only when zoomed in enough.
-              if (n.kind !== "folder" && globalScale < 1.4) return;
-              const label = n.label.length > 36 ? n.label.slice(0, 36) + "…" : n.label;
+              // Labels visible at any normal zoom; only hidden when zoomed far out.
+              if (globalScale < 0.5) return;
+              const degree = degreeMap[n.id] ?? 0;
+              const radius = nodeRadiusFor(n, degree);
+              const label = n.label.length > 30 ? n.label.slice(0, 30) + "…" : n.label;
               const fontSize = (n.kind === "folder" ? 13 : 11) / globalScale;
-              ctx.font = `${n.kind === "folder" ? "600 " : ""}${fontSize}px Georgia, serif`;
-              ctx.fillStyle = n.kind === "folder" ? "rgba(167,139,250,0.95)" : "rgba(160,160,160,0.85)";
+              ctx.font = `${n.kind === "folder" ? "600 " : "500 "}${fontSize}px Inter, system-ui, -apple-system, sans-serif`;
               ctx.textAlign = "center";
               ctx.textBaseline = "top";
-              ctx.fillText(label, n.x ?? 0, (n.y ?? 0) + nodeRadiusFor(n) + 1);
+              const x = n.x ?? 0;
+              const y = (n.y ?? 0) + radius + 3 / globalScale;
+              // Dark halo behind the text for contrast against the graph.
+              ctx.lineWidth = 3.5 / globalScale;
+              ctx.strokeStyle = "rgba(0,0,0,0.75)";
+              ctx.lineJoin = "round";
+              ctx.strokeText(label, x, y);
+              // Fill with the node's own color so labels carry the type coding.
+              ctx.fillStyle = nodeColorFor(n);
+              ctx.fillText(label, x, y);
             }}
           />
         )}
