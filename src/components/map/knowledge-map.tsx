@@ -224,16 +224,16 @@ export function KnowledgeMap() {
             nodeLabel={nodeLabel}
             linkColor={(l: object) => {
               const k = (l as MapLink).kind;
-              if (k === "link") return "rgba(96,165,250,0.6)"; // wikilink — solid blue
-              if (k === "folder") return "rgba(139,92,246,0.35)";
-              return "rgba(120,120,120,0.22)";
+              if (k === "link") return "rgba(96,165,250,0.95)"; // wikilink — bright blue
+              if (k === "folder") return "rgba(139,92,246,0.7)";
+              return "rgba(148,148,148,0.55)"; // tag links — visible gray
             }}
             linkWidth={(l: object) => {
               const k = (l as MapLink).kind;
-              return k === "link" ? 1.4 : k === "folder" ? 1 : 0.5;
+              return k === "link" ? 2.4 : k === "folder" ? 1.8 : 1.1;
             }}
-            linkDirectionalParticles={(l: object) => ((l as MapLink).kind === "link" ? 2 : 0)}
-            linkDirectionalParticleWidth={1.6}
+            linkDirectionalParticles={(l: object) => ((l as MapLink).kind === "link" ? 3 : 0)}
+            linkDirectionalParticleWidth={2.4}
             backgroundColor="transparent"
             cooldownTime={1500}
             cooldownTicks={200}
