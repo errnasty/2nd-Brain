@@ -81,7 +81,9 @@ export async function fetchDirectoryPage(
     })
     .from(directoryItems)
     .where(and(...conds))
-    .orderBy(desc(directoryItems.updatedAt))
+    // id tiebreaker → total order so offset paging (infinite scroll) can't skip
+    // or duplicate items that share an updated_at (e.g. bulk-imported rows).
+    .orderBy(desc(directoryItems.updatedAt), desc(directoryItems.id))
     .limit(limit + 1) // +1 sentinel to detect more
     .offset(offset);
 

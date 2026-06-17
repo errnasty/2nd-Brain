@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { clearOfflineMirror } from "@/lib/offline/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,6 +37,9 @@ function LoginForm() {
       const supabase = createSupabaseBrowserClient();
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      // Drop any previous user's offline sidebar mirror so this session never
+      // paints stale cross-account folders/tags.
+      await clearOfflineMirror();
       router.replace(redirectTo);
       router.refresh();
     } catch (err) {

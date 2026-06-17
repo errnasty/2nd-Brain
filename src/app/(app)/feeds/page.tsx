@@ -84,7 +84,9 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
       .from(articles)
       .innerJoin(feeds, eq(feeds.id, articles.feedId))
       .where(and(...where))
-      .orderBy(orderBy)
+      // id tiebreaker → total order; MUST match loadMoreArticlesAction so the
+      // infinite-scroll offsets line up (publishDate alone is nullable/non-unique).
+      .orderBy(orderBy, desc(articles.id))
       .limit(ARTICLE_LIMIT);
 
     // Collapse cross-feed duplicates (same story syndicated to multiple feeds)

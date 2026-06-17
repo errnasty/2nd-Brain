@@ -143,7 +143,9 @@ export async function GET(req: Request) {
             })
             .from(directoryItems)
             .where(and(...baseConds))
-            .orderBy(asc(directoryItems.title))
+            // id tiebreaker → a TOTAL order, so offset paging can't skip or
+            // duplicate items that share (or sit adjacent by) title.
+            .orderBy(asc(directoryItems.title), asc(directoryItems.id))
             .limit(PAGE)
             .offset(offset);
 

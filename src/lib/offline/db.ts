@@ -88,6 +88,23 @@ export async function writeCachedSidebar(payload: SidebarPayload): Promise<void>
   }
 }
 
+/**
+ * Wipe the local mirror. Called on the login/signup screens so a different user
+ * signing in on the same browser never paints the previous user's folders/tags
+ * before the first server sync replaces them (cross-account leak).
+ */
+export async function clearOfflineMirror(): Promise<void> {
+  const db = getOfflineDb();
+  if (!db) return;
+  try {
+    await db.transaction("rw", db.folders, db.tags, db.meta, async () => {
+      await Promise.all([db.folders.clear(), db.tags.clear(), db.meta.clear()]);
+    });
+  } catch {
+    // ignore
+  }
+}
+
 /** Fetch the latest sidebar from the server and update the mirror. */
 export async function syncSidebar(): Promise<{ folders: CachedFolder[]; tags: CachedTag[] } | null> {
   try {

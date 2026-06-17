@@ -444,7 +444,10 @@ export async function loadMoreArticlesAction(input: {
     .from(articles)
     .innerJoin(feeds, eq(feeds.id, articles.feedId))
     .where(and(...where))
-    .orderBy(orderBy)
+    // id tiebreaker → a TOTAL order. publishDate is nullable + non-unique, so
+    // without it offset paging skips/duplicates rows at page boundaries. MUST
+    // match the initial query in feeds/page.tsx for offsets to line up.
+    .orderBy(orderBy, desc(articles.id))
     .limit(FEED_PAGE_SIZE)
     .offset(Math.max(0, input.offset));
 

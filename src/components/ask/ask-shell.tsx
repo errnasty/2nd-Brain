@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
+import { generateFlashcardsAction } from "@/app/(app)/review/actions";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
@@ -368,6 +369,10 @@ export function AskShell() {
           ...prev,
           { id: crypto.randomUUID(), role: "assistant", content: "", plan },
         ]);
+        // Seed the SM-2 deck from the new plan note in a SEPARATE request — keeps
+        // the (already slow) /api/study-plan call under the serverless time cap
+        // while still reliably generating flashcards (runs to completion server-side).
+        void generateFlashcardsAction(plan.itemId).catch(() => {});
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return; // user pressed Stop
         setError(err instanceof Error ? err.message : "Request failed");

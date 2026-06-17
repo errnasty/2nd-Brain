@@ -6,7 +6,6 @@ import { requireUser } from "@/lib/auth";
 import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { generateStudyPlan } from "@/lib/ai/study-plan";
 import { createNoteAction, createDirectoryFolderAction } from "@/app/(app)/directory/actions";
-import { generateFlashcardsAction } from "@/app/(app)/review/actions";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -136,12 +135,10 @@ export async function POST(req: Request) {
     const r = await createNoteAction({ title: plan.title, content, folderId });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
 
-    // Seed the SM-2 review queue. AWAIT (not fire-and-forget): on serverless the
-    // function can be frozen/killed the moment it returns, dropping a floating
-    // promise — so "plan created" would succeed but the deck would never seed.
-    // .catch keeps it best-effort: a flashcard failure never fails the request.
-    await generateFlashcardsAction(r.itemId).catch(() => {});
-
+    // Flashcards are seeded by the CLIENT in a SEPARATE request after this one
+    // returns (see ask-shell). Doing it inline here would add another AI call to
+    // a request that's already near the serverless function's wall-clock cap
+    // (~10s on Netlify) — pushing it to a 504 *after* the note was saved.
     return NextResponse.json({
       ok: true,
       itemId: r.itemId,

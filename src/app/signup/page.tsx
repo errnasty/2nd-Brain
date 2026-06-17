@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
+import { clearOfflineMirror } from "@/lib/offline/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,6 +42,7 @@ function SignupForm() {
       // we can go straight in. If confirmation is enabled, there's no session
       // yet — tell the user to check their email.
       if (data.session) {
+        await clearOfflineMirror(); // fresh account — no stale offline mirror
         router.replace("/");
         router.refresh();
       } else {
