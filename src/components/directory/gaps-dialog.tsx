@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Lightbulb, Loader2, Search } from "lucide-react";
@@ -29,38 +29,63 @@ export function GapsDialog({
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [gaps, setGaps] = useState<Gap[] | null>(null);
+  const [gapsError, setGapsError] = useState(false);
   const [scope, setScope] = useState("");
   const [researching, setResearching] = useState<string | null>(null);
+  const researchAbortRef = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  function loadGaps() {
     setLoading(true);
     setGaps(null);
+    setGapsError(false);
     fetch("/api/gaps", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ folder, tagIds }),
     })
       .then(async (res) => {
+        // Distinguish a failed analysis from a genuinely empty result.
+        if (!res.ok) {
+          setGapsError(true);
+          return;
+        }
         const data = await res.json();
-        setGaps(res.ok ? (data.gaps ?? []) : []);
+        setGaps(data.gaps ?? []);
         setScope(data.scope ?? "");
       })
-      .catch(() => setGaps([]))
+      .catch(() => setGapsError(true))
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    loadGaps();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, folder, tagIds]);
+
+  // Abort an in-flight research request when the dialog closes/unmounts so it
+  // can't force-navigate after the user has left.
+  useEffect(() => {
+    if (!open) researchAbortRef.current?.abort();
+  }, [open]);
+  useEffect(() => () => researchAbortRef.current?.abort(), []);
 
   function research(topic: string) {
     if (researching) return;
     setResearching(topic);
+    researchAbortRef.current?.abort();
+    const controller = new AbortController();
+    researchAbortRef.current = controller;
     const id = toast.loading(`Researching "${topic}"…`);
     fetch("/api/gaps/research", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ topic, folderId: folder && folder !== "unsorted" ? folder : null }),
+      signal: controller.signal,
     })
       .then(async (res) => {
         const data = await res.json();
+        if (controller.signal.aborted) return; // dialog was closed — don't navigate
         if (res.ok && data.itemId) {
           toast.success("Saved research note", { id });
           onOpenChange(false);
@@ -70,7 +95,13 @@ export function GapsDialog({
           toast.error(data.error ?? "Research failed", { id });
         }
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : "Research failed", { id }))
+      .catch((e) => {
+        if ((e as Error)?.name === "AbortError") {
+          toast.dismiss(id);
+          return;
+        }
+        toast.error(e instanceof Error ? e.message : "Research failed", { id });
+      })
       .finally(() => setResearching(null));
   }
 
@@ -90,6 +121,13 @@ export function GapsDialog({
             {loading ? (
               <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" /> Analyzing your collection…
+              </div>
+            ) : gapsError ? (
+              <div className="flex flex-col items-center gap-2 py-6 text-center text-sm text-muted-foreground">
+                Couldn&apos;t analyze your collection.
+                <Button size="sm" variant="outline" onClick={loadGaps}>
+                  Try again
+                </Button>
               </div>
             ) : gaps && gaps.length === 0 ? (
               <div className="py-6 text-center text-sm text-muted-foreground">

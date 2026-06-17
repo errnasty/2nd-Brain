@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { GraduationCap, Loader2 } from "lucide-react";
@@ -25,19 +25,32 @@ export function CurriculumDialog({
   const router = useRouter();
   const [topic, setTopic] = useState("");
   const [loading, setLoading] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Closing the dialog (Cancel / Esc / outside-click) aborts the in-flight
+  // generation so it can't force-navigate ~20s later after the user has left.
+  useEffect(() => {
+    if (!open) abortRef.current?.abort();
+  }, [open]);
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   function generate() {
     const t = topic.trim();
     if (!t || loading) return;
     setLoading(true);
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     const id = toast.loading(`Building a curriculum for "${t}"…`);
     fetch("/api/curriculum", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ topic: t, folderId: folder && folder !== "unsorted" ? folder : null }),
+      signal: controller.signal,
     })
       .then(async (res) => {
         const data = await res.json();
+        if (controller.signal.aborted) return; // dialog closed — don't navigate
         if (res.ok && data.itemId) {
           toast.success("Curriculum saved", { id });
           onOpenChange(false);
@@ -48,7 +61,13 @@ export function CurriculumDialog({
           toast.error(data.error ?? "Failed", { id });
         }
       })
-      .catch((e) => toast.error(e instanceof Error ? e.message : "Failed", { id }))
+      .catch((e) => {
+        if ((e as Error)?.name === "AbortError") {
+          toast.dismiss(id);
+          return;
+        }
+        toast.error(e instanceof Error ? e.message : "Failed", { id });
+      })
       .finally(() => setLoading(false));
   }
 

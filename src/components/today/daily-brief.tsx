@@ -635,9 +635,11 @@ export function DailyBrief() {
                           title={savedIds.has(s.id) ? "Saved — remove" : "Save to read later"}
                           className={cn(
                             "shrink-0 rounded p-1 transition-opacity hover:bg-accent",
+                            // Visible by default (touch has no hover); only
+                            // hover-capable devices hide-until-hover.
                             savedIds.has(s.id)
                               ? "text-brand opacity-100"
-                              : "text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100",
+                              : "text-muted-foreground opacity-100 hover:text-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100",
                           )}
                         >
                           <Bookmark
@@ -648,7 +650,7 @@ export function DailyBrief() {
                           <button
                             onClick={() => markRead([s.id])}
                             title="Mark read"
-                            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                            className="shrink-0 rounded p-1 text-muted-foreground opacity-100 transition-opacity hover:bg-accent hover:text-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                           >
                             <Check className="h-3.5 w-3.5" />
                           </button>
@@ -659,7 +661,7 @@ export function DailyBrief() {
                             target="_blank"
                             rel="noopener noreferrer"
                             title="Open original article"
-                            className="shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                            className="shrink-0 rounded p-1 text-muted-foreground opacity-100 transition-opacity hover:bg-accent hover:text-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
                           </a>

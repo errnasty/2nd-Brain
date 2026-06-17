@@ -71,6 +71,9 @@ export function FeedsNav({
   const params = useSearchParams();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Dedicated flag so the Sync-all spinner doesn't spin on unrelated transitions
+  // (create folder, move feed, …) that also flip the shared `pending`.
+  const [syncing, setSyncing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [discoverOpen, setDiscoverOpen] = useState(false);
@@ -119,9 +122,49 @@ export function FeedsNav({
     setDraggingFeed(null);
     setDropTarget(null);
     startTransition(async () => {
-      await moveFeedToFolderAction(feedId, folderId);
-      toast.success(folderId ? "Moved to folder" : "Moved to Uncategorized");
+      try {
+        await moveFeedToFolderAction(feedId, folderId);
+        toast.success(folderId ? "Moved to folder" : "Moved to Uncategorized");
+      } catch (err) {
+        toast.error(`Move failed: ${err instanceof Error ? err.message : "error"}`);
+      }
     });
+  }
+
+  async function syncAll() {
+    if (syncing) return;
+    setSyncing(true);
+    const toastId = toast.loading("Syncing feeds…");
+    let totalSynced = 0;
+    let totalFailed = 0;
+    try {
+      // Each call is time-boxed (~8s) and processes the stalest feeds first, so
+      // loop until nothing is left. Cap iterations as a safety net.
+      for (let i = 0; i < 25; i += 1) {
+        const r = await syncAllAction();
+        if (!r.ok) {
+          if ("alreadyRunning" in r) {
+            toast.info("A sync is already running — hang tight.", { id: toastId });
+          } else {
+            toast.error(`Sync failed: ${r.error}`, { id: toastId });
+          }
+          return;
+        }
+        totalSynced += r.synced;
+        totalFailed += r.failed;
+        if (r.remaining <= 0) break;
+        toast.loading(`Syncing feeds… ${r.remaining} left`, { id: toastId });
+      }
+      toast.success(
+        `Synced ${totalSynced} feed${totalSynced === 1 ? "" : "s"}` +
+          (totalFailed > 0 ? ` · ${totalFailed} failed (see ⚠ in list)` : ""),
+        { id: toastId },
+      );
+    } catch (err) {
+      toast.error(`Sync failed: ${err instanceof Error ? err.message : "unknown error"}.`, { id: toastId });
+    } finally {
+      setSyncing(false);
+    }
   }
 
   function startCreateFolder() {
@@ -151,47 +194,11 @@ export function FeedsNav({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            disabled={pending}
-            onClick={() =>
-              startTransition(async () => {
-                const toastId = toast.loading("Syncing feeds…");
-                let totalSynced = 0;
-                let totalFailed = 0;
-                try {
-                  // Each call is time-boxed (~8s) and processes the stalest feeds
-                  // first, so loop until nothing is left. Cap iterations as a
-                  // safety net against an unexpected non-decreasing remaining.
-                  for (let i = 0; i < 25; i += 1) {
-                    const r = await syncAllAction();
-                    if (!r.ok) {
-                      if ("alreadyRunning" in r) {
-                        toast.info("A sync is already running — hang tight.", { id: toastId });
-                      } else {
-                        toast.error(`Sync failed: ${r.error}`, { id: toastId });
-                      }
-                      return;
-                    }
-                    totalSynced += r.synced;
-                    totalFailed += r.failed;
-                    if (r.remaining <= 0) break;
-                    toast.loading(`Syncing feeds… ${r.remaining} left`, { id: toastId });
-                  }
-                  toast.success(
-                    `Synced ${totalSynced} feed${totalSynced === 1 ? "" : "s"}` +
-                      (totalFailed > 0 ? ` · ${totalFailed} failed (see ⚠ in list)` : ""),
-                    { id: toastId },
-                  );
-                } catch (err) {
-                  toast.error(
-                    `Sync failed: ${err instanceof Error ? err.message : "unknown error"}.`,
-                    { id: toastId },
-                  );
-                }
-              })
-            }
+            disabled={syncing}
+            onClick={syncAll}
             title="Sync all"
           >
-            <RefreshCw className={cn("h-3.5 w-3.5", pending && "animate-spin")} />
+            <RefreshCw className={cn("h-3.5 w-3.5", syncing && "animate-spin")} />
           </Button>
           <Button
             size="icon"
@@ -489,8 +496,12 @@ function FolderSection({
           <ContextMenuItem
             onClick={() =>
               startTransition(async () => {
-                await markFolderReadAction(folder.id);
-                toast.success("Marked all as read");
+                try {
+                  await markFolderReadAction(folder.id);
+                  toast.success("Marked all as read");
+                } catch (err) {
+                  toast.error(`Couldn't mark read: ${err instanceof Error ? err.message : "error"}`);
+                }
               })
             }
           >
@@ -503,8 +514,12 @@ function FolderSection({
             onClick={() => {
               if (!confirm(`Delete folder "${folder.name}"?\n\nFeeds inside will be moved to Uncategorized.`)) return;
               startTransition(async () => {
-                await deleteFolderAction(folder.id);
-                toast.success("Folder deleted");
+                try {
+                  await deleteFolderAction(folder.id);
+                  toast.success("Folder deleted");
+                } catch (err) {
+                  toast.error(`Delete failed: ${err instanceof Error ? err.message : "error"}`);
+                }
               });
             }}
           >
@@ -618,65 +633,50 @@ function FeedRow({
             dragging && "opacity-40",
           )}
         >
-          <button onClick={onClick} className="flex flex-1 items-center gap-2 px-2 py-1.5 text-left min-w-0">
-            {feed.iconUrl ? (
-              <Image
-                src={feed.iconUrl}
-                alt=""
-                width={16}
-                height={16}
-                className="shrink-0 rounded-sm"
-                unoptimized
-              />
-            ) : (
-              <Rss className="h-4 w-4 shrink-0 text-muted-foreground" />
-            )}
-            {renaming ? (
+          {/* Label is a button (or the rename input) — kept a SIBLING of the
+              retry control + count, never their parent, so we don't nest
+              interactive elements inside a <button> (invalid HTML / hydration). */}
+          {renaming ? (
+            <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5">
+              {feed.iconUrl ? (
+                <Image src={feed.iconUrl} alt="" width={16} height={16} className="shrink-0 rounded-sm" unoptimized />
+              ) : (
+                <Rss className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
               <input
                 ref={inputRef}
-                className="flex-1 bg-transparent border-b border-primary outline-none text-sm py-0 min-w-0"
+                className="min-w-0 flex-1 border-b border-primary bg-transparent py-0 text-sm outline-none"
                 value={renameValue}
                 onChange={(e) => setRenameValue(e.target.value)}
                 onBlur={commitRename}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") { e.preventDefault(); commitRename(); }
                   if (e.key === "Escape") setRenaming(false);
-                  e.stopPropagation();
                 }}
-                onClick={(e) => e.stopPropagation()}
               />
-            ) : (
+            </div>
+          ) : (
+            <button onClick={onClick} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left">
+              {feed.iconUrl ? (
+                <Image src={feed.iconUrl} alt="" width={16} height={16} className="shrink-0 rounded-sm" unoptimized />
+              ) : (
+                <Rss className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
               <span className="flex-1 truncate text-sm">{feed.title}</span>
-            )}
-            {!renaming && feed.lastError && (
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  resync();
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    resync();
-                  }
-                }}
-                className="shrink-0 rounded hover:bg-accent"
-                title={`Last sync failed: ${feed.lastError}. Click to retry.`}
-              >
-                <AlertTriangle
-                  className={cn("h-3.5 w-3.5 text-amber-500", pending && "animate-pulse")}
-                />
-              </span>
-            )}
-            {!renaming && count > 0 && (
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                {count}
-              </span>
-            )}
-          </button>
+            </button>
+          )}
+          {!renaming && feed.lastError && (
+            <button
+              onClick={(e) => { e.stopPropagation(); resync(); }}
+              className="shrink-0 rounded p-0.5 hover:bg-accent"
+              title={`Last sync failed: ${feed.lastError}. Click to retry.`}
+            >
+              <AlertTriangle className={cn("h-3.5 w-3.5 text-amber-500", pending && "animate-pulse")} />
+            </button>
+          )}
+          {!renaming && count > 0 && (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{count}</span>
+          )}
         </div>
       </ContextMenuTrigger>
 
@@ -722,7 +722,14 @@ function FeedRow({
             <ContextMenuSubContent>
               <ContextMenuItem
                 onClick={() =>
-                  startTransition(() => moveFeedToFolderAction(feed.id, null))
+                  startTransition(async () => {
+                    try {
+                      await moveFeedToFolderAction(feed.id, null);
+                      toast.success("Moved to Uncategorized");
+                    } catch (err) {
+                      toast.error(`Move failed: ${err instanceof Error ? err.message : "error"}`);
+                    }
+                  })
                 }
               >
                 <span className="text-muted-foreground">— Uncategorized</span>
@@ -732,7 +739,14 @@ function FeedRow({
                 <ContextMenuItem
                   key={folder.id}
                   onClick={() =>
-                    startTransition(() => moveFeedToFolderAction(feed.id, folder.id))
+                    startTransition(async () => {
+                      try {
+                        await moveFeedToFolderAction(feed.id, folder.id);
+                        toast.success(`Moved to ${folder.name}`);
+                      } catch (err) {
+                        toast.error(`Move failed: ${err instanceof Error ? err.message : "error"}`);
+                      }
+                    })
                   }
                 >
                   <FolderClosed className="mr-2 h-3.5 w-3.5 text-muted-foreground" />
@@ -748,8 +762,12 @@ function FeedRow({
           onClick={() => {
             if (!confirm(`Remove "${feed.title}"? Articles will also be deleted.`)) return;
             startTransition(async () => {
-              await deleteFeedAction(feed.id);
-              toast.success("Feed removed");
+              try {
+                await deleteFeedAction(feed.id);
+                toast.success("Feed removed");
+              } catch (err) {
+                toast.error(`Remove failed: ${err instanceof Error ? err.message : "error"}`);
+              }
             });
           }}
         >

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, CheckSquare, Brain } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckSquare, Brain, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   buildMonthGrid,
@@ -26,6 +26,8 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
   const [month, setMonth] = useState(now.getMonth());
   const [entries, setEntries] = useState<CalendarEntry[]>(initial);
   const [selected, setSelected] = useState<string>(localKey(now));
+  const [loadingMonth, setLoadingMonth] = useState(false);
+  const [monthError, setMonthError] = useState(false);
 
   const grid = useMemo(() => buildMonthGrid(year, month), [year, month]);
 
@@ -42,6 +44,20 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
     return m;
   }, [entries]);
 
+  function loadMonth(y: number, mo: number) {
+    const { fromISO, toISO } = monthRange(y, mo);
+    setLoadingMonth(true);
+    setMonthError(false);
+    fetchCalendarRange(fromISO, toISO)
+      .then((e) => {
+        setEntries(e);
+        setMonthError(false);
+      })
+      // Don't silently blank the grid on failure — surface an error + retry.
+      .catch(() => setMonthError(true))
+      .finally(() => setLoadingMonth(false));
+  }
+
   function go(delta: number) {
     let y = year;
     let mo = month + delta;
@@ -54,8 +70,10 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
     }
     setYear(y);
     setMonth(mo);
-    const { fromISO, toISO } = monthRange(y, mo);
-    fetchCalendarRange(fromISO, toISO).then(setEntries).catch(() => setEntries([]));
+    // Reset the selected day to the new month's 1st so the detail panel doesn't
+    // keep showing a day from the previous month.
+    setSelected(localKey(new Date(y, mo, 1)));
+    loadMonth(y, mo);
   }
 
   const selectedEntries = byDay.get(selected) ?? [];
@@ -63,8 +81,9 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
       <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold">
+        <div className="flex items-center gap-2 text-sm font-semibold">
           {MONTH_NAMES[month]} {year}
+          {loadingMonth && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
         </div>
         <div className="flex items-center gap-1">
           <button onClick={() => go(-1)} className="rounded p-1 hover:bg-accent" title="Previous month">
@@ -75,6 +94,15 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
           </button>
         </div>
       </div>
+
+      {monthError && (
+        <div className="mb-3 flex items-center justify-between rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <span>Couldn&apos;t load this month.</span>
+          <button onClick={() => loadMonth(year, month)} className="font-medium underline underline-offset-2">
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-7 gap-1 text-center text-[10px] uppercase tracking-wider text-muted-foreground">
         {WEEKDAY_LABELS.map((d) => (

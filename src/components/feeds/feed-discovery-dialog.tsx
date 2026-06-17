@@ -118,7 +118,7 @@ export function FeedDiscoveryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[600px] max-w-3xl flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className="flex h-[min(600px,90dvh)] max-w-3xl flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border px-5 pt-5 pb-4">
           <DialogTitle className="text-base font-semibold">Discover Feeds</DialogTitle>
           <div className="relative mt-2">

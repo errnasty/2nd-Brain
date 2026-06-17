@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Brain, Check, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,15 @@ export function ReviewView({
   const [showAnswer, setShowAnswer] = useState(false);
   const [reviewed, setReviewed] = useState(0);
   const [, startTransition] = useTransition();
+
+  // "Load next batch"/"Check again" call router.refresh(), which feeds a new
+  // `cards` prop — but useState seeded once would ignore it, leaving an empty
+  // queue. Re-seed the session whenever the server sends a fresh batch.
+  useEffect(() => {
+    setQueue(cards);
+    setReviewed(0);
+    setShowAnswer(false);
+  }, [cards]);
 
   const current = queue[0];
   // Live backlog: the true due count minus what we've graded this session.

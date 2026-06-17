@@ -416,10 +416,29 @@ export function ArticleReader({
               )}
               {extractError && !content && (
                 <div className="not-prose mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  Couldn&apos;t extract full text ({extractError}). Showing RSS excerpt.
+                  Couldn&apos;t extract full text ({extractError}).
+                  {article?.excerpt ? " Showing the RSS excerpt below." : ""}
                 </div>
               )}
-              {content && <div dangerouslySetInnerHTML={{ __html: content }} />}
+              {content ? (
+                <div dangerouslySetInnerHTML={{ __html: content }} />
+              ) : !loadingContent && article ? (
+                article.excerpt ? (
+                  <p>{article.excerpt}</p>
+                ) : (
+                  <p className="not-prose text-sm italic text-muted-foreground">
+                    This article&apos;s text isn&apos;t available.{" "}
+                    <a
+                      href={article.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary underline underline-offset-2"
+                    >
+                      Open the original ↗
+                    </a>
+                  </p>
+                )
+              ) : null}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
             </>
           )}

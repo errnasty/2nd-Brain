@@ -276,9 +276,10 @@ export function KnowledgeMap() {
         </div>
       </div>
 
-      {/* Side panel */}
+      {/* Detail panel: a bottom sheet on phones/tablets (so node actions are
+          reachable on touch), an in-flow side column at lg+. */}
       {selected && (
-        <aside className="hidden w-96 shrink-0 flex-col border-l border-border lg:flex">
+        <aside className="fixed inset-x-0 bottom-0 z-40 flex max-h-[70vh] flex-col rounded-t-2xl border-t border-border bg-background pb-[env(safe-area-inset-bottom)] shadow-xl lg:static lg:inset-auto lg:z-auto lg:max-h-none lg:w-96 lg:shrink-0 lg:rounded-none lg:border-l lg:border-t-0 lg:pb-0 lg:shadow-none">
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <div className="text-xs uppercase tracking-wider text-muted-foreground">
               {selected.kind === "tag" ? "Tag" : selected.kind === "folder" ? "Folder" : "Item"}

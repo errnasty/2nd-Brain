@@ -43,7 +43,14 @@ export function DocumentsPanel({
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <section className="flex w-full max-w-sm shrink-0 flex-col border-r border-border">
+      {/* Mobile drill-down: the list hides once a document is open (the reader
+          has its own X to come back); both panes show side-by-side at md+. */}
+      <section
+        className={cn(
+          "w-full flex-col border-r border-border md:max-w-sm md:shrink-0",
+          selected ? "hidden md:flex" : "flex",
+        )}
+      >
         <div className="p-3">
           <UploadZone />
         </div>
@@ -78,13 +85,18 @@ export function DocumentsPanel({
                     <Button
                       size="icon"
                       variant="ghost"
-                      className="h-7 w-7 opacity-0 group-hover:opacity-100"
+                      // Visible on touch (no hover); hover-hide only where hover exists.
+                      className="h-7 w-7 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                       disabled={pending}
                       onClick={() => {
                         if (!confirm(`Delete "${doc.title}"?`)) return;
                         startTransition(async () => {
-                          await deleteDocumentAction(doc.id);
-                          toast.success("Deleted");
+                          try {
+                            await deleteDocumentAction(doc.id);
+                            toast.success("Deleted");
+                          } catch (err) {
+                            toast.error(`Delete failed: ${err instanceof Error ? err.message : "error"}`);
+                          }
                         });
                       }}
                     >

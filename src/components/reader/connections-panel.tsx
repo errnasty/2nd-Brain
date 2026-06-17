@@ -24,21 +24,28 @@ export function ConnectionsPanel({ itemId }: { itemId: string }) {
   const [items, setItems] = useState<Connection[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [opened, setOpened] = useState(false);
+  const [error, setError] = useState(false);
 
   function load() {
     setOpened(true);
     setLoading(true);
     setItems(null);
+    setError(false);
     fetch("/api/connections", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ itemId }),
     })
       .then(async (res) => {
+        // Don't collapse a failure into an empty result — they read identically.
+        if (!res.ok) {
+          setError(true);
+          return;
+        }
         const data = await res.json();
-        setItems(res.ok ? (data.items ?? []) : []);
+        setItems(data.items ?? []);
       })
-      .catch(() => setItems([]))
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
   }
 
@@ -59,6 +66,13 @@ export function ConnectionsPanel({ itemId }: { itemId: string }) {
         <div className="space-y-2">
           <Skeleton className="h-12 w-full" />
           <Skeleton className="h-12 w-3/4" />
+        </div>
+      ) : error ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Couldn&apos;t analyze connections.</span>
+          <button onClick={load} className="font-medium text-primary underline underline-offset-2">
+            Try again
+          </button>
         </div>
       ) : items && items.length === 0 ? (
         <div className="text-xs text-muted-foreground">No strong connections found.</div>
