@@ -1,13 +1,16 @@
 "use client";
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   GraduationCap,
   Library,
+  Loader2,
   MessageCircle,
   Network,
   Rss,
+  Search,
   Sparkles,
   Tag,
 } from "lucide-react";
@@ -15,18 +18,25 @@ import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
+// `chord` is the second key of the `g`-prefixed jump shortcut (see GlobalShortcuts).
 const nav = [
-  { href: "/today", label: "Today", icon: Sparkles },
-  { href: "/ask", label: "Ask", icon: MessageCircle },
-  { href: "/feeds", label: "Feeds", icon: Rss },
-  { href: "/directory", label: "Directory", icon: Library },
-  { href: "/study", label: "Study", icon: GraduationCap },
-  { href: "/map", label: "Knowledge Map", icon: Network },
-  { href: "/tags", label: "Tags", icon: Tag },
+  { href: "/today", label: "Today", icon: Sparkles, chord: "T" },
+  { href: "/ask", label: "Ask", icon: MessageCircle, chord: "A" },
+  { href: "/feeds", label: "Feeds", icon: Rss, chord: "F" },
+  { href: "/directory", label: "Directory", icon: Library, chord: "D" },
+  { href: "/study", label: "Study", icon: GraduationCap, chord: "S" },
+  { href: "/map", label: "Knowledge Map", icon: Network, chord: "M" },
+  { href: "/tags", label: "Tags", icon: Tag, chord: "G" },
 ];
 
 export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
+  // ⌘ on macOS, Ctrl elsewhere. Resolved after mount to avoid hydration mismatch.
+  const [mod, setMod] = useState("⌘");
+  useEffect(() => {
+    const isMac = /mac|iphone|ipad|ipod/i.test(navigator.userAgent);
+    setMod(isMac ? "⌘" : "Ctrl");
+  }, []);
 
   function isActive(href: string): boolean {
     return pathname === href || (href !== "/" && pathname.startsWith(href));
@@ -39,9 +49,24 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
         <div className="mt-1 text-[11px] text-muted-foreground truncate">{userEmail}</div>
       </div>
       <Separator />
+
+      {/* Surfaces the command palette (otherwise ⌘K-only / invisible). */}
+      <div className="px-2 pt-2">
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
+          className="flex w-full items-center gap-2 rounded-md border border-border bg-background/60 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">Search…</span>
+          <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums">
+            {mod}K
+          </kbd>
+        </button>
+      </div>
+
       <ScrollArea className="flex-1">
         <nav className="p-2 space-y-0.5">
-          {nav.map(({ href, label, icon: Icon }) => {
+          {nav.map(({ href, label, icon: Icon, chord }) => {
             const active = isActive(href);
             return (
               <Link
@@ -49,7 +74,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
                 href={href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
+                  "group/item relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
                   active
                     ? "bg-accent font-medium text-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -59,7 +84,8 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
                   <span className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-brand" />
                 )}
                 <Icon className={cn("h-4 w-4", active && "text-brand")} />
-                <span>{label}</span>
+                <span className="flex-1">{label}</span>
+                <NavHint chord={chord} />
               </Link>
             );
           })}
@@ -69,11 +95,32 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
       <div className="p-2">
         <Link
           href="/settings"
-          className="block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          aria-current={isActive("/settings") ? "page" : undefined}
+          className={cn(
+            "block rounded-md px-3 py-2 text-sm transition-colors",
+            isActive("/settings")
+              ? "bg-accent font-medium text-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+          )}
         >
           Settings
         </Link>
       </div>
     </aside>
+  );
+}
+
+/**
+ * While the clicked link's route is loading, show a spinner; otherwise the
+ * hover-revealed jump-shortcut hint. useLinkStatus reads the pending state of
+ * the enclosing <Link>.
+ */
+function NavHint({ chord }: { chord: string }) {
+  const { pending } = useLinkStatus();
+  if (pending) return <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />;
+  return (
+    <kbd className="rounded border border-border bg-muted px-1 text-[10px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover/item:opacity-100">
+      G {chord}
+    </kbd>
   );
 }
