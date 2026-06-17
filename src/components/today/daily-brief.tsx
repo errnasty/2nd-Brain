@@ -107,6 +107,16 @@ export function DailyBrief() {
   const [customPrompt, setCustomPrompt] = useState("");
   const [savedPrompt, setSavedPrompt] = useState("");
   const hasMounted = useRef(false);
+  // Set synchronously when we hydrate a same-day brief from cache. A ref (not
+  // state) so the auto-stream effect below — which runs in the SAME commit as
+  // the cache-load effect — sees it immediately instead of the batched, still-
+  // false `hydratedFromCache` state, which made the brief re-stream every load.
+  const cacheHydratedRef = useRef(false);
+  // Latest saved prompt, readable synchronously. The auto-stream effect captures
+  // `stream` from the first render (savedPrompt still ""), so without this the
+  // first brief of the day would generate with the DEFAULT prompt, ignoring a
+  // user's saved custom prompt.
+  const savedPromptRef = useRef("");
 
   // Load saved prompt + cached brief on mount. If a cached brief exists we
   // show it immediately; otherwise we kick off a fresh stream below.
@@ -116,6 +126,7 @@ export function DailyBrief() {
     hasMounted.current = true;
     try {
       const saved = localStorage.getItem(PROMPT_STORAGE_KEY) ?? "";
+      savedPromptRef.current = saved; // sync — before the auto-stream effect runs
       setSavedPrompt(saved);
       setCustomPrompt(saved);
     } catch {
@@ -138,6 +149,7 @@ export function DailyBrief() {
           // Prior day → leave hydratedFromCache false so the auto-stream effect
           // below generates a fresh brief.
           if (isSameDay(genDate, new Date())) {
+            cacheHydratedRef.current = true;
             setContent(parsed.content);
             setSources(parsed.sources ?? []);
             setUsage(parsed.usage ?? null);
@@ -169,7 +181,7 @@ export function DailyBrief() {
     setReadIds(new Set());
     setSavedIds(new Set());
     try {
-      const systemPrompt = (promptOverride ?? savedPrompt).trim();
+      const systemPrompt = (promptOverride ?? savedPromptRef.current).trim();
       const res = await fetch("/api/brief", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -282,9 +294,11 @@ export function DailyBrief() {
     }
   }, [savedPrompt]);
 
-  // Only auto-stream on mount if we don't already have a cached brief.
+  // Only auto-stream on mount if we don't already have a (same-day) cached brief.
+  // The ref check catches the same-commit case where `hydratedFromCache` state
+  // hasn't flushed yet; the state check handles later re-runs.
   useEffect(() => {
-    if (hydratedFromCache) return;
+    if (cacheHydratedRef.current || hydratedFromCache) return;
     stream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
@@ -392,6 +406,7 @@ export function DailyBrief() {
       const trimmed = customPrompt.trim();
       localStorage.setItem(PROMPT_STORAGE_KEY, trimmed);
       localStorage.removeItem(BRIEF_CACHE_KEY); // prompt changed; old brief is stale
+      savedPromptRef.current = trimmed;
       setSavedPrompt(trimmed);
       setSettingsOpen(false);
       toast.success(trimmed ? "Custom prompt saved" : "Reset to default prompt");

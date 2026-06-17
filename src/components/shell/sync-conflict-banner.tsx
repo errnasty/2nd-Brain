@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { isDesktopRuntime } from "@/lib/upload-limits";
 import { AlertTriangle, Copy, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +37,8 @@ export function SyncConflictBanner() {
   }, []);
 
   useEffect(() => {
+    // Desktop-only feature — don't poll a 404 endpoint every 20s on the web.
+    if (!isDesktopRuntime()) return;
     load();
     const id = setInterval(load, 20_000);
     return () => clearInterval(id);

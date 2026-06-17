@@ -1,10 +1,8 @@
-import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
-import { directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { classifyConnections } from "@/lib/ai/analysis";
+import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -34,14 +32,14 @@ export async function POST(req: Request) {
   }
   if (!itemId) return NextResponse.json({ error: "itemId required" }, { status: 400 });
 
-  const [item] = await db
-    .select({ title: directoryItems.title, content: directoryItems.content })
-    .from(directoryItems)
-    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)))
-    .limit(1);
-  if (!item) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+  // Resolve the authoritative text by kind — saved articles carry NO
+  // directory_items.content and documents only a truncated preview, so building
+  // the query from content directly searched on the title alone for articles.
+  const resolved = await getDirectoryItemStudyText(user.id, itemId);
+  if (!resolved) return NextResponse.json({ error: "Item not found" }, { status: 404 });
 
-  const query = `${item.title}\n\n${item.content?.slice(0, 1500) ?? ""}`.trim();
+  const snippet = resolved.text.slice(0, 1500);
+  const query = `${resolved.title}\n\n${snippet}`.trim();
 
   try {
     const candidates = (await retrieveFromDirectory(user.id, query, 8))
@@ -51,7 +49,7 @@ export async function POST(req: Request) {
     if (candidates.length === 0) return NextResponse.json({ items: [] });
 
     const classified = await classifyConnections(
-      { title: item.title, snippet: item.content?.slice(0, 1500) ?? "" },
+      { title: resolved.title, snippet },
       candidates.map((c) => ({ title: c.title, snippet: c.snippet })),
     );
 
