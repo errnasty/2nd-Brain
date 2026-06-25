@@ -74,6 +74,9 @@ export async function generateFlashcardsAction(itemId: string) {
   await db.insert(directoryFlashcards).values(
     cards.map((c) => ({ userId: user.id, itemId, question: c.question, answer: c.answer })),
   );
+  // /review is a redirect into the Study hub — revalidate the real page so the
+  // Review deck + Overview card counts pick up the new cards.
+  revalidatePath("/study");
   revalidatePath("/review");
   return { ok: true as const, count: cards.length };
 }
@@ -108,5 +111,8 @@ export async function gradeCardAction(input: { id: string; quality: number }) {
       updatedAt: new Date(),
     })
     .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)));
+  // A grade reschedules the card (changes "Due now" + "Reviewed this week" on the
+  // Overview). Without this the dashboard stats stayed frozen at page-load values.
+  revalidatePath("/study");
   return { ok: true as const };
 }

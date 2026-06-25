@@ -128,6 +128,10 @@ export async function toggleTaskAction(input: { id: string; done: boolean }) {
       .where(and(eq(directoryTasks.id, parsed.data.id), eq(directoryTasks.userId, user.id)));
   }
 
+  // Tasks now live in the Study hub (/study?tab=tasks); /tasks is only a
+  // redirect, so revalidating it alone left the real page stale. Revalidate
+  // /study so a fresh navigation shows the toggled state + updated Overview.
+  revalidatePath("/study");
   revalidatePath("/tasks");
   revalidatePath("/directory");
   return { ok: true as const };

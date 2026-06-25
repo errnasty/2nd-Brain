@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { BarChart3, Brain, CalendarDays, CheckSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatsOverview } from "./stats-overview";
@@ -42,6 +43,8 @@ export function StudyShell({
   dueCount: number;
   calendar: CalendarEntry[];
 }) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
   const [tab, setTab] = useState<StudyTab>(defaultTab);
 
   // Keep the active tab in sync when navigation changes ?tab= (e.g. clicking a
@@ -56,6 +59,12 @@ export function StudyShell({
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
     window.history.replaceState(null, "", url.toString());
+    // Stats are computed server-side at page load; switching tabs is pure client
+    // state, so the Overview would show numbers frozen from when the page first
+    // loaded — stale after a review/task session. Pull fresh data when entering
+    // it. (Next 14.1+ keeps the router in sync with replaceState above, so this
+    // refetches /study?tab=overview and re-renders the stats.)
+    if (next === "overview") startTransition(() => router.refresh());
   }
 
   return (

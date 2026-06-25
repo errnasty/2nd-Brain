@@ -71,6 +71,16 @@ export function FeedsNav({
   const params = useSearchParams();
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  // Dedicated transition for feed/folder/view navigation. Using a transition for
+  // the router.push keeps the CURRENT article list on screen (instead of flashing
+  // the loading.tsx skeleton) while the next page streams in — the switch feels
+  // instant. `navPending` + `optimistic` drive an immediate selection highlight.
+  const [navPending, startNav] = useTransition();
+  const [optimistic, setOptimistic] = useState<{
+    feed: string | null;
+    folder: string | null;
+    view: string;
+  } | null>(null);
   // Dedicated flag so the Sync-all spinner doesn't spin on unrelated transitions
   // (create folder, move feed, …) that also flip the shared `pending`.
   const [syncing, setSyncing] = useState(false);
@@ -100,20 +110,42 @@ export function FeedsNav({
     setCollapsed((m) => ({ ...m, [id]: !m[id] }));
   }
 
-  const activeFeed = params.get("feed");
-  const activeFolder = params.get("folder");
-  const view = params.get("view") ?? "unread";
+  // While a navigation is in flight, reflect the clicked target immediately so
+  // the highlight doesn't lag behind the (slower) server round-trip.
+  const activeFeed = optimistic ? optimistic.feed : params.get("feed");
+  const activeFolder = optimistic ? optimistic.folder : params.get("folder");
+  const view = optimistic ? optimistic.view : params.get("view") ?? "unread";
   const totalUnread = Object.values(unread.perFeed).reduce((a, b) => a + b, 0);
   const uncategorizedFeeds = feeds.filter((f) => !f.folderId);
 
-  function setQuery(next: Record<string, string | null>) {
+  // Once the navigation settles, drop the optimistic override so the highlight
+  // tracks the real URL again.
+  useEffect(() => {
+    if (!navPending) setOptimistic(null);
+  }, [navPending]);
+
+  function hrefFor(next: Record<string, string | null>): string {
     const sp = new URLSearchParams(params.toString());
     for (const [k, v] of Object.entries(next)) {
       if (v === null) sp.delete(k);
       else sp.set(k, v);
     }
     sp.delete("article");
-    router.push(`/feeds?${sp.toString()}`);
+    return `/feeds?${sp.toString()}`;
+  }
+
+  function setQuery(next: Record<string, string | null>) {
+    setOptimistic({
+      feed: "feed" in next ? next.feed : params.get("feed"),
+      folder: "folder" in next ? next.folder : params.get("folder"),
+      view: next.view ?? params.get("view") ?? "unread",
+    });
+    startNav(() => router.push(hrefFor(next)));
+  }
+
+  // Warm the target route on hover so the click resolves from cache.
+  function prefetchQuery(next: Record<string, string | null>) {
+    router.prefetch(hrefFor(next));
   }
 
   function onDropToFolder(folderId: string | null) {
@@ -239,6 +271,7 @@ export function FeedsNav({
             count={totalUnread}
             active={!activeFeed && !activeFolder && view === "unread"}
             onClick={() => setQuery({ feed: null, folder: null, view: "unread" })}
+            onHover={() => prefetchQuery({ feed: null, folder: null, view: "unread" })}
           />
           <NavRow
             label="Starred"
@@ -246,6 +279,7 @@ export function FeedsNav({
             count={0}
             active={view === "starred"}
             onClick={() => setQuery({ feed: null, folder: null, view: "starred" })}
+            onHover={() => prefetchQuery({ feed: null, folder: null, view: "starred" })}
           />
 
           {/* Folders section header */}
@@ -302,6 +336,8 @@ export function FeedsNav({
               onDrop={(e) => { e.preventDefault(); onDropToFolder(folder.id); }}
               onSelectFolder={() => setQuery({ feed: null, folder: folder.id, view: "unread" })}
               onSelectFeed={(feedId) => setQuery({ feed: feedId, folder: null, view: "unread" })}
+              onPrefetchFolder={() => prefetchQuery({ feed: null, folder: folder.id, view: "unread" })}
+              onPrefetchFeed={(feedId) => prefetchQuery({ feed: feedId, folder: null, view: "unread" })}
               onFeedDragStart={(feedId) => setDraggingFeed(feedId)}
               onFeedDragEnd={() => { setDraggingFeed(null); setDropTarget(null); }}
             />
@@ -352,6 +388,7 @@ export function FeedsNav({
                 onDragStart={() => setDraggingFeed(feed.id)}
                 onDragEnd={() => { setDraggingFeed(null); setDropTarget(null); }}
                 onClick={() => setQuery({ feed: feed.id, folder: null, view: "unread" })}
+                onHover={() => prefetchQuery({ feed: feed.id, folder: null, view: "unread" })}
                 folders={folders}
               />
             ))}
@@ -388,6 +425,8 @@ function FolderSection({
   onDrop,
   onSelectFolder,
   onSelectFeed,
+  onPrefetchFolder,
+  onPrefetchFeed,
   onFeedDragStart,
   onFeedDragEnd,
 }: {
@@ -406,6 +445,8 @@ function FolderSection({
   onDrop: (e: React.DragEvent) => void;
   onSelectFolder: () => void;
   onSelectFeed: (feedId: string) => void;
+  onPrefetchFolder: () => void;
+  onPrefetchFeed: (feedId: string) => void;
   onFeedDragStart: (feedId: string) => void;
   onFeedDragEnd: () => void;
 }) {
@@ -458,6 +499,7 @@ function FolderSection({
             </button>
             <button
               onClick={onSelectFolder}
+              onMouseEnter={onPrefetchFolder}
               className="flex flex-1 items-center gap-2 px-1 py-1.5 text-left"
             >
               <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -546,6 +588,7 @@ function FolderSection({
               onDragStart={() => onFeedDragStart(feed.id)}
               onDragEnd={onFeedDragEnd}
               onClick={() => onSelectFeed(feed.id)}
+              onHover={() => onPrefetchFeed(feed.id)}
               folders={allFolders}
             />
           ))}
@@ -565,6 +608,7 @@ function FeedRow({
   onDragStart,
   onDragEnd,
   onClick,
+  onHover,
   folders,
 }: {
   feed: Feed;
@@ -574,6 +618,7 @@ function FeedRow({
   onDragStart: () => void;
   onDragEnd: () => void;
   onClick: () => void;
+  onHover?: () => void;
   folders: Folder[];
 }) {
   const [pending, startTransition] = useTransition();
@@ -627,6 +672,7 @@ function FeedRow({
             onDragStart();
           }}
           onDragEnd={onDragEnd}
+          onMouseEnter={onHover}
           className={cn(
             "group flex items-center gap-2 rounded-md pr-1 transition-colors",
             active ? "bg-accent" : "hover:bg-accent/60",
@@ -787,16 +833,19 @@ function NavRow({
   count,
   active,
   onClick,
+  onHover,
 }: {
   label: string;
   icon: React.ReactNode;
   count: number;
   active: boolean;
   onClick: () => void;
+  onHover?: () => void;
 }) {
   return (
     <button
       onClick={onClick}
+      onMouseEnter={onHover}
       className={cn(
         "group flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
         active
