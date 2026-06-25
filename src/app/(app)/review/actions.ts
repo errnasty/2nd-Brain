@@ -18,8 +18,21 @@ export type DueCard = {
   itemTitle: string | null;
 };
 
-/** Cards due now (oldest first), capped for a single session. */
-export async function fetchDueCards(userId: string, limit = 50): Promise<DueCard[]> {
+/** Optional scope so the user can "study this folder" / "study this note"
+ *  instead of the whole library — review where the knowledge lives. */
+export type StudyScope = { folderId?: string | null; itemId?: string | null };
+
+/** Cards due now (oldest first), capped for a single session. Optionally scoped
+ *  to one folder (cards whose source item is in it) or one item. */
+export async function fetchDueCards(
+  userId: string,
+  limit = 50,
+  scope?: StudyScope,
+): Promise<DueCard[]> {
+  const conds = [eq(directoryFlashcards.userId, userId), lte(directoryFlashcards.dueDate, new Date())];
+  if (scope?.itemId) conds.push(eq(directoryFlashcards.itemId, scope.itemId));
+  if (scope?.folderId) conds.push(eq(directoryItems.folderId, scope.folderId));
+
   return db
     .select({
       id: directoryFlashcards.id,
@@ -30,22 +43,32 @@ export async function fetchDueCards(userId: string, limit = 50): Promise<DueCard
     })
     .from(directoryFlashcards)
     .leftJoin(directoryItems, eq(directoryItems.id, directoryFlashcards.itemId))
-    .where(
-      and(eq(directoryFlashcards.userId, userId), lte(directoryFlashcards.dueDate, new Date())),
-    )
+    .where(and(...conds))
     .orderBy(asc(directoryFlashcards.dueDate))
     .limit(limit);
 }
 
-/** Total + due counts for the dashboard header. */
-export async function fetchCardStats(userId: string): Promise<{ total: number; due: number }> {
-  const [row] = await db
+/** Total + due counts for the dashboard header. Same optional scope as above. */
+export async function fetchCardStats(
+  userId: string,
+  scope?: StudyScope,
+): Promise<{ total: number; due: number }> {
+  const conds = [eq(directoryFlashcards.userId, userId)];
+  if (scope?.itemId) conds.push(eq(directoryFlashcards.itemId, scope.itemId));
+  if (scope?.folderId) conds.push(eq(directoryItems.folderId, scope.folderId));
+  const scoped = !!(scope?.itemId || scope?.folderId);
+
+  const base = db
     .select({
       total: sql<number>`count(*)::int`,
       due: sql<number>`count(*) filter (where ${directoryFlashcards.dueDate} <= now())::int`,
     })
-    .from(directoryFlashcards)
-    .where(eq(directoryFlashcards.userId, userId));
+    .from(directoryFlashcards);
+  // Only join when scoping by folder (folder lives on the item, not the card).
+  const q = scoped
+    ? base.leftJoin(directoryItems, eq(directoryItems.id, directoryFlashcards.itemId))
+    : base;
+  const [row] = await q.where(and(...conds));
   return { total: row?.total ?? 0, due: row?.due ?? 0 };
 }
 

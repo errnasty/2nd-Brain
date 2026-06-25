@@ -13,6 +13,7 @@ import {
   MessageCircle,
   MoreHorizontal,
   Network,
+  NotebookPen,
   Rss,
   Search,
   Settings,
@@ -85,6 +86,13 @@ export function MobileNav() {
         <span className="flex-1 truncate px-1 text-sm font-semibold tracking-tight">
           {titleFor(pathname)}
         </span>
+        <button
+          onClick={() => window.dispatchEvent(new CustomEvent("open-quick-capture"))}
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          aria-label="Quick capture a note"
+        >
+          <NotebookPen className="h-[18px] w-[18px]" />
+        </button>
         <button
           onClick={() => window.dispatchEvent(new CustomEvent("open-command-palette"))}
           className="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"

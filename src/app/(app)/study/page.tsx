@@ -1,12 +1,15 @@
+import { db } from "@/lib/db";
+import { and, eq } from "drizzle-orm";
+import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { fetchStudyStats, fetchCalendar, type StudyStats, type CalendarEntry } from "./actions";
 import { fetchTasks, type TaskRow } from "../tasks/actions";
-import { fetchDueCards, fetchCardStats, type DueCard } from "../review/actions";
+import { fetchDueCards, fetchCardStats, type DueCard, type StudyScope } from "../review/actions";
 import { StudyShell, type StudyTab } from "@/components/study/study-shell";
 
 export const dynamic = "force-dynamic";
 
-type Search = Promise<{ tab?: string }>;
+type Search = Promise<{ tab?: string; folder?: string; item?: string }>;
 
 const TABS = ["overview", "tasks", "review", "calendar"];
 
@@ -14,6 +17,27 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   const sp = await searchParams;
   const tab = (TABS.includes(sp.tab ?? "") ? sp.tab : "overview") as StudyTab;
   const { user } = await requireUser();
+
+  // Optional review scope: "study this folder/note". Review uses the scoped due
+  // set; the rest of the hub (stats/tasks/calendar) stays library-wide.
+  const scope: StudyScope = { folderId: sp.folder ?? null, itemId: sp.item ?? null };
+  const isScoped = !!(scope.folderId || scope.itemId);
+  let scopeLabel: string | null = null;
+  if (scope.folderId) {
+    const [f] = await db
+      .select({ name: directoryFolders.name })
+      .from(directoryFolders)
+      .where(and(eq(directoryFolders.id, scope.folderId), eq(directoryFolders.userId, user.id)))
+      .limit(1);
+    scopeLabel = f?.name ?? null;
+  } else if (scope.itemId) {
+    const [i] = await db
+      .select({ title: directoryItems.title })
+      .from(directoryItems)
+      .where(and(eq(directoryItems.id, scope.itemId), eq(directoryItems.userId, user.id)))
+      .limit(1);
+    scopeLabel = i?.title ?? null;
+  }
 
   const now = new Date();
   const from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
@@ -33,8 +57,8 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   const [statsR, tasksR, dueR, cardStatsR, calR] = await Promise.allSettled([
     fetchStudyStats(user.id),
     fetchTasks(user.id),
-    fetchDueCards(user.id),
-    fetchCardStats(user.id),
+    fetchDueCards(user.id, 50, isScoped ? scope : undefined),
+    fetchCardStats(user.id, isScoped ? scope : undefined),
     fetchCalendar(user.id, from.toISOString(), to.toISOString()),
   ]);
   if (statsR.status === "fulfilled") stats = statsR.value;
@@ -62,6 +86,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
       totalCards={totalCards}
       dueCount={dueCardsCount}
       calendar={calendar}
+      reviewScopeLabel={isScoped ? scopeLabel : null}
     />
   );
 }

@@ -23,6 +23,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       articleId: directoryItems.articleId,
       documentId: directoryItems.documentId,
       folderId: directoryItems.folderId,
+      metadata: directoryItems.metadata,
       createdAt: directoryItems.createdAt,
       updatedAt: directoryItems.updatedAt,
       docKind: documents.kind,
@@ -77,8 +78,15 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     getBacklinks(user.id, id),
   ]);
 
+  // Pinned "Essence" (distilled TL;DR + key points), if it exists in metadata.
+  const summary =
+    (row.metadata as { summary?: { tldr: string; keyPoints: string[]; at: string } } | null)
+      ?.summary ?? null;
+
+  const { metadata: _metadata, ...rest } = row;
   return NextResponse.json({
-    ...row,
+    ...rest,
+    summary,
     breadcrumb,
     tags: tagRows.map((t) => t.name),
     outgoingLinks,

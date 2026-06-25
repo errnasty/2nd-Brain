@@ -18,6 +18,7 @@ export const SHORTCUT_GROUPS: Group[] = [
     title: "Global",
     items: [
       { keys: ["⌘", "K"], label: "Open command palette / search" },
+      { keys: ["c"], label: "Quick capture a note" },
       { keys: ["?"], label: "Show this shortcuts reference" },
     ],
   },
@@ -79,6 +80,13 @@ export function GlobalShortcuts() {
       if (key === "?") {
         e.preventDefault();
         setOpen((v) => !v);
+        return;
+      }
+
+      // `c` — quick capture from anywhere (component listens for the event).
+      if (key === "c" && !pending) {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("open-quick-capture"));
         return;
       }
 

@@ -34,6 +34,7 @@ export function StudyShell({
   totalCards,
   dueCount,
   calendar,
+  reviewScopeLabel,
 }: {
   defaultTab: StudyTab;
   stats: StudyStats;
@@ -42,6 +43,7 @@ export function StudyShell({
   totalCards: number;
   dueCount: number;
   calendar: CalendarEntry[];
+  reviewScopeLabel?: string | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -90,7 +92,9 @@ export function StudyShell({
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "overview" && <StatsOverview stats={stats} />}
         {tab === "tasks" && <TasksView tasks={tasks} />}
-        {tab === "review" && <ReviewView cards={dueCards} total={totalCards} due={dueCount} />}
+        {tab === "review" && (
+          <ReviewView cards={dueCards} total={totalCards} due={dueCount} scopeLabel={reviewScopeLabel} />
+        )}
         {tab === "calendar" && <CalendarView initial={calendar} />}
       </div>
     </div>

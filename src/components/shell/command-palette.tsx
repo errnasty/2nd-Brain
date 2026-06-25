@@ -24,6 +24,18 @@ import { cn } from "@/lib/utils";
 import { globalSearchAction, type GlobalSearchHit } from "@/app/(app)/search-actions";
 
 type NavCommand = { label: string; href: string; icon: React.ReactNode; keywords?: string };
+type ActionCommand = { label: string; icon: React.ReactNode; keywords?: string; run: () => void };
+
+// Non-navigation commands (run an action instead of routing). Quick capture is
+// the first so a fresh ⌘K → Enter drops you straight into a new note.
+const ACTIONS: ActionCommand[] = [
+  {
+    label: "New note (quick capture)",
+    icon: <NotebookPen className="h-4 w-4" />,
+    keywords: "capture quick add note new jot",
+    run: () => window.dispatchEvent(new CustomEvent("open-quick-capture")),
+  },
+];
 
 const NAV: NavCommand[] = [
   { label: "Today's Brief", href: "/today", icon: <Sparkles className="h-4 w-4" />, keywords: "daily brief ai" },
@@ -110,6 +122,14 @@ export function CommandPalette() {
     return () => clearTimeout(handle);
   }, [query]);
 
+  const actionMatches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return ACTIONS;
+    return ACTIONS.filter(
+      (a) => a.label.toLowerCase().includes(q) || (a.keywords ?? "").includes(q),
+    );
+  }, [query]);
+
   const navMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return NAV;
@@ -118,13 +138,14 @@ export function CommandPalette() {
     );
   }, [query]);
 
-  // Flattened option list for keyboard nav: nav commands then search hits.
+  // Flattened option list for keyboard nav: actions, then nav commands, then hits.
   const options = useMemo(
     () => [
+      ...actionMatches.map((a) => ({ kind: "action" as const, node: a })),
       ...navMatches.map((n) => ({ kind: "nav" as const, href: n.href, node: n })),
       ...hits.map((h) => ({ kind: "hit" as const, href: h.href, node: h })),
     ],
-    [navMatches, hits],
+    [actionMatches, navMatches, hits],
   );
 
   useEffect(() => {
@@ -139,6 +160,18 @@ export function CommandPalette() {
     [router],
   );
 
+  const runOption = useCallback(
+    (opt: (typeof options)[number]) => {
+      if (opt.kind === "action") {
+        setOpen(false);
+        opt.node.run();
+      } else {
+        go(opt.href);
+      }
+    },
+    [go],
+  );
+
   function onKeyDown(e: React.KeyboardEvent) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -149,7 +182,7 @@ export function CommandPalette() {
     } else if (e.key === "Enter") {
       e.preventDefault();
       const sel = options[active];
-      if (sel) go(sel.href);
+      if (sel) runOption(sel);
     }
   }
 
@@ -185,24 +218,44 @@ export function CommandPalette() {
               </div>
             ) : (
               <>
-                {navMatches.length > 0 && (
-                  <Section label="Go to">
-                    {navMatches.map((n, i) => (
+                {actionMatches.length > 0 && (
+                  <Section label="Actions">
+                    {actionMatches.map((a, i) => (
                       <Row
-                        key={n.href}
-                        icon={n.icon}
-                        title={n.label}
+                        key={a.label}
+                        icon={a.icon}
+                        title={a.label}
                         activeRow={active === i}
                         onHover={() => setActive(i)}
-                        onClick={() => go(n.href)}
+                        onClick={() => {
+                          setOpen(false);
+                          a.run();
+                        }}
                       />
                     ))}
+                  </Section>
+                )}
+                {navMatches.length > 0 && (
+                  <Section label="Go to">
+                    {navMatches.map((n, i) => {
+                      const idx = actionMatches.length + i;
+                      return (
+                        <Row
+                          key={n.href}
+                          icon={n.icon}
+                          title={n.label}
+                          activeRow={active === idx}
+                          onHover={() => setActive(idx)}
+                          onClick={() => go(n.href)}
+                        />
+                      );
+                    })}
                   </Section>
                 )}
                 {hits.length > 0 && (
                   <Section label="Library">
                     {hits.map((h, i) => {
-                      const idx = navMatches.length + i;
+                      const idx = actionMatches.length + navMatches.length + i;
                       return (
                         <Row
                           key={h.kind + h.id}

@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ChevronLeft, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { Brain, ChevronLeft, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
@@ -320,6 +320,17 @@ export function DirectoryShell({
                 <LayoutGrid className="h-3.5 w-3.5" />
               </button>
             </div>
+            {activeFolder && activeFolder !== "unsorted" && (
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7"
+                onClick={() => router.push(`/study?tab=review&folder=${activeFolder}`)}
+                title="Study this folder (review its due flashcards)"
+              >
+                <Brain className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               size="icon"
               variant="ghost"

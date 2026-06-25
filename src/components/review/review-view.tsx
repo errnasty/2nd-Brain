@@ -13,11 +13,14 @@ export function ReviewView({
   cards,
   total,
   due,
+  scopeLabel,
 }: {
   cards: DueCard[];
   total: number;
   /** True number of cards due (the session only loads the first ~50). */
   due: number;
+  /** When set, this session is scoped to a folder/note ("study this folder"). */
+  scopeLabel?: string | null;
 }) {
   const router = useRouter();
   const [queue, setQueue] = useState<DueCard[]>(cards);
@@ -90,10 +93,15 @@ export function ReviewView({
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col">
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-          <Brain className="h-5 w-5" /> Review
-        </h1>
-        <div className="text-xs text-muted-foreground">{remainingDue} due</div>
+        <div className="min-w-0">
+          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
+            <Brain className="h-5 w-5" /> Review
+          </h1>
+          {scopeLabel && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">Studying: {scopeLabel}</p>
+          )}
+        </div>
+        <div className="shrink-0 text-xs text-muted-foreground">{remainingDue} due</div>
       </div>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-8">

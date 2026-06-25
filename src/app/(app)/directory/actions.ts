@@ -21,6 +21,8 @@ import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
 import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
+import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
+import { distill } from "@/lib/ai/distill";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
 import { bustMapCache } from "@/lib/map-cache";
 import { fetchDirectoryPage, type DirectoryPage, type DirItem } from "@/lib/directory/query";
@@ -518,6 +520,44 @@ export async function updateReadingStatusAction(input: {
     .where(and(eq(directoryItems.id, parsed.data.id), eq(directoryItems.userId, user.id)));
   revalidatePath("/directory");
   return { ok: true as const };
+}
+
+// ── Distill: pin an AI "essence" (TL;DR + key points) onto an item ──────
+// The CODE "Distill" step. Stored in directory_items.metadata.summary so it
+// never touches the user's original text and works for notes/articles/docs.
+
+export type ItemSummary = { tldr: string; keyPoints: string[]; at: string };
+
+export async function distillItemAction(
+  itemId: string,
+): Promise<{ ok: true; summary: ItemSummary } | { ok: false; error: string }> {
+  const { user } = await requireUser();
+
+  // Resolve the authoritative text by kind (note content / doc full_text /
+  // article body) — the shared resolver flashcards + study-plan already use.
+  const resolved = await getDirectoryItemStudyText(user.id, itemId);
+  if (!resolved) return { ok: false, error: "Item not found" };
+
+  const out = await distill(resolved.title, resolved.text);
+  if (!out) return { ok: false, error: "Couldn't distill (no text or AI unavailable)" };
+
+  const summary: ItemSummary = { tldr: out.tldr, keyPoints: out.keyPoints, at: new Date().toISOString() };
+
+  // Merge into existing metadata so we don't clobber originalName/mimeType etc.
+  const [row] = await db
+    .select({ metadata: directoryItems.metadata })
+    .from(directoryItems)
+    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)))
+    .limit(1);
+  const nextMeta = { ...(row?.metadata ?? {}), summary };
+
+  await db
+    .update(directoryItems)
+    .set({ metadata: nextMeta, updatedAt: new Date() })
+    .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)));
+
+  revalidatePath("/directory");
+  return { ok: true, summary };
 }
 
 // ── Save an article to the Directory ────────────────────────────────

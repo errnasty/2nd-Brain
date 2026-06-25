@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Brain, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, Library, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, Library, Lightbulb, Loader2, Pencil, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,7 +15,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   deleteDirectoryItemAction,
+  distillItemAction,
   updateNoteAction,
+  type ItemSummary,
 } from "@/app/(app)/directory/actions";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
 import { useConfirm } from "@/components/ui/app-dialogs";
@@ -40,6 +42,7 @@ type FullItem = {
   breadcrumb: { id: string; name: string }[];
   outgoingLinks?: ResolvedLink[];
   backlinks?: Backlink[];
+  summary?: ItemSummary | null;
 };
 
 type ArticleContent = { fullText: string | null; excerpt: string | null; url: string };
@@ -82,6 +85,8 @@ export function ItemViewer({
   const [articleData, setArticleData] = useState<ArticleContent | null>(null);
   const [queryOpen, setQueryOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [distilling, setDistilling] = useState(false);
+  const [essenceOpen, setEssenceOpen] = useState(true);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
   // Mirrors the live editable buffer so we can flush a pending edit immediately
   // when switching items / closing / unloading — refs survive the re-render that
@@ -229,6 +234,27 @@ export function ItemViewer({
     });
   }
 
+  function runDistill() {
+    if (!item || distilling) return;
+    setDistilling(true);
+    setEssenceOpen(true);
+    startTransition(async () => {
+      try {
+        const r = await distillItemAction(item.id);
+        if (r.ok) {
+          setFull((f) => (f && f.id === item.id ? { ...f, summary: r.summary } : f));
+          toast.success("Distilled the essence");
+        } else {
+          toast.error(r.error);
+        }
+      } catch (err) {
+        toast.error(`Distill failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      } finally {
+        setDistilling(false);
+      }
+    });
+  }
+
   if (!item) {
     return (
       <section className="hidden flex-1 items-center justify-center text-sm text-muted-foreground lg:flex">
@@ -346,6 +372,16 @@ export function ItemViewer({
         <Button
           size="icon"
           variant="ghost"
+          onClick={runDistill}
+          disabled={distilling}
+          title={full?.summary ? "Re-distill the essence" : "Distill the essence (TL;DR + key points)"}
+        >
+          {distilling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+        </Button>
+
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={() =>
             startTransition(async () => {
               const r = await generateFlashcardsAction(item.id);
@@ -356,6 +392,15 @@ export function ItemViewer({
           title="Make flashcards"
         >
           <Brain className="h-4 w-4" />
+        </Button>
+
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={() => router.push(`/study?tab=review&item=${item.id}`)}
+          title="Study this note (review its flashcards)"
+        >
+          <GraduationCap className="h-4 w-4" />
         </Button>
 
         <Button size="icon" variant="ghost" onClick={handleDelete} title="Delete">
@@ -397,6 +442,54 @@ export function ItemViewer({
                 ))
               )}
             </nav>
+          )}
+
+          {/* Essence — pinned distilled summary (Second Brain "Distill"). */}
+          {full?.summary && (
+            <div className="not-prose mb-5 rounded-lg border border-primary/30 bg-primary/[0.04] p-3">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setEssenceOpen((v) => !v)}
+                  className="flex flex-1 items-center gap-1.5 text-left text-xs font-semibold uppercase tracking-wider text-primary"
+                >
+                  <Lightbulb className="h-3.5 w-3.5" />
+                  Essence
+                  <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", !essenceOpen && "-rotate-90")} />
+                </button>
+                <button
+                  onClick={runDistill}
+                  disabled={distilling}
+                  title="Re-distill"
+                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  {distilling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+              {essenceOpen && (
+                <div className="mt-2 space-y-2">
+                  <p className="text-sm font-medium leading-snug">{full.summary.tldr}</p>
+                  {full.summary.keyPoints.length > 0 && (
+                    <ul className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-foreground/90">
+                      {full.summary.keyPoints.map((k, i) => (
+                        <li key={i}>{k}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <button
+                    onClick={() =>
+                      startTransition(async () => {
+                        const r = await generateFlashcardsAction(item.id);
+                        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
+                        else toast.error(r.error);
+                      })
+                    }
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  >
+                    <Brain className="h-3.5 w-3.5" /> Make flashcards
+                  </button>
+                </div>
+              )}
+            </div>
           )}
 
           {/* Title */}
