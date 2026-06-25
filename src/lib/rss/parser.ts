@@ -12,7 +12,15 @@ export type NormalizedFeed = {
   siteUrl?: string;
   iconUrl?: string;
   items: NormalizedItem[];
+  // HTTP cache validators from the response, for conditional GET next time.
+  etag?: string | null;
+  lastModified?: string | null;
 };
+
+/** Returned instead of a NormalizedFeed when the origin answers 304 Not Modified. */
+export type NotModified = { notModified: true };
+
+export type Conditional = { etag?: string | null; lastModified?: string | null };
 
 export type NormalizedItem = {
   guid: string;
@@ -50,28 +58,49 @@ const FETCH_TIMEOUT_MS = 6000;
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+type FetchResult =
+  | { notModified: true }
+  | { notModified: false; text: string; etag: string | null; lastModified: string | null };
+
 /**
  * Fetch the raw feed XML with a bounded timeout, browser UA, and a single
  * retry on bot-block (403) / rate-limit (429). We do NOT retry timeouts — the
  * origin is already slow and a second 6s wait would blow the run budget.
+ *
+ * Sends conditional headers (If-None-Match / If-Modified-Since) when prior
+ * validators are known, so an unchanged feed answers 304 with no body — we skip
+ * the download AND the parse entirely. Most feeds are unchanged between syncs,
+ * so this is the single biggest sync speedup.
  */
-async function fetchFeedText(url: string): Promise<string> {
+async function fetchFeedText(url: string, conditional?: Conditional): Promise<FetchResult> {
   let lastError = "";
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
+      const headers: Record<string, string> = {
+        "User-Agent": BROWSER_UA,
+        Accept:
+          "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+      };
+      if (conditional?.etag) headers["If-None-Match"] = conditional.etag;
+      if (conditional?.lastModified) headers["If-Modified-Since"] = conditional.lastModified;
+
       const res = await fetch(url, {
         redirect: "follow",
         signal: controller.signal,
-        headers: {
-          "User-Agent": BROWSER_UA,
-          Accept:
-            "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.7",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
+        headers,
       });
-      if (res.ok) return await res.text();
+      // 304: nothing changed since last sync — cheapest possible path.
+      if (res.status === 304) return { notModified: true };
+      if (res.ok)
+        return {
+          notModified: false,
+          text: await res.text(),
+          etag: res.headers.get("etag"),
+          lastModified: res.headers.get("last-modified"),
+        };
 
       lastError = `Status code ${res.status}`;
       // Retry once on transient blocks; a brief pause for 429 (rate limit).
@@ -120,8 +149,18 @@ function safeDate(s: string | undefined): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
-export async function fetchAndParseFeed(url: string): Promise<NormalizedFeed> {
-  const xml = await fetchFeedText(url);
+export async function fetchAndParseFeed(url: string): Promise<NormalizedFeed>;
+export async function fetchAndParseFeed(
+  url: string,
+  conditional: Conditional,
+): Promise<NormalizedFeed | NotModified>;
+export async function fetchAndParseFeed(
+  url: string,
+  conditional?: Conditional,
+): Promise<NormalizedFeed | NotModified> {
+  const fetched = await fetchFeedText(url, conditional);
+  if (fetched.notModified) return { notModified: true };
+  const xml = fetched.text;
   const feed = await parser.parseString(xml);
   const siteUrl = feed.link ?? undefined;
   const iconUrl = siteUrl
@@ -154,5 +193,7 @@ export async function fetchAndParseFeed(url: string): Promise<NormalizedFeed> {
     siteUrl,
     iconUrl,
     items,
+    etag: fetched.etag,
+    lastModified: fetched.lastModified,
   };
 }

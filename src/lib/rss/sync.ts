@@ -24,7 +24,20 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
   }
 
   try {
-    const parsed = await fetchAndParseFeed(feed.url);
+    const parsed = await fetchAndParseFeed(feed.url, {
+      etag: feed.etag,
+      lastModified: feed.lastModified,
+    });
+
+    // 304 Not Modified — origin says nothing changed. Skip parse + insert
+    // entirely; just stamp lastFetchedAt so staleness ordering moves on.
+    if ("notModified" in parsed) {
+      await db
+        .update(feeds)
+        .set({ lastFetchedAt: new Date(), lastError: null })
+        .where(eq(feeds.id, feedId));
+      return { feedId, inserted: 0, skipped: 0, errored: false };
+    }
 
     let inserted = 0;
     let skipped = 0;
@@ -68,6 +81,9 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
         siteUrl: feed.siteUrl ?? parsed.siteUrl ?? null,
         iconUrl: feed.iconUrl ?? parsed.iconUrl ?? null,
         description: feed.description ?? parsed.description ?? null,
+        // Persist the response validators for next sync's conditional GET.
+        etag: parsed.etag ?? null,
+        lastModified: parsed.lastModified ?? null,
       })
       .where(eq(feeds.id, feedId));
 
@@ -83,9 +99,10 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
 }
 
 // Max feeds processed concurrently. Feeds are network-bound (each is a remote
-// fetch+parse), so higher concurrency cuts wall-clock a lot; 12 stays well
-// within socket/memory limits while finishing far more feeds per invocation.
-const SYNC_BATCH = 12;
+// fetch+parse), so the worker mostly idles on I/O — higher concurrency cuts
+// wall-clock sharply. With conditional GET most feeds return a bodyless 304, so
+// each slot frees fast; 24 stays well within socket/memory limits.
+const SYNC_BATCH = 24;
 
 // Wall-clock budget per invocation. Netlify's sync function cap is 10s (it
 // IGNORES the route's maxDuration export — that's Vercel-only). We stop

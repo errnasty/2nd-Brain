@@ -97,6 +97,15 @@ begin
 end $$;
 `;
 
+// Feeds-tab perf indexes — mirrors cloud migration 0015. No CONCURRENTLY: PGlite
+// is single-connection and runs these inline. create-if-not-exists = idempotent.
+const PERF_INDEX_SQL = `
+create index if not exists articles_feed_status_pub_idx
+  on articles (feed_id, read_status, publish_date desc);
+create index if not exists articles_folder_status_pub_idx
+  on articles (folder_id, read_status, publish_date desc);
+`;
+
 /**
  * Create the schema in the embedded PGlite database on first desktop launch.
  * Idempotent: if the `profiles` table already exists we skip. Index/vector
@@ -143,6 +152,14 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(SYNC_SUPPORT_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] sync support failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: feeds-tab perf indexes (mirror cloud migration 0015). Idempotent
+  // create-if-not-exists so existing local DBs pick them up without a reinstall.
+  try {
+    await client.exec(PERF_INDEX_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] perf indexes failed:", err instanceof Error ? err.message : err);
   }
 
   bootstrapped = true;

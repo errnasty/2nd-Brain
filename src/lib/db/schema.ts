@@ -131,6 +131,19 @@ export const articles = pgTable(
   (t) => ({
     feedGuidUnique: uniqueIndex("articles_feed_guid_unique").on(t.feedId, t.guid),
     userReadStatusIdx: index("articles_user_status_idx").on(t.userId, t.readStatus, t.publishDate),
+    // Single-feed and single-folder views filter by feed/folder + read_status and
+    // sort by publish_date desc. Without these composites the (user,status,date)
+    // index above had to scan/refilter — slow to switch into a busy feed/folder.
+    feedStatusPubIdx: index("articles_feed_status_pub_idx").on(
+      t.feedId,
+      t.readStatus,
+      t.publishDate.desc(),
+    ),
+    folderStatusPubIdx: index("articles_folder_status_pub_idx").on(
+      t.folderId,
+      t.readStatus,
+      t.publishDate.desc(),
+    ),
     folderIdx: index("articles_folder_idx").on(t.folderId),
     publishIdx: index("articles_publish_idx").on(t.publishDate),
     readLaterIdx: index("articles_user_readlater_idx")
