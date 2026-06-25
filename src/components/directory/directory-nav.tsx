@@ -57,6 +57,10 @@ export function DirectoryNav({
   const params = useSearchParams();
   const promptText = usePromptText();
   const [pending, startTransition] = useTransition();
+  // Folder switching transition: keep the current item list on screen during the
+  // server round-trip (no skeleton flash) and reflect the click instantly.
+  const [navPending, startNav] = useTransition();
+  const [optimisticFolder, setOptimisticFolder] = useState<{ v: string | null } | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [folderToDelete, setFolderToDelete] = useState<DirectoryFolder | null>(null);
@@ -84,14 +88,28 @@ export function DirectoryNav({
     });
   }
 
-  const activeFolder = params.get("folder");
+  const activeFolder = optimisticFolder ? optimisticFolder.v : params.get("folder");
 
-  function setFolder(folderId: string | null) {
+  useEffect(() => {
+    if (!navPending) setOptimisticFolder(null);
+  }, [navPending]);
+
+  function folderHref(folderId: string | null): string {
     const sp = new URLSearchParams(params.toString());
     if (folderId) sp.set("folder", folderId);
     else sp.delete("folder");
     sp.delete("item");
-    router.push(`/directory?${sp.toString()}`);
+    return `/directory?${sp.toString()}`;
+  }
+
+  function setFolder(folderId: string | null) {
+    setOptimisticFolder({ v: folderId });
+    startNav(() => router.push(folderHref(folderId)));
+  }
+
+  // Warm the target folder route on hover so the click resolves from cache.
+  function prefetchFolder(folderId: string | null) {
+    router.prefetch(folderHref(folderId));
   }
 
   function commitCreateFolder() {
@@ -192,12 +210,14 @@ export function DirectoryNav({
             active={activeFolder === UNSORTED}
             count={unsortedCount}
             onClick={() => setFolder(UNSORTED)}
+            onHover={() => prefetchFolder(UNSORTED)}
           />
 
           <button
             // scope=all marks an explicit "show everything" so the mobile
             // drill-down switches from the folder list to the item list.
-            onClick={() => router.push("/directory?scope=all")}
+            onClick={() => { setOptimisticFolder({ v: null }); startNav(() => router.push("/directory?scope=all")); }}
+            onMouseEnter={() => router.prefetch("/directory?scope=all")}
             className={cn(
               "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
               !activeFolder
@@ -250,6 +270,7 @@ export function DirectoryNav({
               collapsed={collapsed}
               onToggleCollapsed={toggleCollapsed}
               onSelect={setFolder}
+              onPrefetch={prefetchFolder}
               onRequestDelete={(f) => setFolderToDelete(f)}
               onNewSubfolder={createSubfolder}
             />
@@ -306,6 +327,7 @@ function FolderTreeNode({
   collapsed,
   onToggleCollapsed,
   onSelect,
+  onPrefetch,
   onRequestDelete,
   onNewSubfolder,
 }: {
@@ -316,6 +338,7 @@ function FolderTreeNode({
   collapsed: Record<string, boolean>;
   onToggleCollapsed: (id: string) => void;
   onSelect: (id: string) => void;
+  onPrefetch: (id: string) => void;
   onRequestDelete: (f: DirectoryFolder) => void;
   onNewSubfolder: (parentId: string) => void;
 }) {
@@ -341,6 +364,7 @@ function FolderTreeNode({
             count={folderCounts[node.folder.id] ?? 0}
             active={activeFolder === node.folder.id}
             onSelect={() => onSelect(node.folder.id)}
+            onHover={() => onPrefetch(node.folder.id)}
             onRequestDelete={() => onRequestDelete(node.folder)}
             onNewSubfolder={() => onNewSubfolder(node.folder.id)}
           />
@@ -358,6 +382,7 @@ function FolderTreeNode({
               collapsed={collapsed}
               onToggleCollapsed={onToggleCollapsed}
               onSelect={onSelect}
+              onPrefetch={onPrefetch}
               onRequestDelete={onRequestDelete}
               onNewSubfolder={onNewSubfolder}
             />
@@ -374,16 +399,19 @@ function DroppableUnsorted({
   active,
   count,
   onClick,
+  onHover,
 }: {
   active: boolean;
   count: number;
   onClick: () => void;
+  onHover?: () => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: "folder:unsorted" });
   return (
     <button
       ref={setNodeRef}
       onClick={onClick}
+      onMouseEnter={onHover}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors",
         active
@@ -408,6 +436,7 @@ function FolderRow({
   count,
   active,
   onSelect,
+  onHover,
   onRequestDelete,
   onNewSubfolder,
 }: {
@@ -415,6 +444,7 @@ function FolderRow({
   count: number;
   active: boolean;
   onSelect: () => void;
+  onHover?: () => void;
   onRequestDelete: () => void;
   onNewSubfolder: () => void;
 }) {
@@ -468,7 +498,7 @@ function FolderRow({
             isDragging && "opacity-40",
           )}
         >
-          <button onClick={onSelect} className="flex flex-1 items-center gap-2 text-left min-w-0">
+          <button onClick={onSelect} onMouseEnter={onHover} className="flex flex-1 items-center gap-2 text-left min-w-0">
             {/* The folder icon is the drag handle — click anywhere else still opens the folder. */}
             <span
               {...dragAttrs}

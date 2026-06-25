@@ -222,6 +222,14 @@ export async function moveFeedToFolderAction(feedId: string, folderId: string | 
     .update(feeds)
     .set({ folderId })
     .where(and(eq(feeds.id, feedId), eq(feeds.userId, user.id)));
+  // Articles carry their own folderId (set to the feed's folder at sync time and
+  // used by the folder view's filter). Without re-stamping them here, moving a
+  // feed left all its existing articles under the OLD folder — the new folder
+  // showed nothing. Keep them in sync with the feed's new home.
+  await db
+    .update(articles)
+    .set({ folderId })
+    .where(and(eq(articles.feedId, feedId), eq(articles.userId, user.id)));
   revalidatePath("/feeds");
 }
 
