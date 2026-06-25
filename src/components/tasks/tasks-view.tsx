@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { localKey, utcKey } from "@/lib/study/calendar";
 import { toggleTaskAction, type TaskRow } from "@/app/(app)/tasks/actions";
+import { celebrate } from "@/lib/gamify/celebrate";
 
 type Filter = "today" | "open" | "done" | "all";
 
@@ -73,6 +74,7 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
         setOverrides((o) => ({ ...o, [t.id]: t.done }));
         toast.error(r.error);
       } else {
+        if (next) celebrate(r.xp);
         router.refresh();
       }
     });

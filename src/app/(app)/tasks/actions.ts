@@ -8,6 +8,7 @@ import { directoryItems, directoryTasks, documents } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { toggleTaskInContent } from "@/lib/tasks/parse";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
+import { awardXp, type AwardResult } from "@/lib/gamify/award";
 
 export type TaskRow = {
   id: string;
@@ -128,11 +129,23 @@ export async function toggleTaskAction(input: { id: string; done: boolean }) {
       .where(and(eq(directoryTasks.id, parsed.data.id), eq(directoryTasks.userId, user.id)));
   }
 
+  // Gamify: completing (not un-completing) a task earns XP for the related
+  // skill. Idempotent per task id so toggling off/on can't farm XP.
+  let xp: AwardResult | undefined;
+  if (parsed.data.done) {
+    xp = await awardXp(user.id, {
+      source: "task_done",
+      itemId: task.itemId,
+      refKind: "task",
+      refId: parsed.data.id,
+    });
+  }
+
   // Tasks now live in the Study hub (/study?tab=tasks); /tasks is only a
   // redirect, so revalidating it alone left the real page stale. Revalidate
   // /study so a fresh navigation shows the toggled state + updated Overview.
   revalidatePath("/study");
   revalidatePath("/tasks");
   revalidatePath("/directory");
-  return { ok: true as const };
+  return { ok: true as const, xp };
 }

@@ -11,6 +11,7 @@ import { bustUnreadCounts, syncFeed, syncUserFeeds } from "@/lib/rss/sync";
 import { parseOpml } from "@/lib/opml/import";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { routeToFolder } from "@/lib/ai/routing";
+import { awardXp } from "@/lib/gamify/award";
 
 const AddFeedSchema = z.object({
   url: z.string().url(),
@@ -166,6 +167,15 @@ export async function setReadStatusAction(input: { articleIds: string[]; status:
     .set({ readStatus: parsed.data.status })
     .where(and(eq(articles.userId, user.id), inArray(articles.id, parsed.data.articleIds)));
   bustUnreadCounts(user.id);
+
+  // Gamify: reading earns XP. Only the single-article path counts (opening /
+  // reading one), not bulk "mark read"/triage (length > 1). Idempotent per
+  // article, so re-opening a read article never double-grants.
+  if (parsed.data.status === "read" && parsed.data.articleIds.length === 1) {
+    const id = parsed.data.articleIds[0];
+    await awardXp(user.id, { source: "article_read", articleId: id, refKind: "article_read", refId: id });
+  }
+
   // NOTE: intentionally no revalidatePath here — the UI already updates
   // optimistically and the unread sidebar counts can lag until the next
   // genuine navigation. This makes opening articles instant.

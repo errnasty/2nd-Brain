@@ -11,6 +11,7 @@ import { ReviewView } from "@/components/review/review-view";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";
 import type { DueCard } from "@/app/(app)/review/actions";
+import type { GameState } from "@/lib/gamify/state";
 
 export type StudyTab = "overview" | "tasks" | "review" | "calendar";
 
@@ -34,6 +35,7 @@ export function StudyShell({
   totalCards,
   dueCount,
   calendar,
+  game,
   reviewScopeLabel,
 }: {
   defaultTab: StudyTab;
@@ -43,6 +45,7 @@ export function StudyShell({
   totalCards: number;
   dueCount: number;
   calendar: CalendarEntry[];
+  game: GameState | null;
   reviewScopeLabel?: string | null;
 }) {
   const router = useRouter();
@@ -90,7 +93,7 @@ export function StudyShell({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "overview" && <StatsOverview stats={stats} />}
+        {tab === "overview" && <StatsOverview stats={stats} game={game} />}
         {tab === "tasks" && <TasksView tasks={tasks} />}
         {tab === "review" && (
           <ReviewView cards={dueCards} total={totalCards} due={dueCount} scopeLabel={reviewScopeLabel} />

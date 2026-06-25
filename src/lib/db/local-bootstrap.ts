@@ -76,11 +76,13 @@ do $$
 declare
   touch_tables text[] := array[
     'profiles','folders','feeds','tags','articles','documents','document_chunks',
-    'directory_folders','directory_items','item_tags','directory_flashcards'
+    'directory_folders','directory_items','item_tags','directory_flashcards',
+    'skills','player_profile'
   ];
   tomb_tables text[] := array[
     'folders','feeds','tags','articles','documents','document_chunks',
-    'directory_folders','directory_items','directory_flashcards'
+    'directory_folders','directory_items','directory_flashcards',
+    'skills','player_profile'
   ];
   t text;
 begin
@@ -95,6 +97,55 @@ begin
       'create trigger sync_tomb after delete on %I for each row execute function sync_record_tombstone()', t);
   end loop;
 end $$;
+`;
+
+// Gamification tables — mirrors cloud migration 0016. Always-run + idempotent so
+// existing local DBs gain them without a reinstall. player_profile + skills are
+// synced (triggers installed by SYNC_SUPPORT_SQL via the table arrays above);
+// xp_events is a local-only append-only ledger.
+const GAMIFY_SQL = `
+create table if not exists player_profile (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  total_xp integer not null default 0,
+  level integer not null default 1,
+  streak_days integer not null default 0,
+  last_active_date_key text,
+  daily_xp integer not null default 0,
+  daily_date_key text,
+  counters jsonb not null default '{}'::jsonb,
+  unlocked jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists player_profile_user_unique on player_profile (user_id);
+create table if not exists skills (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  name text not null,
+  slug text not null,
+  domain text not null default 'knowledge',
+  emoji text,
+  color text,
+  xp integer not null default 0,
+  level integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists skills_user_domain_slug_unique on skills (user_id, domain, slug);
+create index if not exists skills_user_idx on skills (user_id);
+create table if not exists xp_events (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  skill_id uuid references skills(id) on delete set null,
+  source text not null,
+  amount integer not null,
+  ref_kind text,
+  ref_id text,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists xp_events_ref_unique on xp_events (user_id, source, ref_kind, ref_id) where ref_id is not null;
+create index if not exists xp_events_feed_idx on xp_events (user_id, created_at desc);
 `;
 
 // Feeds-tab perf indexes — mirrors cloud migration 0015. No CONCURRENTLY: PGlite
@@ -144,6 +195,15 @@ export async function ensureLocalSchema(): Promise<void> {
         throw err;
       }
     }
+  }
+
+  // Always run BEFORE sync support: the gamification tables must exist before
+  // SYNC_SUPPORT_SQL installs sync_touch/sync_tomb triggers on skills +
+  // player_profile. Idempotent create-if-not-exists.
+  try {
+    await client.exec(GAMIFY_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] gamify tables failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

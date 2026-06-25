@@ -23,6 +23,7 @@ import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { distill } from "@/lib/ai/distill";
+import { awardXp, type AwardResult } from "@/lib/gamify/award";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
 import { bustMapCache } from "@/lib/map-cache";
 import { fetchDirectoryPage, type DirectoryPage, type DirItem } from "@/lib/directory/query";
@@ -349,9 +350,17 @@ export async function createNoteAction(input: { title: string; content?: string;
   // note's checkbox tasks out of the Study tab / calendar.
   await syncDirectoryTasks(user.id, row.id, parsed.data.content ?? null);
 
+  // Gamify: capturing a note earns XP (once per note).
+  const xp = await awardXp(user.id, {
+    source: "note_created",
+    itemId: row.id,
+    refKind: "note_created",
+    refId: row.id,
+  });
+
   bustMapCache(user.id);
   revalidatePath("/directory");
-  return { ok: true as const, itemId: row.id };
+  return { ok: true as const, itemId: row.id, xp };
 }
 
 const UpdateNoteSchema = z.object({
@@ -530,7 +539,7 @@ export type ItemSummary = { tldr: string; keyPoints: string[]; at: string };
 
 export async function distillItemAction(
   itemId: string,
-): Promise<{ ok: true; summary: ItemSummary } | { ok: false; error: string }> {
+): Promise<{ ok: true; summary: ItemSummary; xp?: AwardResult } | { ok: false; error: string }> {
   const { user } = await requireUser();
 
   // Resolve the authoritative text by kind (note content / doc full_text /
@@ -556,8 +565,11 @@ export async function distillItemAction(
     .set({ metadata: nextMeta, updatedAt: new Date() })
     .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)));
 
+  // Gamify: distilling is deep work — XP once per item.
+  const xp = await awardXp(user.id, { source: "distilled", itemId, refKind: "distilled", refId: itemId });
+
   revalidatePath("/directory");
-  return { ok: true, summary };
+  return { ok: true, summary, xp };
 }
 
 // ── Save an article to the Directory ────────────────────────────────
@@ -606,6 +618,9 @@ export async function saveArticleToDirectoryAction(articleId: string, folderId?:
     } catch (err) {
       console.warn("autoTag after save failed:", err instanceof Error ? err.message : err);
     }
+
+    // Gamify: saving an article to the Directory earns XP (once per item).
+    await awardXp(user.id, { source: "article_saved", itemId: row.id, refKind: "article_saved", refId: row.id });
 
     bustMapCache(user.id);
   revalidatePath("/directory");
@@ -708,6 +723,9 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
     // Embed inline so the doc is answerable in Ask right away (no manual
     // Refresh Memory needed for typical-size uploads).
     void embedDocument(doc.id, user.id);
+
+    // Gamify: uploading a document earns XP (once per item).
+    await awardXp(user.id, { source: "doc_uploaded", itemId: item.id, refKind: "doc_uploaded", refId: item.id });
 
     bustMapCache(user.id);
   revalidatePath("/directory");

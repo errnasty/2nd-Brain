@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { webAnswerOnce, plainAnswerOnce } from "@/lib/ai/web-answer";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { createNoteAction } from "@/app/(app)/directory/actions";
+import { awardXp } from "@/lib/gamify/award";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -73,6 +74,8 @@ export async function POST(req: Request) {
 
     const r = await createNoteAction({ title: `Research: ${topic}`, content, folderId });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
+    // Gamify: deep research earns a bonus on top of the note_created XP.
+    await awardXp(user.id, { source: "research", itemId: r.itemId, refKind: "research", refId: r.itemId });
     return NextResponse.json({ ok: true, itemId: r.itemId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

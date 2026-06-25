@@ -9,6 +9,7 @@ import { requireUser } from "@/lib/auth";
 import { generateFlashcards } from "@/lib/ai/flashcards";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { scheduleSm2 } from "@/lib/srs/sm2";
+import { awardXp } from "@/lib/gamify/award";
 
 export type DueCard = {
   id: string;
@@ -97,11 +98,14 @@ export async function generateFlashcardsAction(itemId: string) {
   await db.insert(directoryFlashcards).values(
     cards.map((c) => ({ userId: user.id, itemId, question: c.question, answer: c.answer })),
   );
+  // Gamify: making a deck from an item is meaningful work — XP once per item.
+  const xp = await awardXp(user.id, { source: "cards_made", itemId, refKind: "item_cards", refId: itemId });
+
   // /review is a redirect into the Study hub — revalidate the real page so the
   // Review deck + Overview card counts pick up the new cards.
   revalidatePath("/study");
   revalidatePath("/review");
-  return { ok: true as const, count: cards.length };
+  return { ok: true as const, count: cards.length, xp };
 }
 
 const GradeSchema = z.object({ id: z.string().uuid(), quality: z.number().int().min(0).max(5) });
@@ -117,6 +121,7 @@ export async function gradeCardAction(input: { id: string; quality: number }) {
       ease: directoryFlashcards.ease,
       intervalDays: directoryFlashcards.intervalDays,
       repetitions: directoryFlashcards.repetitions,
+      itemId: directoryFlashcards.itemId,
     })
     .from(directoryFlashcards)
     .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)))
@@ -134,8 +139,16 @@ export async function gradeCardAction(input: { id: string; quality: number }) {
       updatedAt: new Date(),
     })
     .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)));
+  // Gamify: every review earns XP (scaled by recall quality) for the card's
+  // skill. Intentionally NOT idempotent — spaced reps each earn.
+  const xp = await awardXp(user.id, {
+    source: "card_graded",
+    quality: parsed.data.quality,
+    itemId: card.itemId,
+  });
+
   // A grade reschedules the card (changes "Due now" + "Reviewed this week" on the
   // Overview). Without this the dashboard stats stayed frozen at page-load values.
   revalidatePath("/study");
-  return { ok: true as const };
+  return { ok: true as const, xp };
 }

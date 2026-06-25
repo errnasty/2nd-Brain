@@ -444,6 +444,88 @@ export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
 export type DirectoryFlashcard = typeof directoryFlashcards.$inferSelect;
 
+// ── Gamification ────────────────────────────────────────────────────────
+// A generic XP/skill engine. Domain-agnostic ('knowledge' now; 'fitness' etc
+// later just use a different `domain`). player_profile + skills are SYNCED;
+// xp_events is an append-only local ledger (feed + idempotency), NOT synced —
+// like the derived tables the sync engine skips.
+
+export const playerProfile = pgTable(
+  "player_profile",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    totalXp: integer("total_xp").default(0).notNull(),
+    level: integer("level").default(1).notNull(),
+    streakDays: integer("streak_days").default(0).notNull(),
+    lastActiveDateKey: text("last_active_date_key"),
+    dailyXp: integer("daily_xp").default(0).notNull(),
+    dailyDateKey: text("daily_date_key"),
+    // Running tallies for achievement predicates (tasksDone, cardsGraded, …).
+    counters: jsonb("counters").$type<Record<string, number>>().default({}).notNull(),
+    // Unlocked achievement keys: [{ key, at }].
+    unlocked: jsonb("unlocked").$type<{ key: string; at: string }[]>().default([]).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userUnique: uniqueIndex("player_profile_user_unique").on(t.userId),
+  }),
+);
+
+export const skills = pgTable(
+  "skills",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    // Expandability seam: group + isolate domains (knowledge, fitness, …).
+    domain: text("domain").default("knowledge").notNull(),
+    emoji: text("emoji"),
+    color: text("color"),
+    xp: integer("xp").default(0).notNull(),
+    level: integer("level").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userDomainSlugUnique: uniqueIndex("skills_user_domain_slug_unique").on(t.userId, t.domain, t.slug),
+    userIdx: index("skills_user_idx").on(t.userId),
+  }),
+);
+
+export const xpEvents = pgTable(
+  "xp_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    skillId: uuid("skill_id").references(() => skills.id, { onDelete: "set null" }),
+    source: text("source").notNull(),
+    amount: integer("amount").notNull(),
+    refKind: text("ref_kind"),
+    refId: text("ref_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    // Idempotency: at most one grant per (user, source, ref).
+    refUnique: uniqueIndex("xp_events_ref_unique")
+      .on(t.userId, t.source, t.refKind, t.refId)
+      .where(sql`${t.refId} is not null`),
+    feedIdx: index("xp_events_feed_idx").on(t.userId, t.createdAt.desc()),
+  }),
+);
+
+export type PlayerProfile = typeof playerProfile.$inferSelect;
+export type Skill = typeof skills.$inferSelect;
+export type XpEvent = typeof xpEvents.$inferSelect;
+
 // ── Sync (desktop ⇄ cloud) ──────────────────────────────────────────────
 // Row deletions recorded by an AFTER DELETE trigger (see migration 0013 /
 // local bootstrap) so the desktop⇄cloud sync can propagate deletes. Exists on

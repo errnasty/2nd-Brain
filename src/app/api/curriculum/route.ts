@@ -4,6 +4,7 @@ import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { webAnswerOnce, plainAnswerOnce } from "@/lib/ai/web-answer";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { createNoteAction } from "@/app/(app)/directory/actions";
+import { awardXp } from "@/lib/gamify/award";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -90,6 +91,8 @@ export async function POST(req: Request) {
       folderId,
     });
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
+    // Gamify: building a curriculum earns a bonus on top of note_created XP.
+    await awardXp(user.id, { source: "curriculum", itemId: r.itemId, refKind: "curriculum", refId: r.itemId });
     return NextResponse.json({ ok: true, itemId: r.itemId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";

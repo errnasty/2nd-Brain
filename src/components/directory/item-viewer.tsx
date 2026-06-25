@@ -20,6 +20,7 @@ import {
   type ItemSummary,
 } from "@/app/(app)/directory/actions";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { celebrate } from "@/lib/gamify/celebrate";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
@@ -244,6 +245,7 @@ export function ItemViewer({
         if (r.ok) {
           setFull((f) => (f && f.id === item.id ? { ...f, summary: r.summary } : f));
           toast.success("Distilled the essence");
+          celebrate(r.xp);
         } else {
           toast.error(r.error);
         }
@@ -385,8 +387,10 @@ export function ItemViewer({
           onClick={() =>
             startTransition(async () => {
               const r = await generateFlashcardsAction(item.id);
-              if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
-              else toast.error(r.error);
+              if (r.ok) {
+                toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
+                celebrate(r.xp);
+              } else toast.error(r.error);
             })
           }
           title="Make flashcards"

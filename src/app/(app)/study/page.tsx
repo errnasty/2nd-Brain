@@ -5,6 +5,7 @@ import { requireUser } from "@/lib/auth";
 import { fetchStudyStats, fetchCalendar, type StudyStats, type CalendarEntry } from "./actions";
 import { fetchTasks, type TaskRow } from "../tasks/actions";
 import { fetchDueCards, fetchCardStats, type DueCard, type StudyScope } from "../review/actions";
+import { fetchGameState, type GameState } from "@/lib/gamify/state";
 import { StudyShell, type StudyTab } from "@/components/study/study-shell";
 
 export const dynamic = "force-dynamic";
@@ -51,15 +52,17 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   let totalCards = 0;
   let dueCardsCount = 0;
   let calendar: CalendarEntry[] = [];
+  let game: GameState | null = null;
 
   // allSettled (not Promise.all): one failing panel query must not blank the
   // whole Study hub. Each panel falls back to its own empty default.
-  const [statsR, tasksR, dueR, cardStatsR, calR] = await Promise.allSettled([
+  const [statsR, tasksR, dueR, cardStatsR, calR, gameR] = await Promise.allSettled([
     fetchStudyStats(user.id),
     fetchTasks(user.id),
     fetchDueCards(user.id, 50, isScoped ? scope : undefined),
     fetchCardStats(user.id, isScoped ? scope : undefined),
     fetchCalendar(user.id, from.toISOString(), to.toISOString()),
+    fetchGameState(user.id),
   ]);
   if (statsR.status === "fulfilled") stats = statsR.value;
   if (tasksR.status === "fulfilled") tasks = tasksR.value;
@@ -69,8 +72,9 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
     dueCardsCount = cardStatsR.value.due;
   }
   if (calR.status === "fulfilled") calendar = calR.value;
+  if (gameR.status === "fulfilled") game = gameR.value;
   for (const [name, r] of [
-    ["stats", statsR], ["tasks", tasksR], ["due", dueR], ["cardStats", cardStatsR], ["calendar", calR],
+    ["stats", statsR], ["tasks", tasksR], ["due", dueR], ["cardStats", cardStatsR], ["calendar", calR], ["game", gameR],
   ] as const) {
     if (r.status === "rejected") {
       console.error(`StudyPage ${name} fetch failed:`, r.reason instanceof Error ? r.reason.message : r.reason);
@@ -86,6 +90,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
       totalCards={totalCards}
       dueCount={dueCardsCount}
       calendar={calendar}
+      game={game}
       reviewScopeLabel={isScoped ? scopeLabel : null}
     />
   );

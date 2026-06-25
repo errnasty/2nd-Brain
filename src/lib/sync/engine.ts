@@ -53,6 +53,9 @@ const TABLES: TableCfg[] = [
   { name: "directory_items", pk: ["id"], userCol: "user_id", exclude: ["embedding"] },
   { name: "item_tags", pk: ["tag_id", "item_kind", "item_id"], userCol: "user_id", exclude: [] },
   { name: "directory_flashcards", pk: ["id"], userCol: "user_id", exclude: [] },
+  // Gamification aggregates. xp_events is the local-only ledger (not synced).
+  { name: "player_profile", pk: ["id"], userCol: "user_id", exclude: [] },
+  { name: "skills", pk: ["id"], userCol: "user_id", exclude: [] },
 ];
 const DELETABLE = new Set(TABLES.filter((t) => t.pk.length === 1 && t.pk[0] === "id").map((t) => t.name));
 const isIdPk = (t: TableCfg) => t.pk.length === 1 && t.pk[0] === "id";

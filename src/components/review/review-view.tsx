@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { GRADES } from "@/lib/srs/sm2";
 import { gradeCardAction, type DueCard } from "@/app/(app)/review/actions";
+import { celebrate } from "@/lib/gamify/celebrate";
 
 export function ReviewView({
   cards,
@@ -49,6 +50,7 @@ export function ReviewView({
     setReviewed((n) => n + 1);
     startTransition(async () => {
       const r = await gradeCardAction({ id: card.id, quality });
+      if (r.ok) celebrate(r.xp);
       if (!r.ok) {
         // Server rejected the grade — put the card back so it isn't silently
         // lost from the session, and undo the optimistic counters.

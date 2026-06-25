@@ -3,6 +3,7 @@ import { Sidebar } from "@/components/shell/sidebar";
 import { MobileNav } from "@/components/shell/mobile-nav";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { QuickCapture } from "@/components/shell/quick-capture";
+import { Confetti } from "@/components/shell/confetti";
 import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
 import { AppDialogProvider } from "@/components/ui/app-dialogs";
@@ -26,6 +27,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <MobileNav />
         <CommandPalette />
         <QuickCapture />
+        <Confetti />
         <GlobalShortcuts />
       </div>
     </AppDialogProvider>
