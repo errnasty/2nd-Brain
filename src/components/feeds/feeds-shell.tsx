@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ArticleList, type ArticleListItem } from "./article-list";
 import { ArticleReader } from "./article-reader";
 
@@ -30,16 +31,14 @@ export function FeedsShell({
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  // Hydrate selection from URL on mount + react to back/forward.
+  // Sync the open article from the URL's ?article= param. useSearchParams updates
+  // on mount, back/forward, AND same-route router.push/replace — so a "related"
+  // item (router.replace("/feeds?article=X")) or a Daily-Brief deep link opens
+  // the reader. The old popstate-only listener missed router.replace entirely.
+  const urlArticle = useSearchParams().get("article");
   useEffect(() => {
-    const fromUrl = () => {
-      const sp = new URLSearchParams(window.location.search);
-      setSelectedId(sp.get("article"));
-    };
-    fromUrl();
-    window.addEventListener("popstate", fromUrl);
-    return () => window.removeEventListener("popstate", fromUrl);
-  }, []);
+    setSelectedId(urlArticle);
+  }, [urlArticle]);
 
   // Clear the open article only when the user actually changes scope
   // (feed/folder/view) and it's no longer in the new list. We must NOT clear on

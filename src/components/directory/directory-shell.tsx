@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
 import { ChevronLeft, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
@@ -136,16 +136,15 @@ export function DirectoryShell({
 
   const clearSelection = useCallback(() => setCheckedIds(new Set()), []);
 
-  // Hydrate selection from URL
+  // Sync the open item from the URL's ?item= param. useSearchParams updates on
+  // first mount, back/forward, AND same-route navigations (router.push/replace),
+  // so cross-references that do router.push("/directory?item=X") — connections,
+  // backlinks, gaps/curriculum "open" — now actually open the item. The old
+  // popstate-only listener missed those because router.push doesn't emit it.
+  const urlItem = useSearchParams().get("item");
   useEffect(() => {
-    const fromUrl = () => {
-      const sp = new URLSearchParams(window.location.search);
-      setSelectedId(sp.get("item"));
-    };
-    fromUrl();
-    window.addEventListener("popstate", fromUrl);
-    return () => window.removeEventListener("popstate", fromUrl);
-  }, []);
+    setSelectedId(urlItem);
+  }, [urlItem]);
 
   // A selected item that isn't in the loaded list/filter (e.g. opened from a
   // Task's "open source", or an older item past the first page). Fetch it by id
