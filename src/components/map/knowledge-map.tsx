@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
@@ -10,20 +9,16 @@ import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), { ssr: false });
-
 type MapNode = {
   id: string;
   kind: "tag" | "item" | "folder";
   label: string;
   itemKind?: "saved_article" | "uploaded_document" | "user_note";
-  x?: number;
-  y?: number;
 };
 
 type MapLink = {
-  source: string | MapNode;
-  target: string | MapNode;
+  source: string;
+  target: string;
   kind?: "tag" | "folder" | "link";
 };
 
@@ -39,89 +34,117 @@ type Detail = {
   tags?: string[];
 };
 
-// Warm brass-and-parchment graph palette so the map sits in the same world as
-// the rest of the app instead of looking like a different product.
+type GraphData = { nodes: MapNode[]; links: MapLink[]; truncated?: boolean; total?: number; shown?: number };
+
+// ── Palette (theme-aware brass + ink) ───────────────────────────────────
 type Palette = {
   folder: string; tag: string; article: string; document: string; note: string;
   link: string; folderLink: string; tagLink: string; halo: string;
 };
-
 const COLORS: Palette = {
-  folder: "#A86223", // brass
-  tag: "#C57A35",    // lighter brass
-  article: "#4A4640", // ink
-  document: "#1B1714", // deep ink
-  note: "#807A71",     // slate-gray
-  link: "rgba(168,98,35,0.85)",
-  folderLink: "rgba(168,98,35,0.55)",
-  tagLink: "rgba(120,114,103,0.45)",
-  halo: "rgba(250,246,238,0.92)", // parchment halo behind labels (light mode)
+  folder: "#A86223", tag: "#C57A35", article: "#4A4640", document: "#1B1714", note: "#807A71",
+  link: "rgba(168,98,35,0.85)", folderLink: "rgba(168,98,35,0.5)", tagLink: "rgba(120,114,103,0.4)",
+  halo: "rgba(250,246,238,0.92)",
 };
-
-// Dark mode: lift node/label tones off the charcoal background, raise edge alpha.
 const COLORS_DARK: Palette = {
-  folder: "#D9923F",
-  tag: "#E0A45C",
-  article: "#CFC8BC",
-  document: "#FAF6EE",
-  note: "#9A938A",
-  link: "rgba(217,146,63,0.95)",
-  folderLink: "rgba(217,146,63,0.6)",
-  tagLink: "rgba(180,172,160,0.4)",
-  halo: "rgba(20,18,16,0.92)", // dark halo so light labels stay legible
+  folder: "#D9923F", tag: "#E0A45C", article: "#CFC8BC", document: "#FAF6EE", note: "#9A938A",
+  link: "rgba(217,146,63,0.9)", folderLink: "rgba(217,146,63,0.55)", tagLink: "rgba(180,172,160,0.4)",
+  halo: "rgba(20,18,16,0.92)",
 };
-
-function nodeColorFor(node: MapNode, c: Palette = COLORS): string {
-  if (node.kind === "folder") return c.folder;
-  if (node.kind === "tag") return c.tag;
-  switch (node.itemKind) {
-    case "saved_article":
-      return c.article;
-    case "uploaded_document":
-      return c.document;
-    default:
-      return c.note;
-  }
+function nodeColorFor(kind: MapNode["kind"], itemKind: MapNode["itemKind"], c: Palette): string {
+  if (kind === "folder") return c.folder;
+  if (kind === "tag") return c.tag;
+  if (itemKind === "saved_article") return c.article;
+  if (itemKind === "uploaded_document") return c.document;
+  return c.note;
 }
-function nodeRadiusFor(node: MapNode, degree = 0): number {
-  const base = node.kind === "folder" ? 9 : node.kind === "tag" ? 6 : 4;
+function radiusFor(kind: MapNode["kind"], degree: number): number {
+  const base = kind === "folder" ? 9 : kind === "tag" ? 6 : 4;
   return base + Math.sqrt(degree) * 1.4;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ForceGraphHandle = any;
+// ── Simulation node ─────────────────────────────────────────────────────
+type SimNode = MapNode & { x: number; y: number; vx: number; vy: number; r: number };
+type SimLink = { source: SimNode; target: SimNode; kind?: MapLink["kind"] };
+type Camera = { x: number; y: number; scale: number };
+
+// Force constants (standard force-directed layout).
+const REPULSION = 5000;
+const SPRING = 0.025;
+const LINK_DIST = 80;
+const GRAVITY = 0.03;
+const DAMPING = 0.85;
+const ALPHA_DECAY = 0.985;
+const MIN_ALPHA = 0.02;
 
 export function KnowledgeMap() {
   const router = useRouter();
   const { resolvedTheme } = useTheme();
   const palette = resolvedTheme === "dark" ? COLORS_DARK : COLORS;
-  const [query, setQuery] = useState("");
+
   const containerRef = useRef<HTMLDivElement>(null);
-  const fgRef = useRef<ForceGraphHandle>(null);
-  const [data, setData] = useState<{
-    nodes: MapNode[];
-    links: MapLink[];
-    truncated?: boolean;
-    total?: number;
-    shown?: number;
-  } | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  const [data, setData] = useState<GraphData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dims, setDims] = useState({ width: 0, height: 0 });
   const [selected, setSelected] = useState<MapNode | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [centerId, setCenterId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
+  // Mutable engine state (kept in refs so pan/zoom/sim never trigger React renders).
+  const nodesRef = useRef<SimNode[]>([]);
+  const linksRef = useRef<SimLink[]>([]);
+  const camRef = useRef<Camera>({ x: 0, y: 0, scale: 1 });
+  const alphaRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const fittedRef = useRef(false);
+  // Live values the render loop reads without restarting.
+  const paletteRef = useRef(palette);
+  const selectedIdRef = useRef<string | null>(null);
+  const visibleIdsRef = useRef<Set<string> | null>(null);
+  const draggingRef = useRef<SimNode | null>(null);
+
+  useEffect(() => { paletteRef.current = palette; }, [palette]);
+  useEffect(() => { selectedIdRef.current = selected?.id ?? null; }, [selected]);
+
+  // ── Search filter (matches + immediate neighbors) ───────────────────
+  const visibleIds = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !data) return null as Set<string> | null;
+    const matches = new Set(data.nodes.filter((n) => n.label.toLowerCase().includes(q)).map((n) => n.id));
+    const allow = new Set(matches);
+    for (const l of data.links) {
+      if (matches.has(l.source)) allow.add(l.target);
+      if (matches.has(l.target)) allow.add(l.source);
+    }
+    return allow;
+  }, [query, data]);
+  useEffect(() => { visibleIdsRef.current = visibleIds; }, [visibleIds]);
+
+  const summary = useMemo(() => {
+    if (!data) return null;
+    let folders = 0, tags = 0, items = 0;
+    for (const n of data.nodes) {
+      if (n.kind === "folder") folders++;
+      else if (n.kind === "tag") tags++;
+      else items++;
+    }
+    return { folders, tags, items, edges: data.links.length };
+  }, [data]);
+
+  // ── Load graph ──────────────────────────────────────────────────────
   const loadGraph = useCallback((center: string | null) => {
-    const CACHE_KEY = "knowledgeMap.cache.v1";
+    const CACHE_KEY = "knowledgeMap.cache.v2";
     const CACHE_TTL_MS = 60_000;
     setError(null);
     if (!center) {
       try {
         const raw = sessionStorage.getItem(CACHE_KEY);
         if (raw) {
-          const parsed = JSON.parse(raw) as { at: number; data: typeof data };
+          const parsed = JSON.parse(raw) as { at: number; data: GraphData };
           if (Date.now() - parsed.at < CACHE_TTL_MS && parsed.data) {
             setData(parsed.data);
             setLoading(false);
@@ -133,12 +156,10 @@ export function KnowledgeMap() {
     } else {
       setLoading(true);
     }
-
-    const url = center ? `/api/map?center=${center}` : "/api/map";
-    fetch(url, { cache: "no-store" })
+    fetch(center ? `/api/map?center=${center}` : "/api/map", { cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+        return res.json() as Promise<GraphData>;
       })
       .then((d) => {
         setData(d);
@@ -150,7 +171,7 @@ export function KnowledgeMap() {
           }
         }
       })
-      .catch((err) => setError(err.message ?? "Failed to load"))
+      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -158,105 +179,312 @@ export function KnowledgeMap() {
     loadGraph(centerId);
   }, [centerId, loadGraph]);
 
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const update = () => setDims({ width: el.clientWidth, height: el.clientHeight });
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+  // ── Open node details ───────────────────────────────────────────────
+  const selectNode = useCallback((node: MapNode) => {
+    setSelected(node);
+    if (node.kind !== "item") {
+      setDetail(null);
+      return;
+    }
+    const rawId = node.id.startsWith("i:") ? node.id.slice(2) : node.id;
+    setDetailLoading(true);
+    fetch(`/api/directory/${rawId}`, { cache: "no-store" })
+      .then(async (res) => (res.ok ? ((await res.json()) as Detail) : null))
+      .then((d) => setDetail(d))
+      .catch(() => setDetail(null))
+      .finally(() => setDetailLoading(false));
   }, []);
 
-  // Spread clusters apart so the graph reads as a clear map, not a hairball:
-  // stronger repulsion + longer link distance, applied once data is in.
-  // `fittedRef` makes us auto-frame the whole graph exactly once per load.
-  const fittedRef = useRef(false);
+  // ── Build the simulation + run the canvas render loop ───────────────
   useEffect(() => {
-    fittedRef.current = false;
-  }, [centerId, data]);
-  useEffect(() => {
-    const fg = fgRef.current;
-    if (!fg || !data || data.nodes.length === 0) return;
-    fg.d3Force("charge")?.strength(-200);
-    fg.d3Force("link")?.distance((l: MapLink) => ((l as MapLink).kind === "link" ? 80 : 120));
-    fg.d3ReheatSimulation?.();
-  }, [data]);
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container || !data || data.nodes.length === 0) return;
 
-  const onNodeClick = useCallback(
-    async (node: MapNode) => {
-      setSelected(node);
-      const n = node as MapNode & { x?: number; y?: number };
-      if (fgRef.current && typeof n.x === "number" && typeof n.y === "number") {
-        fgRef.current.centerAt(n.x, n.y, 600);
-        fgRef.current.zoom(2.4, 600);
-      }
-      if (node.kind !== "item") {
-        setDetail(null);
-        return;
-      }
-      const rawId = node.id.startsWith("i:") ? node.id.slice(2) : node.id;
-      setDetailLoading(true);
-      try {
-        const res = await fetch(`/api/directory/${rawId}`, { cache: "no-store" });
-        if (res.ok) setDetail(await res.json());
-        else setDetail(null);
-      } finally {
-        setDetailLoading(false);
-      }
-    },
-    [],
-  );
-
-  const degreeMap = useMemo(() => {
-    const map: Record<string, number> = {};
-    if (!data) return map;
-    for (const link of data.links) {
-      const src = typeof link.source === "string" ? link.source : (link.source as MapNode).id;
-      const tgt = typeof link.target === "string" ? link.target : (link.target as MapNode).id;
-      map[src] = (map[src] ?? 0) + 1;
-      map[tgt] = (map[tgt] ?? 0) + 1;
-    }
-    return map;
-  }, [data]);
-
-  // Search filter: when a query is set, show only matching nodes + their
-  // immediate neighbors. null = everything visible.
-  const visibleIds = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q || !data) return null as Set<string> | null;
-    const matches = new Set(
-      data.nodes.filter((n) => n.label.toLowerCase().includes(q)).map((n) => n.id),
-    );
-    const allow = new Set(matches);
+    // Degrees for sizing.
+    const degree: Record<string, number> = {};
     for (const l of data.links) {
-      const s = typeof l.source === "string" ? l.source : (l.source as MapNode).id;
-      const t = typeof l.target === "string" ? l.target : (l.target as MapNode).id;
-      if (matches.has(s)) allow.add(t);
-      if (matches.has(t)) allow.add(s);
+      degree[l.source] = (degree[l.source] ?? 0) + 1;
+      degree[l.target] = (degree[l.target] ?? 0) + 1;
     }
-    return allow;
-  }, [query, data]);
 
-  const itemNodeColor = useCallback((n: object) => nodeColorFor(n as MapNode, palette), [palette]);
-  const itemNodeSize = useCallback(
-    (n: object) => nodeRadiusFor(n as MapNode, degreeMap[(n as MapNode).id] ?? 0),
-    [degreeMap],
-  );
-  const nodeLabel = useCallback((n: object) => (n as MapNode).label, []);
-
-  const graphData = useMemo(() => data ?? { nodes: [], links: [] }, [data]);
-
-  // Summary counts for the editorial header
-  const summary = useMemo(() => {
-    if (!data) return null;
-    let folders = 0, tags = 0, items = 0;
-    for (const n of data.nodes) {
-      if (n.kind === "folder") folders++;
-      else if (n.kind === "tag") tags++;
-      else items++;
+    // Build sim nodes on a seeded spiral so layout is stable-ish per load.
+    const n = data.nodes.length;
+    const nodes: SimNode[] = data.nodes.map((nd, i) => {
+      const a = i * 2.399963; // golden angle
+      const rad = Math.sqrt(i + 1) * 26;
+      return {
+        ...nd,
+        x: Math.cos(a) * rad,
+        y: Math.sin(a) * rad,
+        vx: 0,
+        vy: 0,
+        r: radiusFor(nd.kind, degree[nd.id] ?? 0),
+      };
+    });
+    const byId = new Map(nodes.map((nd) => [nd.id, nd]));
+    const links: SimLink[] = [];
+    for (const l of data.links) {
+      const s = byId.get(l.source);
+      const t = byId.get(l.target);
+      if (s && t) links.push({ source: s, target: t, kind: l.kind });
     }
-    return { folders, tags, items, edges: data.links.length };
+    nodesRef.current = nodes;
+    linksRef.current = links;
+    alphaRef.current = 1;
+    fittedRef.current = false;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    let cssW = 0, cssH = 0, dpr = 1;
+    function resize() {
+      const rect = container!.getBoundingClientRect();
+      cssW = rect.width;
+      cssH = rect.height;
+      dpr = Math.min(2, window.devicePixelRatio || 1);
+      canvas!.width = Math.max(1, Math.round(cssW * dpr));
+      canvas!.height = Math.max(1, Math.round(cssH * dpr));
+      canvas!.style.width = `${cssW}px`;
+      canvas!.style.height = `${cssH}px`;
+    }
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(container);
+
+    function fitToView() {
+      if (nodes.length === 0 || cssW === 0) return;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const nd of nodes) {
+        minX = Math.min(minX, nd.x); maxX = Math.max(maxX, nd.x);
+        minY = Math.min(minY, nd.y); maxY = Math.max(maxY, nd.y);
+      }
+      const spanX = Math.max(1, maxX - minX);
+      const spanY = Math.max(1, maxY - minY);
+      const scale = Math.min(cssW / (spanX + 120), cssH / (spanY + 120), 2);
+      camRef.current.scale = Math.max(0.1, scale);
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      camRef.current.x = -cx * camRef.current.scale;
+      camRef.current.y = -cy * camRef.current.scale;
+    }
+
+    function step() {
+      const a = alphaRef.current;
+      // Repulsion (O(n^2); fine for the 300-node cap).
+      for (let i = 0; i < n; i++) {
+        const ni = nodes[i];
+        for (let j = i + 1; j < n; j++) {
+          const nj = nodes[j];
+          let dx = ni.x - nj.x;
+          let dy = ni.y - nj.y;
+          let d2 = dx * dx + dy * dy;
+          if (d2 < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 0.01; }
+          const dist = Math.sqrt(d2);
+          const f = (REPULSION / d2) * a;
+          const fx = (dx / dist) * f;
+          const fy = (dy / dist) * f;
+          ni.vx += fx; ni.vy += fy;
+          nj.vx -= fx; nj.vy -= fy;
+        }
+      }
+      // Springs along links.
+      for (const l of links) {
+        const dx = l.target.x - l.source.x;
+        const dy = l.target.y - l.source.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const f = (dist - LINK_DIST) * SPRING * a;
+        const fx = (dx / dist) * f;
+        const fy = (dy / dist) * f;
+        l.source.vx += fx; l.source.vy += fy;
+        l.target.vx -= fx; l.target.vy -= fy;
+      }
+      // Gravity to center + integrate.
+      for (const nd of nodes) {
+        nd.vx += -nd.x * GRAVITY * a;
+        nd.vy += -nd.y * GRAVITY * a;
+        nd.vx *= DAMPING;
+        nd.vy *= DAMPING;
+        if (draggingRef.current === nd) continue; // pinned while dragging
+        nd.x += nd.vx;
+        nd.y += nd.vy;
+      }
+      alphaRef.current = a * ALPHA_DECAY;
+    }
+
+    function render() {
+      const pal = paletteRef.current;
+      const cam = camRef.current;
+      const vis = visibleIdsRef.current;
+      const selId = selectedIdRef.current;
+      ctx!.setTransform(1, 0, 0, 1, 0, 0);
+      ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx!.translate(cssW / 2 + cam.x, cssH / 2 + cam.y);
+      ctx!.scale(cam.scale, cam.scale);
+
+      // Links.
+      ctx!.lineCap = "round";
+      for (const l of links) {
+        if (vis && !(vis.has(l.source.id) && vis.has(l.target.id))) continue;
+        ctx!.strokeStyle = l.kind === "link" ? pal.link : l.kind === "folder" ? pal.folderLink : pal.tagLink;
+        ctx!.lineWidth = (l.kind === "link" ? 2 : l.kind === "folder" ? 1.4 : 0.9) / cam.scale;
+        ctx!.beginPath();
+        ctx!.moveTo(l.source.x, l.source.y);
+        ctx!.lineTo(l.target.x, l.target.y);
+        ctx!.stroke();
+      }
+
+      // Nodes + labels.
+      const showLabels = cam.scale > 0.45;
+      for (const nd of nodes) {
+        if (vis && !vis.has(nd.id)) continue;
+        const color = nodeColorFor(nd.kind, nd.itemKind, pal);
+        ctx!.beginPath();
+        ctx!.arc(nd.x, nd.y, nd.r, 0, 2 * Math.PI);
+        ctx!.fillStyle = color;
+        ctx!.fill();
+        if (nd.id === selId) {
+          ctx!.lineWidth = 2 / cam.scale;
+          ctx!.strokeStyle = "hsl(var(--brand))";
+          ctx!.beginPath();
+          ctx!.arc(nd.x, nd.y, nd.r + 3 / cam.scale, 0, 2 * Math.PI);
+          ctx!.stroke();
+        }
+        if (showLabels || nd.kind !== "item") {
+          const label = nd.label.length > 28 ? nd.label.slice(0, 28) + "…" : nd.label;
+          const fs = (nd.kind === "folder" ? 13 : 11) / cam.scale;
+          ctx!.font = `${nd.kind === "folder" ? "600 " : "500 "}${fs}px Georgia, serif`;
+          ctx!.textAlign = "center";
+          ctx!.textBaseline = "top";
+          const ly = nd.y + nd.r + 3 / cam.scale;
+          ctx!.lineWidth = 3 / cam.scale;
+          ctx!.strokeStyle = pal.halo;
+          ctx!.lineJoin = "round";
+          ctx!.strokeText(label, nd.x, ly);
+          ctx!.fillStyle = color;
+          ctx!.fillText(label, nd.x, ly);
+        }
+      }
+    }
+
+    let settleTicks = 0;
+    function frame() {
+      if (alphaRef.current > MIN_ALPHA || draggingRef.current) {
+        step();
+        settleTicks = 0;
+      } else if (!fittedRef.current) {
+        // Settled — frame the whole graph once.
+        fitToView();
+        fittedRef.current = true;
+      } else {
+        settleTicks++;
+      }
+      render();
+      // Keep the loop alive for interaction; it's render-only once settled.
+      rafRef.current = requestAnimationFrame(frame);
+    }
+    rafRef.current = requestAnimationFrame(frame);
+
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      ro.disconnect();
+    };
+  }, [data]);
+
+  // ── Pointer interaction (pan / zoom / click) ────────────────────────
+  const screenToWorld = useCallback((sx: number, sy: number) => {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const cam = camRef.current;
+    const px = sx - rect.left;
+    const py = sy - rect.top;
+    return {
+      x: (px - (rect.width / 2 + cam.x)) / cam.scale,
+      y: (py - (rect.height / 2 + cam.y)) / cam.scale,
+    };
+  }, []);
+
+  const hitTest = useCallback((sx: number, sy: number): SimNode | null => {
+    const w = screenToWorld(sx, sy);
+    const vis = visibleIdsRef.current;
+    let best: SimNode | null = null;
+    let bestD = Infinity;
+    for (const nd of nodesRef.current) {
+      if (vis && !vis.has(nd.id)) continue;
+      const dx = nd.x - w.x;
+      const dy = nd.y - w.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      // Generous hit radius (node radius + pad in world units).
+      if (d <= nd.r + 6 && d < bestD) { best = nd; bestD = d; }
+    }
+    return best;
+  }, [screenToWorld]);
+
+  // Pan/drag bookkeeping.
+  const pointer = useRef<{ id: number; downX: number; downY: number; lastX: number; lastY: number; moved: boolean; node: SimNode | null } | null>(null);
+
+  const onPointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    const node = hitTest(e.clientX, e.clientY);
+    pointer.current = { id: e.pointerId, downX: e.clientX, downY: e.clientY, lastX: e.clientX, lastY: e.clientY, moved: false, node };
+    if (node) draggingRef.current = node;
+  }, [hitTest]);
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const p = pointer.current;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (!p) {
+      // Hover cursor feedback.
+      canvas.style.cursor = hitTest(e.clientX, e.clientY) ? "pointer" : "grab";
+      return;
+    }
+    const dx = e.clientX - p.lastX;
+    const dy = e.clientY - p.lastY;
+    if (Math.abs(e.clientX - p.downX) > 4 || Math.abs(e.clientY - p.downY) > 4) p.moved = true;
+    p.lastX = e.clientX;
+    p.lastY = e.clientY;
+    if (p.node) {
+      // Drag the node (reheat so neighbors react).
+      const w = screenToWorld(e.clientX, e.clientY);
+      p.node.x = w.x; p.node.y = w.y; p.node.vx = 0; p.node.vy = 0;
+      alphaRef.current = Math.max(alphaRef.current, 0.3);
+    } else {
+      // Pan the camera.
+      camRef.current.x += dx;
+      camRef.current.y += dy;
+    }
+  }, [hitTest, screenToWorld]);
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const p = pointer.current;
+    pointer.current = null;
+    draggingRef.current = null;
+    if (canvasRef.current) canvasRef.current.style.cursor = "grab";
+    if (!p) return;
+    // A tap that didn't move = a click → open the node it landed on.
+    if (!p.moved && p.node) selectNode(p.node);
+  }, [selectNode]);
+
+  // Wheel zoom (toward cursor). Native non-passive listener so we can preventDefault.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      const cam = camRef.current;
+      const rect = canvas!.getBoundingClientRect();
+      const px = e.clientX - rect.left - rect.width / 2;
+      const py = e.clientY - rect.top - rect.height / 2;
+      const factor = Math.exp(-e.deltaY * 0.0012);
+      const next = Math.min(4, Math.max(0.1, cam.scale * factor));
+      // Keep the point under the cursor fixed while zooming.
+      cam.x = px - ((px - cam.x) * next) / cam.scale;
+      cam.y = py - ((py - cam.y) * next) / cam.scale;
+      cam.scale = next;
+    }
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
   }, [data]);
 
   return (
@@ -274,10 +502,7 @@ export function KnowledgeMap() {
           )}
         </div>
         <div className="flex items-center justify-between gap-3">
-          <h1
-            className="editorial-display m-0"
-            style={{ fontSize: "clamp(1.5rem, 2.8vw, 1.875rem)" }}
-          >
+          <h1 className="editorial-display m-0" style={{ fontSize: "clamp(1.5rem, 2.8vw, 1.875rem)" }}>
             {centerId ? "Local graph" : "Knowledge map"}
           </h1>
           <div className="flex items-center gap-3">
@@ -299,21 +524,21 @@ export function KnowledgeMap() {
                 </button>
               )}
             </div>
-          {centerId && (
-            <button
-              onClick={() => setCenterId(null)}
-              className="font-mono text-xs uppercase tracking-[0.12em] hover:underline"
-              style={{ color: "hsl(var(--brand))" }}
-            >
-              ← Exit local graph
-            </button>
-          )}
+            {centerId && (
+              <button
+                onClick={() => setCenterId(null)}
+                className="font-mono text-xs uppercase tracking-[0.12em] hover:underline"
+                style={{ color: "hsl(var(--brand))" }}
+              >
+                ← Exit local graph
+              </button>
+            )}
           </div>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div ref={containerRef} className="relative flex-1 bg-background">
+        <div ref={containerRef} className="relative flex-1 overflow-hidden bg-background">
           {loading && (
             <div className="flex h-full items-center justify-center text-sm italic text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -321,9 +546,7 @@ export function KnowledgeMap() {
             </div>
           )}
           {error && (
-            <div className="flex h-full items-center justify-center text-sm text-destructive">
-              {error}
-            </div>
+            <div className="flex h-full items-center justify-center text-sm text-destructive">{error}</div>
           )}
           {!loading && !error && data && data.nodes.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
@@ -335,108 +558,34 @@ export function KnowledgeMap() {
               </p>
             </div>
           )}
-          {!loading && !error && data && data.nodes.length > 0 && dims.width > 0 && (
-            <ForceGraph2D
-              ref={fgRef}
-              graphData={graphData}
-              width={dims.width}
-              height={dims.height}
-              nodeColor={itemNodeColor}
-              nodeVal={itemNodeSize}
-              nodeLabel={nodeLabel}
-              nodeVisibility={(n: object) => !visibleIds || visibleIds.has((n as MapNode).id)}
-              linkVisibility={(l: object) => {
-                if (!visibleIds) return true;
-                const s = typeof (l as MapLink).source === "string" ? (l as MapLink).source : ((l as MapLink).source as MapNode).id;
-                const t = typeof (l as MapLink).target === "string" ? (l as MapLink).target : ((l as MapLink).target as MapNode).id;
-                return visibleIds.has(s as string) && visibleIds.has(t as string);
-              }}
-              linkColor={(l: object) => {
-                const k = (l as MapLink).kind;
-                if (k === "link") return palette.link;
-                if (k === "folder") return palette.folderLink;
-                return palette.tagLink;
-              }}
-              linkWidth={(l: object) => {
-                const k = (l as MapLink).kind;
-                return k === "link" ? 2.2 : k === "folder" ? 1.6 : 1;
-              }}
-              linkDirectionalParticles={(l: object) => ((l as MapLink).kind === "link" ? 3 : 0)}
-              linkDirectionalParticleWidth={2.4}
-              backgroundColor="transparent"
-              cooldownTime={1500}
-              cooldownTicks={200}
-              warmupTicks={60}
-              d3AlphaDecay={0.02}
-              d3VelocityDecay={0.25}
-              onEngineStop={() => {
-                // Frame the whole graph once it settles (once per load) so it's
-                // readable immediately instead of dumped off-center/zoomed-in.
-                if (!fittedRef.current) {
-                  fgRef.current?.zoomToFit(500, 70);
-                  fittedRef.current = true;
-                }
-              }}
-              onNodeClick={onNodeClick as (n: object) => void}
-              // Node drag could swallow a click as a 0px "drag"; we don't need it.
-              enableNodeDrag={false}
-              // Draw the node circle AND label ourselves (replace mode), and paint
-              // the IDENTICAL circle into the pointer buffer — so the visible node
-              // and the click hit-area are exactly the same. (Previously the custom
-              // label-only canvas made the hit-area follow the text → unclickable.)
-              nodeCanvasObject={(node, ctx, globalScale) => {
-                const n = node as MapNode;
-                const r = nodeRadiusFor(n, degreeMap[n.id] ?? 0);
-                const x = n.x ?? 0;
-                const y = n.y ?? 0;
-                // The node disc.
-                ctx.beginPath();
-                ctx.arc(x, y, r, 0, 2 * Math.PI, false);
-                ctx.fillStyle = nodeColorFor(n, palette);
-                ctx.fill();
-                // Label (skip item labels only when zoomed far out, to reduce clutter).
-                if (globalScale < 0.3 && n.kind === "item") return;
-                const label = n.label.length > 30 ? n.label.slice(0, 30) + "…" : n.label;
-                const fontSize = (n.kind === "folder" ? 13 : 11) / globalScale;
-                ctx.font = `${n.kind === "folder" ? "600 " : "500 "}${fontSize}px Georgia, serif`;
-                ctx.textAlign = "center";
-                ctx.textBaseline = "top";
-                const ly = y + r + 3 / globalScale;
-                ctx.lineWidth = 3.5 / globalScale;
-                ctx.strokeStyle = palette.halo;
-                ctx.lineJoin = "round";
-                ctx.strokeText(label, x, ly);
-                ctx.fillStyle = nodeColorFor(n, palette);
-                ctx.fillText(label, x, ly);
-              }}
-              nodePointerAreaPaint={(node: object, color: string, ctx: CanvasRenderingContext2D) => {
-                const n = node as MapNode;
-                const r = nodeRadiusFor(n, degreeMap[n.id] ?? 0);
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(n.x ?? 0, n.y ?? 0, r + 4, 0, 2 * Math.PI, false);
-                ctx.fill();
-              }}
+          {!loading && !error && data && data.nodes.length > 0 && (
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 touch-none"
+              style={{ cursor: "grab" }}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
             />
           )}
 
           {/* Editorial legend */}
-          <div className="absolute bottom-4 left-4 rounded-lg border border-border bg-card/95 px-3 py-2.5 backdrop-blur">
-            <div className="mb-1.5 editorial-eyebrow-brand">§ Legend</div>
-            <div className="space-y-0.5 text-[11px]">
-              <LegendDot color={palette.folder} label="Folder" />
-              <LegendDot color={palette.tag} label="Tag" />
-              <LegendDot color={palette.article} label="Saved article" />
-              <LegendDot color={palette.document} label="Uploaded document" />
-              <LegendDot color={palette.note} label="User note" />
-              <LegendDot color="hsl(var(--brand))" label="Wikilink (animated)" />
-            </div>
-            {data?.truncated && (
-              <div className="mt-2 border-t border-border pt-1.5 font-mono text-[10px] italic text-muted-foreground">
-                Showing top {data.shown} of {data.total} most-connected
+          {!loading && !error && data && data.nodes.length > 0 && (
+            <div className="pointer-events-none absolute bottom-4 left-4 rounded-lg border border-border bg-card/95 px-3 py-2.5 backdrop-blur">
+              <div className="mb-1.5 editorial-eyebrow-brand">§ Legend</div>
+              <div className="space-y-0.5 text-[11px]">
+                <LegendDot color={palette.folder} label="Folder" />
+                <LegendDot color={palette.tag} label="Tag" />
+                <LegendDot color={palette.article} label="Saved article" />
+                <LegendDot color={palette.document} label="Uploaded document" />
+                <LegendDot color={palette.note} label="User note" />
               </div>
-            )}
-          </div>
+              <div className="mt-2 border-t border-border pt-1.5 font-mono text-[10px] italic text-muted-foreground">
+                {data.truncated ? `Top ${data.shown} of ${data.total} · ` : ""}drag · scroll to zoom · click a node
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Detail panel */}
@@ -455,10 +604,7 @@ export function KnowledgeMap() {
             </div>
             <ScrollArea className="flex-1">
               <div className="p-4">
-                <h2
-                  className="editorial-display"
-                  style={{ fontSize: "1.25rem", letterSpacing: "-0.014em" }}
-                >
+                <h2 className="editorial-display" style={{ fontSize: "1.25rem", letterSpacing: "-0.014em" }}>
                   {selected.label}
                 </h2>
 
@@ -467,19 +613,16 @@ export function KnowledgeMap() {
                     Click an item connected to this tag to open it.
                   </p>
                 )}
-
                 {selected.kind === "folder" && (
                   <p className="mt-3 text-sm italic text-muted-foreground">
-                    Folder. Click a connected item to inspect its contents, or open it in the Directory.
+                    Folder. Click a connected item to inspect it, or open it in the Directory.
                   </p>
                 )}
-
                 {selected.kind === "item" && detailLoading && (
                   <div className="mt-4 flex items-center gap-2 text-sm italic text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…
                   </div>
                 )}
-
                 {selected.kind === "item" && detail && (
                   <>
                     <nav className="mt-2 flex flex-wrap items-center gap-1 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
@@ -493,49 +636,33 @@ export function KnowledgeMap() {
                         </span>
                       ))}
                     </nav>
-
                     <p className="mt-1 text-xs italic capitalize text-muted-foreground">
                       {detail.kind.replace("_", " ")}
                     </p>
-
                     {detail.tags && detail.tags.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
                         {detail.tags.map((t) => (
-                          <span
-                            key={t}
-                            className="rounded-full bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground"
-                          >
+                          <span key={t} className="rounded-full bg-muted px-2 py-0.5 font-mono text-[10px] text-muted-foreground">
                             #{t}
                           </span>
                         ))}
                       </div>
                     )}
-
                     <div className="prose-reader mt-4 max-w-none text-sm">
                       {detail.content ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {detail.content.slice(0, 4000)}
-                        </ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content.slice(0, 4000)}</ReactMarkdown>
                       ) : (
                         <p className="italic text-muted-foreground">(no preview available)</p>
                       )}
                     </div>
-
                     <div className="mt-4 flex flex-col gap-2">
                       {detail.sourceUrl && (
                         <Button asChild size="sm" variant="outline">
-                          <a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">
-                            Open original
-                          </a>
+                          <a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">Open original</a>
                         </Button>
                       )}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setCenterId(detail.id)}
-                      >
-                        <Network className="mr-1.5 h-3.5 w-3.5" />
-                        Focus local graph
+                      <Button size="sm" variant="outline" onClick={() => setCenterId(detail.id)}>
+                        <Network className="mr-1.5 h-3.5 w-3.5" /> Focus local graph
                       </Button>
                       <Button size="sm" variant="brand" onClick={() => router.push(`/directory?item=${detail.id}`)}>
                         Open in Directory
