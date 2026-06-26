@@ -378,41 +378,43 @@ export function KnowledgeMap() {
                 }
               }}
               onNodeClick={onNodeClick as (n: object) => void}
-              nodeCanvasObjectMode="after"
+              // Node drag could swallow a click as a 0px "drag"; we don't need it.
+              enableNodeDrag={false}
+              // Draw the node circle AND label ourselves (replace mode), and paint
+              // the IDENTICAL circle into the pointer buffer — so the visible node
+              // and the click hit-area are exactly the same. (Previously the custom
+              // label-only canvas made the hit-area follow the text → unclickable.)
               nodeCanvasObject={(node, ctx, globalScale) => {
                 const n = node as MapNode;
-                // Always label folders/tags (the map's skeleton); only drop item
-                // labels when zoomed far out to avoid clutter.
+                const r = nodeRadiusFor(n, degreeMap[n.id] ?? 0);
+                const x = n.x ?? 0;
+                const y = n.y ?? 0;
+                // The node disc.
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, 2 * Math.PI, false);
+                ctx.fillStyle = nodeColorFor(n, palette);
+                ctx.fill();
+                // Label (skip item labels only when zoomed far out, to reduce clutter).
                 if (globalScale < 0.3 && n.kind === "item") return;
-                const degree = degreeMap[n.id] ?? 0;
-                const radius = nodeRadiusFor(n, degree);
                 const label = n.label.length > 30 ? n.label.slice(0, 30) + "…" : n.label;
                 const fontSize = (n.kind === "folder" ? 13 : 11) / globalScale;
                 ctx.font = `${n.kind === "folder" ? "600 " : "500 "}${fontSize}px Georgia, serif`;
                 ctx.textAlign = "center";
                 ctx.textBaseline = "top";
-                const x = n.x ?? 0;
-                const y = (n.y ?? 0) + radius + 3 / globalScale;
-                // Parchment halo behind text for contrast.
+                const ly = y + r + 3 / globalScale;
                 ctx.lineWidth = 3.5 / globalScale;
                 ctx.strokeStyle = palette.halo;
                 ctx.lineJoin = "round";
-                ctx.strokeText(label, x, y);
+                ctx.strokeText(label, x, ly);
                 ctx.fillStyle = nodeColorFor(n, palette);
-                ctx.fillText(label, x, y);
+                ctx.fillText(label, x, ly);
               }}
-              // Without this, a custom nodeCanvasObject makes the click hit-area
-              // follow the LABEL text, not the node — so nodes weren't clickable.
-              // Paint an explicit circle so clicks land on the node itself.
               nodePointerAreaPaint={(node: object, color: string, ctx: CanvasRenderingContext2D) => {
                 const n = node as MapNode;
-                // Match react-force-graph's circle radius (sqrt(val) * nodeRelSize,
-                // default 4) so the whole visible node is clickable, + a little pad.
-                const val = nodeRadiusFor(n, degreeMap[n.id] ?? 0);
-                const radius = Math.sqrt(Math.max(0, val)) * 4 + 3;
+                const r = nodeRadiusFor(n, degreeMap[n.id] ?? 0);
                 ctx.fillStyle = color;
                 ctx.beginPath();
-                ctx.arc(n.x ?? 0, n.y ?? 0, radius, 0, 2 * Math.PI, false);
+                ctx.arc(n.x ?? 0, n.y ?? 0, r + 4, 0, 2 * Math.PI, false);
                 ctx.fill();
               }}
             />

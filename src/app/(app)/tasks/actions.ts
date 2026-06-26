@@ -63,6 +63,7 @@ export async function toggleTaskAction(input: { id: string; done: boolean }) {
   const [task] = await db
     .select({
       itemId: directoryTasks.itemId,
+      text: directoryTasks.text,
       lineIndex: directoryTasks.lineIndex,
       rawLine: directoryTasks.rawLine,
     })
@@ -130,14 +131,15 @@ export async function toggleTaskAction(input: { id: string; done: boolean }) {
   }
 
   // Gamify: completing (not un-completing) a task earns XP for the related
-  // skill. Idempotent per task id so toggling off/on can't farm XP.
+  // skill. Idempotency keyed by (item + task text), NOT the task id — ids
+  // regenerate on every re-sync, so an id key would let re-checking farm XP.
   let xp: AwardResult | undefined;
   if (parsed.data.done) {
     xp = await awardXp(user.id, {
       source: "task_done",
       itemId: task.itemId,
       refKind: "task",
-      refId: parsed.data.id,
+      refId: `${task.itemId}:${task.text}`,
     });
   }
 

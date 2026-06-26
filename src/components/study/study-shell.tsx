@@ -63,7 +63,11 @@ export function StudyShell({
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
     window.history.replaceState(null, "", url.toString());
-    if (next === "overview") startTransition(() => router.refresh());
+    // The hub is a client shell — tab data is fetched at page load and tabs
+    // don't refetch on switch. Pull fresh server data when entering a data tab
+    // so newly-added/-completed tasks and graded cards always show (the "tasks
+    // don't sync" symptom). Calendar fetches its own range on demand.
+    if (next !== "calendar") startTransition(() => router.refresh());
   }
 
   return (
