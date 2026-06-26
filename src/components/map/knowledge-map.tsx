@@ -4,8 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { ChevronRight, Loader2, Network, Search, X } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -27,6 +25,7 @@ type Detail = {
   title: string;
   kind: "saved_article" | "uploaded_document" | "user_note";
   content: string | null;
+  preview: string | null;
   sourceUrl: string | null;
   articleId: string | null;
   documentId: string | null;
@@ -59,8 +58,9 @@ function nodeColorFor(kind: MapNode["kind"], itemKind: MapNode["itemKind"], c: P
   return c.note;
 }
 function radiusFor(kind: MapNode["kind"], degree: number): number {
-  const base = kind === "folder" ? 9 : kind === "tag" ? 6 : 4;
-  return base + Math.sqrt(degree) * 1.4;
+  // Folders largest, items medium, tags deliberately small.
+  const base = kind === "folder" ? 10 : kind === "tag" ? 3.5 : 5;
+  return base + Math.sqrt(degree) * (kind === "tag" ? 0.7 : 1.4);
 }
 
 // ── Simulation node ─────────────────────────────────────────────────────
@@ -69,10 +69,10 @@ type SimLink = { source: SimNode; target: SimNode; kind?: MapLink["kind"] };
 type Camera = { x: number; y: number; scale: number };
 
 // Force constants (standard force-directed layout).
-const REPULSION = 5000;
+const REPULSION = 11000;
 const SPRING = 0.025;
-const LINK_DIST = 80;
-const GRAVITY = 0.03;
+const LINK_DIST = 120;
+const GRAVITY = 0.018;
 const DAMPING = 0.85;
 const ALPHA_DECAY = 0.985;
 const MIN_ALPHA = 0.02;
@@ -352,7 +352,7 @@ export function KnowledgeMap() {
         }
         if (showLabels || nd.kind !== "item") {
           const label = nd.label.length > 28 ? nd.label.slice(0, 28) + "…" : nd.label;
-          const fs = (nd.kind === "folder" ? 13 : 11) / cam.scale;
+          const fs = (nd.kind === "folder" ? 13 : nd.kind === "tag" ? 9 : 11) / cam.scale;
           ctx!.font = `${nd.kind === "folder" ? "600 " : "500 "}${fs}px Georgia, serif`;
           ctx!.textAlign = "center";
           ctx!.textBaseline = "top";
@@ -648,13 +648,13 @@ export function KnowledgeMap() {
                         ))}
                       </div>
                     )}
-                    <div className="prose-reader mt-4 max-w-none text-sm">
-                      {detail.content ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{detail.content.slice(0, 4000)}</ReactMarkdown>
-                      ) : (
-                        <p className="italic text-muted-foreground">(no preview available)</p>
-                      )}
-                    </div>
+                    {detail.preview ? (
+                      <p className="mt-4 text-[14px] leading-relaxed text-foreground/85">
+                        {detail.preview}
+                      </p>
+                    ) : (
+                      <p className="mt-4 text-sm italic text-muted-foreground">(no preview available)</p>
+                    )}
                     <div className="mt-4 flex flex-col gap-2">
                       {detail.sourceUrl && (
                         <Button asChild size="sm" variant="outline">

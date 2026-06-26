@@ -4,6 +4,7 @@ import { db } from "@/lib/db";
 import { directoryFolders, directoryItems, documents, itemTags, tags } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
 import { getOutgoingLinks, getBacklinks } from "@/lib/directory/wikilinks";
+import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,10 +84,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     (row.metadata as { summary?: { tldr: string; keyPoints: string[]; at: string } } | null)
       ?.summary ?? null;
 
+  // First lines of the real body, resolved by kind (note content / doc full_text /
+  // saved-article body) — so the map detail panel always shows a text preview,
+  // not just for notes (saved_article rows carry no directory_items.content).
+  const resolved = await getDirectoryItemStudyText(user.id, id);
+  const preview = (resolved?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 600) || null;
+
   const { metadata: _metadata, ...rest } = row;
   return NextResponse.json({
     ...rest,
     summary,
+    preview,
     breadcrumb,
     tags: tagRows.map((t) => t.name),
     outgoingLinks,
