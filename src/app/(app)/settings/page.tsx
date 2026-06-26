@@ -3,6 +3,7 @@ import { SettingsForm } from "@/components/settings/settings-form";
 import { DesktopSettings } from "@/components/settings/desktop-settings";
 import { OpenInDesktop } from "@/components/settings/open-in-desktop";
 import { SettingsShortcuts } from "@/components/shell/keyboard-shortcuts";
+import { ReplayTutorial } from "@/components/settings/replay-tutorial";
 
 export default async function SettingsPage() {
   const { user } = await requireUser();
@@ -25,8 +26,9 @@ export default async function SettingsPage() {
           <OpenInDesktop />
         )}
         <SettingsForm />
-        <div className="mt-8">
+        <div className="mt-8 space-y-3">
           <SettingsShortcuts />
+          <ReplayTutorial />
         </div>
       </div>
     </div>

@@ -35,6 +35,12 @@ const ACTIONS: ActionCommand[] = [
     keywords: "capture quick add note new jot",
     run: () => window.dispatchEvent(new CustomEvent("open-quick-capture")),
   },
+  {
+    label: "Show tutorial",
+    icon: <Sparkles className="h-4 w-4" />,
+    keywords: "tutorial onboarding tour help guide getting started",
+    run: () => window.dispatchEvent(new CustomEvent("open-onboarding")),
+  },
 ];
 
 const NAV: NavCommand[] = [
