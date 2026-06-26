@@ -7,18 +7,23 @@ import {
   DIRECTORY_PAGE_SIZE,
   fetchDirectoryPage,
   type DirectoryPage,
+  type DirectorySort,
 } from "@/lib/directory/query";
 
 type Search = Promise<{
   folder?: string;
   tags?: string;
   q?: string;
+  sort?: string;
 }>;
+
+const SORTS: DirectorySort[] = ["updated", "created", "title", "tags"];
 
 export default async function DirectoryPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
   const { user } = await requireUser();
   const tagIds = (sp.tags ?? "").split(",").filter(Boolean);
+  const sort = (SORTS.includes(sp.sort as DirectorySort) ? sp.sort : "updated") as DirectorySort;
 
   // Fail soft: a pending migration (e.g. 0009's reading_status) would otherwise
   // crash the whole route. Render an empty Directory instead of white-screening.
@@ -31,6 +36,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
         tagIds,
         offset: 0,
         limit: DIRECTORY_PAGE_SIZE,
+        sort,
       }),
       db
         .select()
@@ -50,6 +56,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
       folders={allFolders}
       activeFolder={sp.folder ?? null}
       activeTagIds={tagIds}
+      activeSort={sort}
     />
   );
 }

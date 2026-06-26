@@ -64,8 +64,8 @@ function nodeColorFor(node: MapNode): string {
   }
 }
 function nodeRadiusFor(node: MapNode, degree = 0): number {
-  const base = node.kind === "folder" ? 8 : node.kind === "tag" ? 5 : 3;
-  return base + Math.sqrt(degree) * 1.2;
+  const base = node.kind === "folder" ? 9 : node.kind === "tag" ? 6 : 4;
+  return base + Math.sqrt(degree) * 1.4;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -144,6 +144,21 @@ export function KnowledgeMap() {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Spread clusters apart so the graph reads as a clear map, not a hairball:
+  // stronger repulsion + longer link distance, applied once data is in.
+  // `fittedRef` makes us auto-frame the whole graph exactly once per load.
+  const fittedRef = useRef(false);
+  useEffect(() => {
+    fittedRef.current = false;
+  }, [centerId, data]);
+  useEffect(() => {
+    const fg = fgRef.current;
+    if (!fg || !data || data.nodes.length === 0) return;
+    fg.d3Force("charge")?.strength(-200);
+    fg.d3Force("link")?.distance((l: MapLink) => ((l as MapLink).kind === "link" ? 80 : 120));
+    fg.d3ReheatSimulation?.();
+  }, [data]);
 
   const onNodeClick = useCallback(
     async (node: MapNode) => {
@@ -286,11 +301,21 @@ export function KnowledgeMap() {
               warmupTicks={60}
               d3AlphaDecay={0.02}
               d3VelocityDecay={0.25}
+              onEngineStop={() => {
+                // Frame the whole graph once it settles (once per load) so it's
+                // readable immediately instead of dumped off-center/zoomed-in.
+                if (!fittedRef.current) {
+                  fgRef.current?.zoomToFit(500, 70);
+                  fittedRef.current = true;
+                }
+              }}
               onNodeClick={onNodeClick as (n: object) => void}
               nodeCanvasObjectMode="after"
               nodeCanvasObject={(node, ctx, globalScale) => {
                 const n = node as MapNode;
-                if (globalScale < 0.5) return;
+                // Always label folders/tags (the map's skeleton); only drop item
+                // labels when zoomed far out to avoid clutter.
+                if (globalScale < 0.3 && n.kind === "item") return;
                 const degree = degreeMap[n.id] ?? 0;
                 const radius = nodeRadiusFor(n, degree);
                 const label = n.label.length > 30 ? n.label.slice(0, 30) + "…" : n.label;

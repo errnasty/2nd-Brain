@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryItems, itemTags, tags } from "@/lib/db/schema";
 
@@ -35,11 +35,19 @@ export { DIRECTORY_PAGE_SIZE } from "./constants";
  * infinite-scroll load-more action so large libraries page instead of loading
  * everything at once. Uses limit+1 to know if more rows remain.
  */
+export type DirectorySort = "updated" | "created" | "title" | "tags";
+
 export async function fetchDirectoryPage(
   userId: string,
-  opts: { folder?: string | null; tagIds?: string[]; offset?: number; limit?: number },
+  opts: {
+    folder?: string | null;
+    tagIds?: string[];
+    offset?: number;
+    limit?: number;
+    sort?: DirectorySort;
+  },
 ): Promise<DirectoryPage> {
-  const { folder = null, tagIds = [], offset = 0, limit = 50 } = opts;
+  const { folder = null, tagIds = [], offset = 0, limit = 50, sort = "updated" } = opts;
 
   // Resolve the item ids matching ALL selected tags (AND semantics).
   let tagFilteredIds: string[] | null = null;
@@ -65,6 +73,23 @@ export async function fetchDirectoryPage(
   else if (folder) conds.push(eq(directoryItems.folderId, folder));
   if (tagFilteredIds) conds.push(inArray(directoryItems.id, tagFilteredIds));
 
+  // Sort, always with an id tiebreaker → a total order so offset paging
+  // (infinite scroll) can't skip/duplicate rows sharing a sort key.
+  const tagCountExpr = sql`(
+    select count(*) from item_tags it
+    where it.item_id = ${directoryItems.id}
+      and it.item_kind = 'directory_item'
+      and it.user_id = ${userId}
+  )`;
+  const orderBy =
+    sort === "created"
+      ? [desc(directoryItems.createdAt), desc(directoryItems.id)]
+      : sort === "title"
+        ? [asc(directoryItems.title), desc(directoryItems.id)]
+        : sort === "tags"
+          ? [desc(tagCountExpr), desc(directoryItems.updatedAt), desc(directoryItems.id)]
+          : [desc(directoryItems.updatedAt), desc(directoryItems.id)];
+
   const rows = await db
     .select({
       id: directoryItems.id,
@@ -81,9 +106,7 @@ export async function fetchDirectoryPage(
     })
     .from(directoryItems)
     .where(and(...conds))
-    // id tiebreaker → total order so offset paging (infinite scroll) can't skip
-    // or duplicate items that share an updated_at (e.g. bulk-imported rows).
-    .orderBy(desc(directoryItems.updatedAt), desc(directoryItems.id))
+    .orderBy(...orderBy)
     .limit(limit + 1) // +1 sentinel to detect more
     .offset(offset);
 

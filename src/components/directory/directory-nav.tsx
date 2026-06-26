@@ -44,14 +44,18 @@ import { ExportDialog } from "./export-dialog";
 const UNSORTED = "unsorted";
 const DIR_COLLAPSE_KEY = "directory.collapsed.v1";
 
+export type DirectoryTag = { id: string; name: string; count: number };
+
 export function DirectoryNav({
   folders,
   folderCounts,
   unsortedCount,
+  tags = [],
 }: {
   folders: DirectoryFolder[];
   folderCounts: Record<string, number>;
   unsortedCount: number;
+  tags?: DirectoryTag[];
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -110,6 +114,27 @@ export function DirectoryNav({
   // Warm the target folder route on hover so the click resolves from cache.
   function prefetchFolder(folderId: string | null) {
     router.prefetch(folderHref(folderId));
+  }
+
+  // ── Tag filtering (multi-select intersection via ?tags=a,b) ──
+  const activeTagIds = (params.get("tags") ?? "").split(",").filter(Boolean);
+  function applyTags(ids: string[]) {
+    const sp = new URLSearchParams(params.toString());
+    if (ids.length) sp.set("tags", ids.join(","));
+    else sp.delete("tags");
+    // A tag filter spans folders, so drop the folder + open-item scope.
+    sp.delete("folder");
+    sp.delete("item");
+    startNav(() => router.push(`/directory?${sp.toString()}`));
+  }
+  function toggleTag(id: string) {
+    const set = new Set(activeTagIds);
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    applyTags([...set]);
+  }
+  function clearTags() {
+    applyTags([]);
   }
 
   function commitCreateFolder() {
@@ -275,6 +300,45 @@ export function DirectoryNav({
               onNewSubfolder={createSubfolder}
             />
           ))}
+
+          {/* Tags — click to filter the Directory by tag (toggle multi-select). */}
+          {tags.length > 0 && (
+            <div className="pt-4">
+              <div className="editorial-section-row px-3 pb-1">
+                <span className="editorial-eyebrow-brand">§ Tags</span>
+                <span className="editorial-section-rule" />
+                {activeTagIds.length > 0 && (
+                  <button
+                    onClick={() => clearTags()}
+                    className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1 px-3 pt-1">
+                {tags.map((t) => {
+                  const active = activeTagIds.includes(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => toggleTag(t.id)}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[11px] transition-colors",
+                        active
+                          ? "border-transparent text-brand"
+                          : "border-border text-muted-foreground hover:text-foreground",
+                      )}
+                      style={active ? { background: "hsl(var(--brand) / 0.1)" } : undefined}
+                    >
+                      #{t.name}
+                      <span className="tabular-nums opacity-60">{t.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </nav>
       </ScrollArea>
 

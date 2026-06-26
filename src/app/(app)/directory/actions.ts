@@ -26,7 +26,7 @@ import { distill } from "@/lib/ai/distill";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
 import { bustMapCache } from "@/lib/map-cache";
-import { fetchDirectoryPage, type DirectoryPage, type DirItem } from "@/lib/directory/query";
+import { fetchDirectoryPage, type DirectoryPage, type DirItem, type DirectorySort } from "@/lib/directory/query";
 
 /** Infinite-scroll: fetch the next page of directory items for the shell. */
 export async function loadMoreDirectoryItemsAction(input: {
@@ -34,6 +34,7 @@ export async function loadMoreDirectoryItemsAction(input: {
   tagIds: string[];
   offset: number;
   limit: number;
+  sort?: DirectorySort;
 }): Promise<DirectoryPage> {
   const { user } = await requireUser();
   return fetchDirectoryPage(user.id, {
@@ -41,6 +42,7 @@ export async function loadMoreDirectoryItemsAction(input: {
     tagIds: input.tagIds,
     offset: input.offset,
     limit: input.limit,
+    sort: input.sort,
   });
 }
 

@@ -4,9 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { Brain, ChevronLeft, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   createNoteAction,
@@ -24,7 +30,7 @@ import { GapsDialog } from "./gaps-dialog";
 import { CurriculumDialog } from "./curriculum-dialog";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import type { DirectoryFolder } from "@/lib/db/schema";
-import type { ReadingStatus } from "@/lib/directory/query";
+import type { ReadingStatus, DirectorySort } from "@/lib/directory/query";
 
 export type DirectoryListItem = {
   id: string;
@@ -53,6 +59,7 @@ export function DirectoryShell({
   folders,
   activeFolder,
   activeTagIds,
+  activeSort = "updated",
 }: {
   items: DirectoryListItem[];
   itemTagsById: Record<string, string[]>;
@@ -60,6 +67,7 @@ export function DirectoryShell({
   folders: DirectoryFolder[];
   activeFolder: string | null;
   activeTagIds: string[];
+  activeSort?: DirectorySort;
 }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -75,7 +83,7 @@ export function DirectoryShell({
   const [offset, setOffset] = useState(items.length);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const seedSig = `${activeFolder ?? ""}|${activeTagIds.join(",")}|${items.length}|${items[0]?.id ?? ""}|${items[0]?.updatedAt ?? ""}`;
+  const seedSig = `${activeFolder ?? ""}|${activeTagIds.join(",")}|${activeSort}|${items.length}|${items[0]?.id ?? ""}|${items[0]?.updatedAt ?? ""}`;
   useEffect(() => {
     setExtraItems([]);
     setExtraTags({});
@@ -97,6 +105,7 @@ export function DirectoryShell({
           tagIds: activeTagIds,
           offset,
           limit: DIRECTORY_PAGE_SIZE,
+          sort: activeSort,
         });
         setExtraItems((prev) => [...prev, ...(r.items as DirectoryListItem[])]);
         setExtraTags((prev) => ({ ...prev, ...r.itemTagsById }));
@@ -106,7 +115,7 @@ export function DirectoryShell({
         setLoadingMore(false);
       }
     });
-  }, [loadingMore, pageHasMore, activeFolder, activeTagIds, offset]);
+  }, [loadingMore, pageHasMore, activeFolder, activeTagIds, activeSort, offset]);
 
   useEffect(() => {
     if (view === "board" && pageHasMore && !loadingMore) loadMore();
@@ -314,6 +323,7 @@ export function DirectoryShell({
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
           </div>
+          <SortControls active={activeSort} />
           <div className="flex items-center gap-0.5">
             {activeFolder && activeFolder !== "unsorted" && (
               <Button
@@ -602,5 +612,45 @@ function UploadButton({ onPick }: { onPick: (files: FileList) => void }) {
         <Upload className="h-3.5 w-3.5" />
       </Button>
     </>
+  );
+}
+
+const SORT_LABELS: Record<DirectorySort, string> = {
+  updated: "Updated",
+  created: "Created",
+  title: "Title (A–Z)",
+  tags: "Most tagged",
+};
+
+/** Sort the Directory list. Persists via ?sort= so it survives reload + paging. */
+function SortControls({ active }: { active: DirectorySort }) {
+  const router = useRouter();
+  const params = useSearchParams();
+
+  function setSort(next: DirectorySort) {
+    const sp = new URLSearchParams(params.toString());
+    if (next === "updated") sp.delete("sort");
+    else sp.set("sort", next);
+    sp.delete("item");
+    router.push(`/directory?${sp.toString()}`, { scroll: false });
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 font-mono text-[11px] uppercase tracking-wide" title="Sort">
+          <ArrowDownUp className="h-3.5 w-3.5" />
+          {SORT_LABELS[active]}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-44">
+        {(Object.keys(SORT_LABELS) as DirectorySort[]).map((s) => (
+          <DropdownMenuItem key={s} onClick={() => setSort(s)} className="flex items-center justify-between">
+            {SORT_LABELS[s]}
+            {active === s && <Check className="h-3.5 w-3.5" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
