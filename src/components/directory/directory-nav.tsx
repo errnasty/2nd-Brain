@@ -103,6 +103,9 @@ export function DirectoryNav({
     if (folderId) sp.set("folder", folderId);
     else sp.delete("folder");
     sp.delete("item");
+    // Browsing a folder clears any active tag filter (symmetric with toggleTag,
+    // which clears the folder) — otherwise you'd get a confusing folder∩tags view.
+    sp.delete("tags");
     return `/directory?${sp.toString()}`;
   }
 
