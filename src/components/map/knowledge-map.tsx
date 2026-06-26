@@ -401,6 +401,17 @@ export function KnowledgeMap() {
                 ctx.fillStyle = nodeColorFor(n, palette);
                 ctx.fillText(label, x, y);
               }}
+              // Without this, a custom nodeCanvasObject makes the click hit-area
+              // follow the LABEL text, not the node — so nodes weren't clickable.
+              // Paint an explicit circle so clicks land on the node itself.
+              nodePointerAreaPaint={(node: object, color: string, ctx: CanvasRenderingContext2D) => {
+                const n = node as MapNode;
+                const radius = nodeRadiusFor(n, degreeMap[n.id] ?? 0) + 3;
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(n.x ?? 0, n.y ?? 0, radius, 0, 2 * Math.PI, false);
+                ctx.fill();
+              }}
             />
           )}
 
