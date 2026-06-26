@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -66,6 +66,15 @@ function isSameDay(a: Date, b: Date): boolean {
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate()
   );
+}
+
+/** Time-of-day greeting. */
+function greetingFor(d: Date): string {
+  const h = d.getHours();
+  if (h < 5) return "Still up";
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
 }
 
 const DEFAULT_PROMPT_PLACEHOLDER = `You are my personal Second Brain curator. I already receive a highly detailed daily news summary via email, so your goal here is NOT to summarize everything. Your goal is rapid triage and discovery.
@@ -438,34 +447,67 @@ export function DailyBrief() {
   const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
   const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
 
+  // Editorial masthead — derived from "now" (stable across re-renders within a
+  // tick). Volume number is brief count + 1, giving an "issue No." feel without
+  // a backend. Generated text lives in the meta strip above the title.
+  const now = useMemo(() => new Date(), []);
+  const volumeNo = history.length + 1;
+  const weekday = now.toLocaleDateString([], { weekday: "long" });
+  const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
+  const greeting = greetingFor(now);
+
   return (
-    <article className="prose-reader max-w-none">
-      <div className="not-prose mb-6 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-xs uppercase tracking-wider text-muted-foreground">
-          <Sparkles className="h-3.5 w-3.5" />
+    <article className="mx-auto max-w-[1080px] px-1">
+      {/* ── Masthead ──────────────────────────────────────────────── */}
+      <header className="editorial-rule mb-7 pb-4">
+        <div className="mb-3 flex items-baseline justify-between gap-4 editorial-eyebrow">
+          <span>Vol. III · {weekday} Edition · No. {volumeNo}</span>
+          <span style={{ color: "hsl(var(--brand))" }}>{dateLine}</span>
+        </div>
+        <h1
+          className="editorial-display m-0"
+          style={{ fontSize: "clamp(2.25rem, 4.6vw, 3.5rem)" }}
+        >
+          {greeting}.
+        </h1>
+        <div className="not-prose mt-3.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <Sparkles className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />
           {loading ? (
-            <span>Generating…</span>
+            <span>Generating today's brief…</span>
           ) : generatedAt ? (
-            <span className="flex items-center gap-2">
+            <>
               <span>
                 Generated{" "}
                 {isStale
                   ? generatedAt.toLocaleDateString([], { month: "short", day: "numeric" })
                   : generatedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
+              {usage && usage.totalTokens > 0 && (
+                <>
+                  <span className="opacity-40">·</span>
+                  <span className="tabular-nums">
+                    {usage.totalTokens.toLocaleString()} tokens
+                  </span>
+                </>
+              )}
               {(isStale || newArticles) && (
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] normal-case tracking-normal text-amber-600 dark:text-amber-400">
+                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400">
                   {newArticles ? "new articles — regenerate" : "stale — regenerate"}
                 </span>
               )}
               {savedPrompt && (
-                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] normal-case tracking-normal">
+                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
                   custom prompt
                 </span>
               )}
-            </span>
+            </>
           ) : null}
         </div>
+      </header>
+
+      {/* ── Action bar ───────────────────────────────────────────── */}
+      <div className="not-prose mb-7 flex items-center justify-between gap-3">
+        <div />
         <div className="flex items-center gap-1">
           {history.length > 0 && (
             <DropdownMenu>
@@ -519,28 +561,36 @@ export function DailyBrief() {
         </div>
       </div>
 
+      {/* ── Study tasks (today) ──────────────────────────────────── */}
       {studyTasks.length > 0 && (
-        <div className="not-prose mb-6 rounded-lg border border-border bg-card p-4">
-          <div className="mb-2 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-            <GraduationCap className="h-3 w-3" /> Study — due today
+        <section className="not-prose mb-8">
+          <div className="editorial-section-row mb-3">
+            <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
+              <GraduationCap className="h-3 w-3" />§ Today's plan
+            </span>
+            <span className="editorial-section-rule" />
+            <span className="text-[11px] italic text-muted-foreground">{studyTasks.length} due</span>
           </div>
-          <div className="space-y-1">
-            {studyTasks.map((t) => (
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
+            {studyTasks.map((t, i) => (
               <button
                 key={t.id}
                 onClick={() => router.push("/study?tab=tasks")}
-                className="flex w-full items-start gap-2 rounded-md p-1.5 text-left text-sm transition-colors hover:bg-accent/50"
+                className={cn(
+                  "flex w-full items-start gap-2.5 px-4 py-3 text-left text-sm transition-colors hover:bg-accent/50",
+                  i !== studyTasks.length - 1 && "border-b border-border",
+                )}
               >
                 <span className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded-[3px] border border-muted-foreground/50" />
-                <span className="flex-1">{t.text}</span>
+                <span className="flex-1 leading-snug">{t.text}</span>
               </button>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {settingsOpen && (
-        <div className="not-prose mb-6 rounded-lg border border-border bg-card p-4">
+        <div className="not-prose mb-7 rounded-lg border border-border bg-card p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="text-sm font-medium">Custom brief prompt</div>
             <button
@@ -572,7 +622,7 @@ export function DailyBrief() {
       )}
 
       {error && (
-        <div className="not-prose rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
+        <div className="not-prose mb-7 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
           <p className="font-medium text-destructive">Couldn&apos;t generate brief</p>
           <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{error}</p>
           {error.includes("ANTHROPIC_API_KEY") && (
@@ -597,35 +647,32 @@ export function DailyBrief() {
         </div>
       )}
 
+      {/* ── Brief body ───────────────────────────────────────────── */}
       {content && (
-        <div className="prose-reader max-w-[68ch] text-[1.05rem] leading-[1.85]">
+        <div className="prose-brief max-w-[68ch] text-[1.05rem] leading-[1.65]">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-          {loading && <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />}
+          {loading && (
+            <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
+          )}
         </div>
       )}
 
-      {!loading && usage && usage.totalTokens > 0 && (
-        <div className="not-prose mt-6 flex items-center gap-1.5 text-[10px] tabular-nums text-muted-foreground">
-          <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5">
-            Tokens consumed: {usage.totalTokens.toLocaleString()}
-          </span>
-          <span className="opacity-60">
-            ({usage.promptTokens.toLocaleString()} in · {usage.completionTokens.toLocaleString()} out)
-          </span>
-        </div>
-      )}
-
+      {/* ── Sources ─────────────────────────────────────────────── */}
       {!loading && sources.length > 0 && (
-        <div className="not-prose mt-8 border-t border-border pt-4">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-              <Newspaper className="h-3 w-3" /> Articles in this brief
-            </div>
+        <section className="not-prose mt-10">
+          <div className="editorial-section-row mb-3">
+            <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
+              <Newspaper className="h-3 w-3" />§ Sources in this brief
+            </span>
+            <span className="editorial-section-rule" />
+            <span className="text-[11px] italic text-muted-foreground">
+              {sources.length} {sources.length === 1 ? "item" : "items"}
+            </span>
             {unreadSourceIds.length > 0 && (
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-6 gap-1 px-2 text-[10px]"
+                className="-my-1 h-6 gap-1 px-2 text-[10px]"
                 onClick={() => markRead(unreadSourceIds)}
                 title="Mark every article in this brief as read"
               >
@@ -688,7 +735,22 @@ export function DailyBrief() {
               );
             })}
           </div>
-        </div>
+        </section>
+      )}
+
+      {/* ── Colophon ────────────────────────────────────────────── */}
+      {!loading && content && (
+        <footer className="not-prose mt-12 flex items-center justify-between border-t border-border pt-4 editorial-eyebrow">
+          <span>End of brief · No. {volumeNo}</span>
+          <span>
+            {usage && usage.totalTokens > 0 && (
+              <>
+                <span className="tabular-nums">{usage.promptTokens.toLocaleString()}</span> in ·{" "}
+                <span className="tabular-nums">{usage.completionTokens.toLocaleString()}</span> out
+              </>
+            )}
+          </span>
+        </footer>
       )}
     </article>
   );

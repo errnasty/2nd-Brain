@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ───────────────────────────────────────────────────────────────────
+   Editorial display face — Source Serif 4. Used for big page headers
+   and stat numerals. Body copy stays Georgia (var(--app-font-body))
+   so user font prefs continue to work. Loaded with display:swap so
+   the page paints in Georgia first, then upgrades.
+   ─────────────────────────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&display=swap");
+
 @layer base {
   :root {
     /* Warm parchment light palette */
@@ -30,6 +38,9 @@
        the small bottom-nav labels. */
     --brand: 30 72% 38%;
     --brand-foreground: 40 25% 97%;
+    /* Optical-size display face for headings. Falls back through the body face
+       so a missed network load doesn't reflow the page. */
+    --app-font-display: "Source Serif 4", var(--app-font-body, Georgia), "Times New Roman", serif;
   }
 
   .dark {
@@ -94,6 +105,38 @@
   :where(a, button, [role="button"], [tabindex="0"]):focus-visible {
     outline: 2px solid hsl(var(--ring));
     outline-offset: 2px;
+  }
+}
+
+/* ── Editorial helpers ──────────────────────────────────────────────
+   Reusable building blocks for the Today / Study / section-header
+   "newspaper" aesthetic. Use sparingly — one masthead per page. */
+@layer components {
+  /* Tiny brass uppercase tag — "Vol. III · Wednesday Edition", "§ I · Read now" */
+  .editorial-eyebrow {
+    @apply font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground;
+  }
+  .editorial-eyebrow-brand {
+    @apply font-mono text-[10px] uppercase tracking-[0.16em];
+    color: hsl(var(--brand));
+  }
+  /* Display-face headline. Source Serif 4 at large optical sizes. */
+  .editorial-display {
+    font-family: var(--app-font-display);
+    font-weight: 600;
+    letter-spacing: -0.024em;
+    line-height: 1.04;
+  }
+  /* Heavy underline used beneath the masthead. */
+  .editorial-rule {
+    @apply border-b-2 border-foreground;
+  }
+  /* Section header row: eyebrow + thin rule fill + optional meta on the right. */
+  .editorial-section-row {
+    @apply flex items-baseline gap-3.5;
+  }
+  .editorial-section-rule {
+    @apply h-px flex-1 bg-border;
   }
 }
 
@@ -171,6 +214,49 @@
 }
 .prose-reader td {
   @apply border border-border px-3 py-2;
+}
+
+/* ── Brief markdown overrides ───────────────────────────────────────
+   The Daily Brief content streams as Markdown. Promote the H3 section
+   markers ("### High-Priority") into editorial section dividers and
+   tame paragraph rhythm so the brief feels typeset, not generated. */
+.prose-brief h3 {
+  @apply mb-4 mt-9 flex items-baseline gap-3 font-mono text-[10px] uppercase tracking-[0.16em];
+  color: hsl(var(--brand));
+  font-weight: 600;
+  letter-spacing: 0.16em;
+}
+.prose-brief h3::after {
+  content: "";
+  @apply ml-2 block h-px flex-1 self-center bg-border;
+}
+.prose-brief h3:first-child {
+  @apply mt-0;
+}
+.prose-brief p {
+  @apply my-3.5 leading-[1.65];
+  font-size: 1rem;
+}
+.prose-brief ul {
+  @apply my-3 list-none pl-0;
+}
+.prose-brief ul li {
+  @apply relative my-2 pl-5 leading-[1.6];
+}
+.prose-brief ul li::before {
+  content: "›";
+  @apply absolute left-0 top-0 font-mono text-[12px];
+  color: hsl(var(--brand));
+}
+.prose-brief strong {
+  @apply font-semibold text-foreground;
+}
+.prose-brief em {
+  @apply italic text-foreground/85;
+}
+.prose-brief a {
+  @apply underline decoration-border underline-offset-2 transition-colors hover:decoration-foreground;
+  color: inherit;
 }
 
 /* Sepia theme */

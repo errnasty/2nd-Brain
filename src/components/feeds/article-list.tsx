@@ -19,7 +19,6 @@ import {
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import {
   loadMoreArticlesAction,
   markAllReadAction,
@@ -62,6 +61,13 @@ type OptimisticPatch = {
   readStatus?: ArticleListItem["readStatus"];
   starred?: boolean;
   readLater?: boolean;
+};
+
+const VIEW_META: Record<"unread" | "all" | "starred" | "readlater", { label: string; meta: string }> = {
+  unread: { label: "Unread", meta: "Newest first" },
+  all: { label: "All articles", meta: "Inbox + read" },
+  starred: { label: "Starred", meta: "Favorites" },
+  readlater: { label: "Read later", meta: "Saved queue" },
 };
 
 export function ArticleList({
@@ -196,7 +202,6 @@ export function ArticleList({
   function bulkSetStatus(status: ArticleListItem["readStatus"], verb: string) {
     if (selectedIds.length === 0) return;
     const ids = selectedIds;
-    // Snapshot prior statuses so the action is reversible.
     const prior = ids.map((id) => ({
       id,
       status: optimistic.find((it) => it.id === id)?.readStatus ?? "unread",
@@ -216,7 +221,6 @@ export function ArticleList({
     });
   }
 
-  // Warm the full-text cache when a row is hovered so opening it is instant.
   const prefetched = useRef<Set<string>>(new Set());
   const prefetch = useCallback((id: string) => {
     if (prefetched.current.has(id)) return;
@@ -224,7 +228,6 @@ export function ArticleList({
     fetch(`/api/articles/${id}/full-text`, { method: "POST" }).catch(() => {});
   }, []);
 
-  // Mark a single article read (swipe / auto-read), optimistic + silent.
   const markReadOne = useCallback(
     (id: string) => {
       startTransition(() => applyOptimistic({ id, readStatus: "read" }));
@@ -233,8 +236,6 @@ export function ArticleList({
     [applyOptimistic],
   );
 
-  // Auto-mark-read as rows scroll above the top (unread view only). Batched +
-  // debounced so a long scroll is one DB write, not dozens.
   const autoReadPending = useRef<Set<string>>(new Set());
   const autoReadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onAutoRead = useCallback(
@@ -267,14 +268,10 @@ export function ArticleList({
   function bulkStar() {
     if (selectedIds.length === 0) return;
     const ids = selectedIds;
-    // Snapshot prior star state so a failed write reverts instead of leaving a
-    // false "Starred N" that the next refresh silently undoes.
     const prior = ids.map((id) => ({ id, starred: optimistic.find((it) => it.id === id)?.starred ?? false }));
     startTransition(async () => {
       ids.forEach((id) => applyOptimistic({ id, starred: true }));
       try {
-        // toggleStarredAction throws on failure (returns void), so Promise.all
-        // rejecting is our only failure signal — caught below to revert.
         await Promise.all(ids.map((id) => toggleStarredAction(id, true)));
         toast.success(`Starred ${ids.length} article${ids.length === 1 ? "" : "s"}`);
         clearSelection();
@@ -358,7 +355,6 @@ export function ArticleList({
 
   function markAllRead() {
     startTransition(async () => {
-      // Optimistically clear unread state for currently-visible items
       const unread = displayed.filter((i) => i.readStatus === "unread");
       unread.forEach((i) => applyOptimistic({ id: i.id, readStatus: "read" }));
 
@@ -373,23 +369,40 @@ export function ArticleList({
   }
 
   const showingSearch = results !== null;
+  const meta = VIEW_META[view];
 
   return (
     <section
       className={cn(
         "w-full flex-col border-r border-border md:max-w-sm md:shrink-0 md:flex",
-        // Mobile: hide the list when an article is open so the reader takes
-        // the full screen. Desktop (md+) always shows both side-by-side.
         selectedId ? "hidden" : "flex",
       )}
     >
-      {/* Mobile: back to the folder list (desktop has the sidebar). */}
+      {/* Mobile back */}
       <button
         onClick={() => router.push("/feeds")}
         className="flex items-center gap-1 px-3 pt-3 text-xs text-muted-foreground hover:text-foreground md:hidden"
       >
         <ChevronLeft className="h-3.5 w-3.5" /> Folders
       </button>
+
+      {/* ── Editorial header ──────────────────────────────────────── */}
+      <header className="border-b border-border px-4 pb-3 pt-4">
+        <div className="mb-1.5 editorial-eyebrow">
+          Feeds · {meta.meta}
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <h2
+            className="editorial-display m-0 truncate"
+            style={{ fontSize: "1.35rem", letterSpacing: "-0.018em" }}
+          >
+            {meta.label}
+          </h2>
+          <span className="font-mono text-[10px] tabular-nums" style={{ color: "hsl(var(--brand))" }}>
+            {showingSearch ? `${displayed.length} matches` : `${displayed.length}${hasMore ? "+" : ""}`}
+          </span>
+        </div>
+      </header>
 
       {/* Search */}
       <div className="px-3 pt-3">
@@ -420,9 +433,9 @@ export function ArticleList({
         </div>
       </div>
 
-      {/* View tabs + mark-all-read */}
+      {/* View tabs + sort */}
       <div className="flex items-center justify-between px-3 py-3">
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex items-center gap-1 text-sm">
           <ViewLink view="unread" current={view} label="Unread" />
           <ViewLink view="all" current={view} label="All" />
           <ViewLink view="starred" current={view} label="Starred" />
@@ -443,7 +456,7 @@ export function ArticleList({
           </Button>
         </div>
       </div>
-      <Separator />
+      <div className="h-px bg-border" />
 
       {displayed.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
@@ -460,7 +473,7 @@ export function ArticleList({
           ) : (
             <>
               <Inbox className="h-8 w-8 text-muted-foreground/40" />
-              <p className="text-sm font-medium">
+              <p className="editorial-display text-base">
                 {view === "unread"
                   ? "You're all caught up"
                   : view === "readlater"
@@ -469,7 +482,7 @@ export function ArticleList({
                       ? "Nothing starred yet"
                       : "No articles here"}
               </p>
-              <p className="max-w-xs text-xs text-muted-foreground">
+              <p className="max-w-xs text-xs italic text-muted-foreground">
                 {view === "unread"
                   ? "No unread articles in this view. Switch to All, or sync your feeds for more."
                   : view === "readlater"
@@ -516,9 +529,6 @@ export function ArticleList({
 }
 
 // ── Virtualized rows ──────────────────────────────────────────────────
-// Renders only the rows in view + a small overscan buffer. Items vary in
-// height because some have excerpts/images, so we use dynamic measurement
-// via measureElement instead of a fixed estimate.
 
 function VirtualizedArticleList({
   items,
@@ -564,8 +574,6 @@ function VirtualizedArticleList({
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
-  // Fetch the next page when the bottom sentinel scrolls into view. Root is the
-  // scroll container; rootMargin pre-loads a bit before the user hits the end.
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el || !canLoadMore) return;
@@ -579,13 +587,10 @@ function VirtualizedArticleList({
     return () => io.disconnect();
   }, [canLoadMore, onLoadMore]);
 
-  // Row heights change with density — force the virtualizer to re-measure.
   useEffect(() => {
     virtualizer.measure();
   }, [compact, virtualizer]);
 
-  // Inbox-zero: mark unread rows read as they scroll above the top (only while
-  // scrolling down, in the unread view).
   function handleScroll() {
     const el = parentRef.current;
     if (!el) return;
@@ -603,7 +608,6 @@ function VirtualizedArticleList({
     if (past.length > 0) onAutoRead(past);
   }
 
-  // One active swipe at a time — track at list level.
   const touchStart = useRef<{ x: number; y: number; id: string } | null>(null);
 
   return (
@@ -614,6 +618,7 @@ function VirtualizedArticleList({
       >
         {virtualizer.getVirtualItems().map((row) => {
           const item = items[row.index];
+          const isSelected = selectedId === item.id;
           return (
             <div
               key={item.id}
@@ -632,14 +637,16 @@ function VirtualizedArticleList({
                 const t = e.changedTouches[0];
                 const dx = t.clientX - s.x;
                 const dy = t.clientY - s.y;
-                // Horizontal swipe only: right → mark read, left → read later.
                 if (Math.abs(dx) < 70 || Math.abs(dx) <= Math.abs(dy)) return;
                 if (dx > 0) onMarkRead(item.id);
                 else onToggleReadLater(item.id, item.readLater);
               }}
             >
-              {/* Selection checkbox — reveals on hover, or stays once any row
-                  is selected (so the selection set is visible/editable). */}
+              {/* Brass selected indicator — matches sidebar active state */}
+              {isSelected && (
+                <span className="absolute inset-y-3 left-0 z-10 w-[2px] rounded-full bg-brand" />
+              )}
+              {/* Selection checkbox */}
               <div
                 className={cn(
                   "absolute left-1.5 top-1/2 z-10 -translate-y-1/2 transition-opacity",
@@ -662,43 +669,46 @@ function VirtualizedArticleList({
                   "flex w-full gap-3 pr-4 text-left transition-colors",
                   compact ? "py-2" : "py-4",
                   selected.size > 0 ? "pl-9" : "pl-4",
-                  selectedId === item.id ? "bg-accent" : "hover:bg-accent/50",
+                  isSelected ? "bg-accent" : "hover:bg-accent/50",
                   selected.has(item.id) && "bg-accent/40",
                   item.readStatus === "read" && "opacity-55",
                 )}
               >
                 <div className="min-w-0 flex-1">
-                  <div className={cn("flex items-center gap-1.5 text-[11px] text-muted-foreground", compact ? "mb-0.5" : "mb-1.5")}>
+                  <div className={cn("flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground", compact ? "mb-0.5" : "mb-1.5")}>
                     {item.feedIconUrl ? (
                       <Image
                         src={item.feedIconUrl}
                         alt=""
-                        width={12}
-                        height={12}
+                        width={11}
+                        height={11}
                         className="rounded-sm"
                         unoptimized
                         onError={(e) => {
-                          // Dead favicon → hide instead of a broken-image glyph.
                           (e.target as HTMLImageElement).style.display = "none";
                         }}
                       />
-                    ) : null}
-                    <span className="truncate">{item.feedTitle}</span>
-                    <span>·</span>
-                    <span className="shrink-0">{formatRelativeTime(item.publishDate)}</span>
+                    ) : (
+                      <span className="h-[10px] w-[10px] shrink-0 rounded-[2px] bg-muted-foreground/30" />
+                    )}
+                    <span className="truncate normal-case" style={{ letterSpacing: 0 }}>{item.feedTitle}</span>
+                    <span className="opacity-50">·</span>
+                    <span className="shrink-0 normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.publishDate)}</span>
                     {readMinutes(item.wordCount) !== null && (
                       <>
-                        <span>·</span>
-                        <span className="shrink-0 tabular-nums">≈{readMinutes(item.wordCount)} min</span>
+                        <span className="opacity-50">·</span>
+                        <span className="shrink-0 tabular-nums">≈{readMinutes(item.wordCount)}m</span>
                       </>
                     )}
                     {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
                   </div>
                   <div
                     className={cn(
-                      "text-[0.85rem] leading-snug tracking-[-0.005em]",
-                      item.readStatus === "unread" ? "font-semibold" : "font-normal text-foreground/80",
+                      "leading-snug tracking-[-0.005em]",
+                      compact ? "text-[0.85rem]" : "text-[0.95rem]",
+                      item.readStatus === "unread" ? "font-semibold text-foreground" : "font-normal text-foreground/75",
                     )}
+                    style={{ fontFamily: "var(--app-font-display)" }}
                   >
                     {item.title}
                   </div>
@@ -712,7 +722,7 @@ function VirtualizedArticleList({
                       {itemTagsById[item.id].slice(0, 5).map((tag) => (
                         <span
                           key={tag}
-                          className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 text-[10px] text-muted-foreground"
+                          className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground"
                         >
                           #{tag}
                         </span>
@@ -734,7 +744,7 @@ function VirtualizedArticleList({
                   />
                 )}
               </button>
-              {/* Read Later toggle — overlay so it doesn't nest in the row button. */}
+              {/* Read Later toggle */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -756,7 +766,7 @@ function VirtualizedArticleList({
         })}
       </div>
       {canLoadMore && (
-        <div ref={sentinelRef} className="flex items-center justify-center py-4 text-xs text-muted-foreground">
+        <div ref={sentinelRef} className="flex items-center justify-center py-4 text-xs italic text-muted-foreground">
           {loadingMore && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
           {loadingMore ? "Loading more…" : ""}
         </div>
@@ -778,12 +788,15 @@ function ViewLink({
   const sp = new URLSearchParams(params.toString());
   sp.set("view", view);
   sp.delete("article");
+  const active = view === current;
   return (
     <Link
       href={`/feeds?${sp.toString()}`}
       className={cn(
-        "rounded-md px-2 py-1 text-xs",
-        view === current ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+        "rounded-md px-2 py-1 text-xs transition-colors",
+        active
+          ? "bg-accent font-semibold text-accent-foreground"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
       )}
     >
       {label}

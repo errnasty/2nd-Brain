@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
-import { Check, GitMerge, Hash, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { Check, GitMerge, Hash, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,6 @@ export function TagManager({
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [, startTransition] = useTransition();
 
-  // Reset selection when the tag list changes (e.g. after a delete)
   useEffect(() => {
     setChecked((prev) => {
       const next = new Set<string>();
@@ -65,8 +64,6 @@ export function TagManager({
     if (!editingId) return;
     const id = editingId;
     const name = editValue.trim();
-    // Don't send an empty name to the server (it would fail validation or blank
-    // the tag) — just cancel the edit.
     if (!name) {
       setEditingId(null);
       return;
@@ -96,7 +93,6 @@ export function TagManager({
         await deleteTagAction(tag.id);
         toast.success("Tag deleted");
       } catch (e) {
-        // Failed delete must not claim success — the tag is still there.
         toast.error(`Delete failed: ${e instanceof Error ? e.message : "error"}`);
       }
     });
@@ -106,7 +102,6 @@ export function TagManager({
     const ids = Array.from(checked);
     if (ids.length < 2) return;
     const selectedTags = tags.filter((t) => ids.includes(t.id));
-    // Keeper = most-used (ties → first alphabetically, already sorted).
     const target = [...selectedTags].sort(
       (a, b) => (usage[b.id]?.total ?? 0) - (usage[a.id]?.total ?? 0),
     )[0];
@@ -148,7 +143,6 @@ export function TagManager({
           toast.error("Couldn't delete the selected tags.");
         }
       } catch (e) {
-        // Keep the selection for retry.
         toast.error(`Delete failed: ${e instanceof Error ? e.message : "error"}`);
       }
     });
@@ -162,30 +156,33 @@ export function TagManager({
 
   const allChecked = checked.size === tags.length;
   const someChecked = checked.size > 0 && !allChecked;
+  const maxTotal = Math.max(1, ...tags.map((t) => usage[t.id]?.total ?? 0));
 
   return (
     <>
       <div className="overflow-hidden rounded-lg border border-border">
         <table className="w-full text-sm">
-          <thead className="bg-muted/40 text-left text-xs uppercase tracking-wider text-muted-foreground">
+          <thead className="border-b border-border bg-muted/30 text-left font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
             <tr>
-              <th className="px-3 py-2 w-10">
+              <th className="px-3 py-2.5 w-10">
                 <Checkbox
                   checked={allChecked ? true : someChecked ? "indeterminate" : false}
                   onCheckedChange={toggleAll}
                   aria-label="Select all tags"
                 />
               </th>
-              <th className="px-4 py-2 font-semibold">Tag</th>
-              <th className="px-4 py-2 font-semibold">Used by</th>
-              <th className="px-4 py-2 font-semibold">Breakdown</th>
-              <th className="px-4 py-2 text-right font-semibold">Actions</th>
+              <th className="px-4 py-2.5 font-semibold">Tag</th>
+              <th className="px-4 py-2.5 font-semibold">Used by</th>
+              <th className="px-4 py-2.5 font-semibold">Distribution</th>
+              <th className="px-4 py-2.5 font-semibold">Breakdown</th>
+              <th className="px-4 py-2.5 text-right font-semibold">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
             {tags.map((tag) => {
               const u = usage[tag.id] ?? { total: 0, article: 0, document: 0, directoryItem: 0 };
               const isChecked = checked.has(tag.id);
+              const pct = Math.round((u.total / maxTotal) * 100);
               return (
                 <tr key={tag.id} className="hover:bg-accent/30">
                   <td className="px-3 py-3">
@@ -227,20 +224,34 @@ export function TagManager({
                     ) : (
                       <button
                         onClick={() => openInDirectory(tag)}
-                        className="inline-flex items-center gap-1.5 font-medium hover:underline"
+                        className="inline-flex items-center gap-1.5 font-mono text-[12.5px] hover:underline"
+                        style={{ color: "hsl(var(--brand))" }}
                         title="Filter Directory by this tag"
                       >
-                        <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Hash className="h-3.5 w-3.5 opacity-60" />
                         {tag.name}
                       </button>
                     )}
                   </td>
                   <td className="px-4 py-3 tabular-nums">{u.total}</td>
-                  <td className="px-4 py-3 text-xs text-muted-foreground">
+                  <td className="w-40 px-4 py-3">
+                    {/* Brass distribution bar — at-a-glance tag weight */}
+                    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${Math.max(2, pct)}%`,
+                          background: "hsl(var(--brand))",
+                          opacity: 0.7,
+                        }}
+                      />
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-xs italic text-muted-foreground">
                     {[
-                      u.directoryItem > 0 ? `${u.directoryItem} directory` : null,
-                      u.article > 0 ? `${u.article} article` : null,
-                      u.document > 0 ? `${u.document} document` : null,
+                      u.directoryItem > 0 ? `${u.directoryItem} dir.` : null,
+                      u.article > 0 ? `${u.article} art.` : null,
+                      u.document > 0 ? `${u.document} doc.` : null,
                     ]
                       .filter(Boolean)
                       .join(" · ") || "—"}
@@ -278,7 +289,9 @@ export function TagManager({
 
       {checked.size > 0 && (
         <div className="pointer-events-auto fixed bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 flex max-w-[calc(100vw-1rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-2xl border border-border bg-card/95 px-4 py-2 shadow-lg backdrop-blur md:bottom-6 md:flex-nowrap md:rounded-full">
-          <span className="text-sm font-medium">{checked.size} selected</span>
+          <span className="font-mono text-xs font-semibold uppercase tracking-[0.08em]">
+            {checked.size} selected
+          </span>
           <span className="h-4 w-px bg-border" />
           {checked.size > 1 && (
             <Button size="sm" variant="ghost" onClick={handleMerge}>

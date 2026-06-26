@@ -16,17 +16,12 @@ import type { GameState } from "@/lib/gamify/state";
 export type StudyTab = "overview" | "tasks" | "review" | "calendar";
 
 const TABS: { id: StudyTab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview", label: "Overview", icon: <BarChart3 className="h-4 w-4" /> },
-  { id: "tasks", label: "Tasks", icon: <CheckSquare className="h-4 w-4" /> },
-  { id: "review", label: "Review", icon: <Brain className="h-4 w-4" /> },
-  { id: "calendar", label: "Calendar", icon: <CalendarDays className="h-4 w-4" /> },
+  { id: "overview", label: "Overview", icon: <BarChart3 className="h-3.5 w-3.5" /> },
+  { id: "tasks", label: "Tasks", icon: <CheckSquare className="h-3.5 w-3.5" /> },
+  { id: "review", label: "Review", icon: <Brain className="h-3.5 w-3.5" /> },
+  { id: "calendar", label: "Calendar", icon: <CalendarDays className="h-3.5 w-3.5" /> },
 ];
 
-/**
- * Single hub for the learning surface — keeps Tasks, Review, Stats and the
- * study Calendar behind one sidebar entry instead of four. Tab is reflected in
- * ?tab= (replaceState) for shareable deep links without a server round-trip.
- */
 export function StudyShell({
   defaultTab,
   stats,
@@ -52,9 +47,6 @@ export function StudyShell({
   const [, startTransition] = useTransition();
   const [tab, setTab] = useState<StudyTab>(defaultTab);
 
-  // Keep the active tab in sync when navigation changes ?tab= (e.g. clicking a
-  // calendar entry does router.push("/study?tab=review")). The server re-renders
-  // with a new defaultTab; without this the view would stay stuck on Calendar.
   useEffect(() => {
     setTab(defaultTab);
   }, [defaultTab]);
@@ -64,32 +56,47 @@ export function StudyShell({
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
     window.history.replaceState(null, "", url.toString());
-    // Stats are computed server-side at page load; switching tabs is pure client
-    // state, so the Overview would show numbers frozen from when the page first
-    // loaded — stale after a review/task session. Pull fresh data when entering
-    // it. (Next 14.1+ keeps the router in sync with replaceState above, so this
-    // refetches /study?tab=overview and re-renders the stats.)
     if (next === "overview") startTransition(() => router.refresh());
   }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-border px-3 py-2">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => select(t.id)}
-            className={cn(
-              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
-              tab === t.id
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {t.icon}
-            <span className="hidden sm:inline">{t.label}</span>
-          </button>
-        ))}
+      {/* Editorial tab bar */}
+      <div className="flex items-center gap-1 border-b border-border px-3 py-2.5">
+        {TABS.map((t) => {
+          const active = tab === t.id;
+          // Map duecount badge to Review only
+          const badge = t.id === "review" && dueCount > 0 ? dueCount : undefined;
+          return (
+            <button
+              key={t.id}
+              onClick={() => select(t.id)}
+              className={cn(
+                "relative flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm transition-colors",
+                active
+                  ? "bg-accent font-semibold text-foreground"
+                  : "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+              )}
+            >
+              {active && (
+                <span
+                  className="absolute inset-y-1 left-0 w-[2px] rounded-full bg-brand"
+                  aria-hidden
+                />
+              )}
+              <span className={cn(active && "text-brand")}>{t.icon}</span>
+              <span className="hidden sm:inline">{t.label}</span>
+              {badge !== undefined && (
+                <span
+                  className="ml-1 rounded-full px-1.5 py-0 font-mono text-[10px] tabular-nums"
+                  style={{ color: "hsl(var(--brand))", background: "hsl(var(--brand) / 0.08)" }}
+                >
+                  {badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

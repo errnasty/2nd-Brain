@@ -7,7 +7,6 @@ import { useDraggable } from "@dnd-kit/core";
 import { Brain, ChevronLeft, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Separator } from "@/components/ui/separator";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   createNoteAction,
@@ -30,8 +29,6 @@ import type { ReadingStatus } from "@/lib/directory/query";
 export type DirectoryListItem = {
   id: string;
   title: string;
-  /** Truncated content for the list view (up to ~240 chars). The full content
-   * is fetched on demand via /api/directory/:id when an item is opened. */
   preview: string | null;
   kind: "saved_article" | "uploaded_document" | "user_note";
   folderId: string | null;
@@ -44,9 +41,9 @@ export type DirectoryListItem = {
 };
 
 const KIND_META: Record<DirectoryListItem["kind"], { label: string; icon: React.ReactNode }> = {
-  saved_article: { label: "Article", icon: <Newspaper className="h-3.5 w-3.5" /> },
-  uploaded_document: { label: "Document", icon: <FileText className="h-3.5 w-3.5" /> },
-  user_note: { label: "Note", icon: <NotebookPen className="h-3.5 w-3.5" /> },
+  saved_article: { label: "Article", icon: <Newspaper className="h-3 w-3" /> },
+  uploaded_document: { label: "Document", icon: <FileText className="h-3 w-3" /> },
+  user_note: { label: "Note", icon: <NotebookPen className="h-3 w-3" /> },
 };
 
 export function DirectoryShell({
@@ -72,9 +69,6 @@ export function DirectoryShell({
   const [curriculumOpen, setCurriculumOpen] = useState(false);
   const [, startTransition] = useTransition();
 
-  // Infinite scroll: seed from the server's first page, append more as the
-  // user scrolls. Re-seed when the filter/first-page changes (folder switch,
-  // or a mutation that revalidated the page).
   const [extraItems, setExtraItems] = useState<DirectoryListItem[]>([]);
   const [extraTags, setExtraTags] = useState<Record<string, string[]>>({});
   const [pageHasMore, setPageHasMore] = useState(hasMore);
@@ -114,13 +108,10 @@ export function DirectoryShell({
     });
   }, [loadingMore, pageHasMore, activeFolder, activeTagIds, offset]);
 
-  // Board view needs the full set grouped into columns, so eagerly pull all
-  // remaining pages while the board is open (the list view lazy-loads instead).
   useEffect(() => {
     if (view === "board" && pageHasMore && !loadingMore) loadMore();
   }, [view, pageHasMore, loadingMore, loadMore]);
 
-  // Clear bulk selection when the visible items list changes (folder/filter switch)
   useEffect(() => {
     setCheckedIds(new Set());
   }, [activeFolder, activeTagIds.join(",")]);
@@ -136,19 +127,11 @@ export function DirectoryShell({
 
   const clearSelection = useCallback(() => setCheckedIds(new Set()), []);
 
-  // Sync the open item from the URL's ?item= param. useSearchParams updates on
-  // first mount, back/forward, AND same-route navigations (router.push/replace),
-  // so cross-references that do router.push("/directory?item=X") — connections,
-  // backlinks, gaps/curriculum "open" — now actually open the item. The old
-  // popstate-only listener missed those because router.push doesn't emit it.
   const urlItem = useSearchParams().get("item");
   useEffect(() => {
     setSelectedId(urlItem);
   }, [urlItem]);
 
-  // A selected item that isn't in the loaded list/filter (e.g. opened from a
-  // Task's "open source", or an older item past the first page). Fetch it by id
-  // and render it directly instead of dropping the selection.
   const [hydratedItem, setHydratedItem] = useState<DirectoryListItem | null>(null);
 
   useEffect(() => {
@@ -157,10 +140,10 @@ export function DirectoryShell({
       return;
     }
     if (allItems.some((i) => i.id === selectedId)) {
-      setHydratedItem(null); // it's in the list — no standalone hydration needed
+      setHydratedItem(null);
       return;
     }
-    if (hydratedItem?.id === selectedId) return; // already hydrated
+    if (hydratedItem?.id === selectedId) return;
     let cancelled = false;
     fetchDirectoryItemByIdAction(selectedId)
       .then((item) => {
@@ -168,7 +151,6 @@ export function DirectoryShell({
         if (item) {
           setHydratedItem(item as DirectoryListItem);
         } else {
-          // Truly gone (deleted) — clear the dangling selection.
           setSelectedId(null);
           const url = new URL(window.location.href);
           url.searchParams.delete("item");
@@ -189,8 +171,6 @@ export function DirectoryShell({
     window.history.replaceState(null, "", url.toString());
   }, []);
 
-  // Keyboard nav (parity with Feeds): j/k or ↓/↑ move through items, Esc
-  // closes the viewer. Ignored while typing (the hook skips inputs/textareas).
   const moveSelection = useCallback(
     (delta: number) => {
       if (allItems.length === 0) return;
@@ -200,11 +180,7 @@ export function DirectoryShell({
     },
     [allItems, selectedId, selectItem],
   );
-  // Escape always closes the open item.
   useShortcuts({ escape: () => selectItem(null) });
-  // Item navigation only when NO item is open — otherwise ↓/↑/j/k would jump
-  // items (and preventDefault would block scrolling) instead of letting the
-  // reader scroll. Matches the Feeds behaviour.
   useShortcuts(
     {
       j: () => moveSelection(1),
@@ -215,9 +191,6 @@ export function DirectoryShell({
     !selectedId,
   );
 
-  // "unsorted" is a UI-only view, not a real folder id. New items created
-  // there must land with folderId = null, never the literal "unsorted"
-  // (which a uuid column rejects).
   const targetFolderId = activeFolder && activeFolder !== "unsorted" ? activeFolder : null;
 
   function newNote() {
@@ -237,7 +210,7 @@ export function DirectoryShell({
   }
 
   function onFilesPicked(files: FileList) {
-    const max = maxUploadBytes(); // platform-aware: ~4.5MB on hosted web, 20MB on desktop
+    const max = maxUploadBytes();
     Array.from(files).forEach((file) => {
       if (file.size > max) {
         toast.error(`${file.name} is ${(file.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabel()} limit.`);
@@ -261,65 +234,87 @@ export function DirectoryShell({
     [allItems, selectedId, hydratedItem],
   );
 
+  const folderName = useMemo(() => {
+    if (activeTagIds.length > 0) return "Tagged";
+    if (activeFolder === "unsorted") return "Unsorted";
+    if (activeFolder) {
+      return folders.find((f) => f.id === activeFolder)?.name ?? "Folder";
+    }
+    return "All items";
+  }, [folders, activeFolder, activeTagIds]);
+
   const countLabel = `${allItems.length}${pageHasMore ? "+" : ""}`;
+  const headerMeta = activeTagIds.length > 0
+    ? "Tag filter"
+    : activeFolder === "unsorted"
+      ? "Items without a folder"
+      : activeFolder
+        ? "Folder pipeline"
+        : "Your knowledge library";
 
   return (
     <>
-      {/* Items list / board */}
       <section
         className={cn(
           "w-full flex-col border-r border-border md:flex",
           view === "board" ? "flex-1" : "md:max-w-sm md:shrink-0",
-          // Mobile: hide when an item is open; reader takes full screen.
           selectedId ? "hidden" : "flex",
         )}
       >
-        <div className="flex items-center justify-between px-3 py-3">
-          <div className="flex items-center gap-1.5">
-            {/* Mobile: back to the folder list (desktop has the sidebar). */}
+        {/* ── Editorial header ───────────────────────────────────── */}
+        <header className="border-b border-border px-4 pb-3 pt-4">
+          <div className="mb-1.5 flex items-center gap-1.5 editorial-eyebrow">
+            {/* Mobile back */}
             <button
               onClick={() => router.push("/directory")}
-              className="-ml-1 text-muted-foreground hover:text-foreground md:hidden"
+              className="-ml-0.5 hover:text-foreground md:hidden"
               title="Folders"
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="h-3 w-3" />
             </button>
-            <div className="text-sm font-semibold">
-              {activeTagIds.length > 0
-                ? `${countLabel} tagged`
-                : activeFolder
-                  ? `${countLabel} items`
-                  : "All items"}
-            </div>
+            <span>Directory · {headerMeta}</span>
+          </div>
+          <div className="flex items-baseline justify-between gap-3">
+            <h2
+              className="editorial-display m-0 truncate"
+              style={{ fontSize: "1.35rem", letterSpacing: "-0.018em" }}
+            >
+              {folderName}
+            </h2>
+            <span className="font-mono text-[10px] tabular-nums" style={{ color: "hsl(var(--brand))" }}>
+              {countLabel} items
+            </span>
+          </div>
+        </header>
+
+        <div className="flex items-center justify-between px-3 py-2">
+          <div className="flex items-center rounded-md border border-border p-0.5">
+            <button
+              onClick={() => setView("list")}
+              title="List view"
+              className={cn(
+                "rounded p-1 transition-colors",
+                view === "list"
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <List className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setView("board")}
+              title="Board view (reading pipeline)"
+              className={cn(
+                "rounded p-1 transition-colors",
+                view === "board"
+                  ? "bg-accent text-accent-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+            </button>
           </div>
           <div className="flex items-center gap-0.5">
-            {/* List / Board toggle */}
-            <div className="mr-1 flex items-center rounded-md border border-border p-0.5">
-              <button
-                onClick={() => setView("list")}
-                title="List view"
-                className={cn(
-                  "rounded p-1 transition-colors",
-                  view === "list"
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <List className="h-3.5 w-3.5" />
-              </button>
-              <button
-                onClick={() => setView("board")}
-                title="Board view (reading pipeline)"
-                className={cn(
-                  "rounded p-1 transition-colors",
-                  view === "board"
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <LayoutGrid className="h-3.5 w-3.5" />
-              </button>
-            </div>
             {activeFolder && activeFolder !== "unsorted" && (
               <Button
                 size="icon"
@@ -352,7 +347,7 @@ export function DirectoryShell({
             <UploadButton onPick={onFilesPicked} />
             <Button
               size="icon"
-              variant="ghost"
+              variant="brand"
               className="h-7 w-7"
               onClick={newNote}
               title="New note"
@@ -361,12 +356,18 @@ export function DirectoryShell({
             </Button>
           </div>
         </div>
-        <Separator />
+        <div className="h-px bg-border" />
         {allItems.length === 0 ? (
-          <div className="p-6 text-sm text-muted-foreground">
-            {activeTagIds.length > 0
-              ? "No items match the selected tags."
-              : "No items yet. Create a note, upload a PDF, or save articles from your feeds."}
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+            <FileText className="h-8 w-8 text-muted-foreground/40" />
+            <p className="editorial-display text-base">
+              {activeTagIds.length > 0 ? "Nothing matches" : "Empty shelf"}
+            </p>
+            <p className="max-w-xs text-xs italic text-muted-foreground">
+              {activeTagIds.length > 0
+                ? "No items match the selected tags."
+                : "Create a note, upload a PDF, or save articles from your feeds."}
+            </p>
           </div>
         ) : view === "board" ? (
           <DirectoryBoard items={allItems} selectedId={selectedId} onOpen={selectItem} />
@@ -385,7 +386,6 @@ export function DirectoryShell({
         )}
       </section>
 
-      {/* Viewer */}
       <ItemViewer
         item={selectedItem}
         onClose={() => selectItem(null)}
@@ -443,7 +443,6 @@ function VirtualizedDirectoryList({
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
-  // Trigger the next page when the last rendered row is within 5 of the end.
   const virtualRows = virtualizer.getVirtualItems();
   const lastIndex = virtualRows.length > 0 ? virtualRows[virtualRows.length - 1].index : 0;
   useEffect(() => {
@@ -482,16 +481,11 @@ function VirtualizedDirectoryList({
         })}
       </div>
       {loadingMore && (
-        <div className="py-3 text-center text-xs text-muted-foreground">Loading more…</div>
+        <div className="py-3 text-center text-xs italic text-muted-foreground">Loading more…</div>
       )}
     </div>
   );
 }
-
-// ── DraggableItemRow ─────────────────────────────────────────────────
-// The grip handle on the left is the explicit drag source so the user can
-// still click the row body to open the item without accidentally starting a
-// drag. The checkbox stops propagation so checking doesn't open the item.
 
 function DraggableItemRow({
   item,
@@ -516,11 +510,14 @@ function DraggableItemRow({
     <div
       ref={setNodeRef}
       className={cn(
-        "group flex items-start gap-2 px-4 py-3 transition-colors",
+        "group relative flex items-start gap-2 px-4 py-3 transition-colors",
         isSelected ? "bg-accent" : "hover:bg-accent/50",
         isDragging && "opacity-40",
       )}
     >
+      {isSelected && (
+        <span className="absolute inset-y-3 left-0 w-[2px] rounded-full bg-brand" />
+      )}
       <button
         {...attributes}
         {...listeners}
@@ -546,13 +543,16 @@ function DraggableItemRow({
       </div>
 
       <button onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
           {KIND_META[item.kind].icon}
           <span>{KIND_META[item.kind].label}</span>
-          <span>·</span>
-          <span>{formatRelativeTime(item.updatedAt)}</span>
+          <span className="opacity-50">·</span>
+          <span className="normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.updatedAt)}</span>
         </div>
-        <div className="text-[0.9rem] font-medium leading-snug tracking-[-0.005em]">
+        <div
+          className="text-[0.95rem] font-medium leading-snug tracking-[-0.008em]"
+          style={{ fontFamily: "var(--app-font-display)" }}
+        >
           {item.title}
         </div>
         {item.preview && (
@@ -565,7 +565,7 @@ function DraggableItemRow({
             {tags.slice(0, 5).map((tag) => (
               <span
                 key={tag}
-                className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 text-[10px] text-muted-foreground"
+                className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground"
               >
                 #{tag}
               </span>

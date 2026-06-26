@@ -29,13 +29,36 @@ const nav = [
   { href: "/tags", label: "Tags", icon: Tag, chord: "G" },
 ];
 
+const VOLUME_KEY = "sidebar.volumeNumber.v1";
+
 export function Sidebar({ userEmail }: { userEmail: string }) {
   const pathname = usePathname();
   // ⌘ on macOS, Ctrl elsewhere. Resolved after mount to avoid hydration mismatch.
   const [mod, setMod] = useState("⌘");
+  // Editorial "issue number" displayed next to the wordmark. Increments on each
+  // calendar day the app is opened — gives the masthead a printed-edition feel
+  // without any backend wiring. Persists in localStorage; falls back to today's
+  // day-of-year if unset so a fresh install still shows something useful.
+  const [volume, setVolume] = useState<number | null>(null);
+
   useEffect(() => {
     const isMac = /mac|iphone|ipad|ipod/i.test(navigator.userAgent);
     setMod(isMac ? "⌘" : "Ctrl");
+
+    try {
+      const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+      const raw = localStorage.getItem(VOLUME_KEY);
+      const parsed = raw ? (JSON.parse(raw) as { n: number; lastDay: string }) : null;
+      if (parsed && parsed.lastDay === todayKey) {
+        setVolume(parsed.n);
+      } else {
+        const next = parsed ? parsed.n + 1 : dayOfYear(new Date());
+        localStorage.setItem(VOLUME_KEY, JSON.stringify({ n: next, lastDay: todayKey }));
+        setVolume(next);
+      }
+    } catch {
+      setVolume(dayOfYear(new Date()));
+    }
   }, []);
 
   function isActive(href: string): boolean {
@@ -45,8 +68,19 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
   return (
     <aside className="hidden w-60 shrink-0 border-r border-border md:flex md:flex-col">
       <div className="px-4 py-5">
-        <div className="text-base font-semibold tracking-tight leading-none">Second Brain</div>
-        <div className="mt-1 text-[11px] text-muted-foreground truncate">{userEmail}</div>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-base font-semibold leading-none tracking-tight">Second Brain</span>
+          {volume != null && (
+            <span
+              className="font-mono text-[10px] uppercase tracking-[0.08em]"
+              style={{ color: "hsl(var(--brand))" }}
+              title="Issue number — increments daily"
+            >
+              № {volume}
+            </span>
+          )}
+        </div>
+        <div className="mt-1 truncate text-[11px] text-muted-foreground">{userEmail}</div>
       </div>
       <Separator />
 
@@ -65,7 +99,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
       </div>
 
       <ScrollArea className="flex-1">
-        <nav className="p-2 space-y-0.5">
+        <nav className="space-y-0.5 p-2">
           {nav.map(({ href, label, icon: Icon, chord }) => {
             const active = isActive(href);
             return (
@@ -76,7 +110,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
                 className={cn(
                   "group/item relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
                   active
-                    ? "bg-accent font-medium text-foreground"
+                    ? "bg-accent font-semibold text-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
                 )}
               >
@@ -99,7 +133,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
           className={cn(
             "block rounded-md px-3 py-2 text-sm transition-colors",
             isActive("/settings")
-              ? "bg-accent font-medium text-foreground"
+              ? "bg-accent font-semibold text-foreground"
               : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
           )}
         >
@@ -108,6 +142,11 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
       </div>
     </aside>
   );
+}
+
+function dayOfYear(d: Date): number {
+  const start = new Date(d.getFullYear(), 0, 0);
+  return Math.floor((d.getTime() - start.getTime()) / 86_400_000);
 }
 
 /**
