@@ -4,6 +4,7 @@
 // counters, evaluates achievements, and returns a rich result so the UI can
 // celebrate. NEVER throws — XP is a side effect and must not break its host.
 
+import { createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
@@ -55,6 +56,18 @@ function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "general";
 }
 
+/**
+ * Deterministic UUID from stable parts. player_profile (unique user_id) and
+ * skills (unique user_id+domain+slug) must get the SAME id on every device, or
+ * the desktop⇄cloud sync (which upserts on the primary key) hits the secondary
+ * unique constraint and the row fails to merge / XP diverges. Hashing the
+ * natural key makes both devices converge on one row.
+ */
+function stableUuid(...parts: string[]): string {
+  const h = createHash("sha1").update(parts.join("|")).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
 function yesterdayKey(today: string): string {
   const d = new Date(`${today}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - 1);
@@ -64,7 +77,12 @@ function yesterdayKey(today: string): string {
 async function findOrCreatePlayer(userId: string) {
   const [existing] = await db.select().from(playerProfile).where(eq(playerProfile.userId, userId)).limit(1);
   if (existing) return existing;
-  const [created] = await db.insert(playerProfile).values({ userId }).onConflictDoNothing().returning();
+  // Deterministic id = userId so both devices converge on one row under sync.
+  const [created] = await db
+    .insert(playerProfile)
+    .values({ id: userId, userId })
+    .onConflictDoNothing()
+    .returning();
   if (created) return created;
   const [row] = await db.select().from(playerProfile).where(eq(playerProfile.userId, userId)).limit(1);
   return row;
@@ -85,7 +103,9 @@ async function findOrCreateSkill(
   if (existing) return existing;
   const [created] = await db
     .insert(skills)
-    .values({ userId, name, slug, domain, emoji })
+    // Deterministic id from the natural key so the same skill is one row across
+    // devices (sync upserts on pk; random ids would collide on the unique key).
+    .values({ id: stableUuid(userId, domain, slug), userId, name, slug, domain, emoji })
     .onConflictDoNothing({ target: [skills.userId, skills.domain, skills.slug] })
     .returning();
   if (created) return created;
@@ -226,13 +246,20 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
     let skillLeveledUp = false;
     let evolvedTo: string | null = null;
     if (skill) {
-      const oldLevel = skillLevelFromXp(skill.xp).level;
-      const newXp = skill.xp + amount;
-      const newLevel = skillLevelFromXp(newXp).level;
-      await db
+      // Atomic increment (returning the new total) so rapid concurrent grades of
+      // the same skill can't lose XP via read-modify-write.
+      const [srow] = await db
         .update(skills)
-        .set({ xp: newXp, level: newLevel, updatedAt: new Date() })
-        .where(eq(skills.id, skill.id));
+        .set({ xp: sql`${skills.xp} + ${amount}`, updatedAt: new Date() })
+        .where(eq(skills.id, skill.id))
+        .returning({ xp: skills.xp });
+      const newXp = srow?.xp ?? skill.xp + amount;
+      const oldLevel = skillLevelFromXp(Math.max(0, newXp - amount)).level;
+      const newLevel = skillLevelFromXp(newXp).level;
+      // level is a cache (state.ts recomputes from xp) — only write when it moves.
+      if (newLevel !== oldLevel) {
+        await db.update(skills).set({ level: newLevel }).where(eq(skills.id, skill.id));
+      }
       skillLeveledUp = newLevel > oldLevel;
       evolvedTo = evolved(oldLevel, newLevel)?.name ?? null;
       skillResult = { name: skill.name, emoji: skill.emoji, level: newLevel, tier: tierForLevel(newLevel).name };
@@ -253,7 +280,8 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
     const counterKey = SOURCE_COUNTER[opts.source];
     if (counterKey) counters[counterKey] = (counters[counterKey] ?? 0) + 1;
 
-    const oldPlayerLevel = playerLevelFromXp(player.totalXp).level;
+    // Estimated values for the achievement snapshot (authoritative total is
+    // read back from the atomic update below).
     const newTotal = player.totalXp + amount;
     const newPlayerLevel = playerLevelFromXp(newTotal).level;
 
@@ -277,28 +305,38 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
       ? [...(player.unlocked ?? []), ...fresh.map((key) => ({ key, at: new Date().toISOString() }))]
       : player.unlocked ?? [];
 
-    await db
+    // Atomic total/daily increments (returning the new total) so overlapping
+    // awards can't lose XP. daily resets in-statement when the day rolls over.
+    const [prow] = await db
       .update(playerProfile)
       .set({
-        totalXp: newTotal,
-        level: newPlayerLevel,
+        totalXp: sql`${playerProfile.totalXp} + ${amount}`,
         streakDays,
         lastActiveDateKey: today,
-        dailyXp: dailyBaseline + amount,
+        dailyXp: sql`case when ${playerProfile.dailyDateKey} = ${today} then ${playerProfile.dailyXp} + ${amount} else ${amount} end`,
         dailyDateKey: today,
         counters,
         unlocked,
         updatedAt: new Date(),
       })
-      .where(eq(playerProfile.userId, userId));
+      .where(eq(playerProfile.userId, userId))
+      .returning({ totalXp: playerProfile.totalXp });
+
+    // Authoritative level from the DB-truth total; level column is a cache.
+    const authTotal = prow?.totalXp ?? newTotal;
+    const authNewLevel = playerLevelFromXp(authTotal).level;
+    const authOldLevel = playerLevelFromXp(Math.max(0, authTotal - amount)).level;
+    if (authNewLevel !== authOldLevel) {
+      await db.update(playerProfile).set({ level: authNewLevel }).where(eq(playerProfile.userId, userId));
+    }
 
     return {
       awarded: amount,
       skill: skillResult,
       skillLeveledUp,
       evolvedTo,
-      playerLevel: newPlayerLevel,
-      playerLeveledUp: newPlayerLevel > oldPlayerLevel,
+      playerLevel: authNewLevel,
+      playerLeveledUp: authNewLevel > authOldLevel,
       newAchievements: fresh
         .map((key) => achievementByKey(key))
         .filter((a): a is NonNullable<typeof a> => !!a)

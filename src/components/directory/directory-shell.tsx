@@ -266,12 +266,20 @@ export function DirectoryShell({
   const canRename = !!activeFolder && activeFolder !== "unsorted" && activeTagIds.length === 0;
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
+  // Escape unmounts the input which fires onBlur → commit; this ref makes the
+  // resulting commit a no-op so Escape truly cancels.
+  const renameCancelled = useRef(false);
   function startRename() {
+    renameCancelled.current = false;
     setRenameValue(folderName);
     setRenaming(true);
   }
   function commitRename() {
     setRenaming(false);
+    if (renameCancelled.current) {
+      renameCancelled.current = false;
+      return;
+    }
     const name = renameValue.trim();
     if (!canRename || !activeFolder || !name || name === folderName) return;
     startTransition(async () => {
@@ -312,7 +320,7 @@ export function DirectoryShell({
                 onBlur={commitRename}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") { e.preventDefault(); commitRename(); }
-                  if (e.key === "Escape") setRenaming(false);
+                  if (e.key === "Escape") { renameCancelled.current = true; setRenaming(false); }
                 }}
                 className="editorial-display m-0 min-w-0 flex-1 border-b border-primary bg-transparent outline-none"
                 style={{ fontSize: "1.35rem", letterSpacing: "-0.018em" }}

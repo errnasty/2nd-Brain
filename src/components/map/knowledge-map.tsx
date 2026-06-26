@@ -406,7 +406,10 @@ export function KnowledgeMap() {
               // Paint an explicit circle so clicks land on the node itself.
               nodePointerAreaPaint={(node: object, color: string, ctx: CanvasRenderingContext2D) => {
                 const n = node as MapNode;
-                const radius = nodeRadiusFor(n, degreeMap[n.id] ?? 0) + 3;
+                // Match react-force-graph's circle radius (sqrt(val) * nodeRelSize,
+                // default 4) so the whole visible node is clickable, + a little pad.
+                const val = nodeRadiusFor(n, degreeMap[n.id] ?? 0);
+                const radius = Math.sqrt(Math.max(0, val)) * 4 + 3;
                 ctx.fillStyle = color;
                 ctx.beginPath();
                 ctx.arc(n.x ?? 0, n.y ?? 0, radius, 0, 2 * Math.PI, false);
