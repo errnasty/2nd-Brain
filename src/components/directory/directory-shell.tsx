@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Plus, Upload } from "lucide-react";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Pencil, Plus, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -18,6 +18,7 @@ import {
   createNoteAction,
   fetchDirectoryItemByIdAction,
   loadMoreDirectoryItemsAction,
+  renameDirectoryFolderAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
 import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
@@ -261,6 +262,25 @@ export function DirectoryShell({
         ? "Folder pipeline"
         : "Your knowledge library";
 
+  // Inline folder rename from the header (real folders only).
+  const canRename = !!activeFolder && activeFolder !== "unsorted" && activeTagIds.length === 0;
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  function startRename() {
+    setRenameValue(folderName);
+    setRenaming(true);
+  }
+  function commitRename() {
+    setRenaming(false);
+    const name = renameValue.trim();
+    if (!canRename || !activeFolder || !name || name === folderName) return;
+    startTransition(async () => {
+      const r = await renameDirectoryFolderAction(activeFolder, name);
+      if (r.ok) router.refresh();
+      else toast.error(r.error);
+    });
+  }
+
   return (
     <>
       <section
@@ -284,13 +304,41 @@ export function DirectoryShell({
             <span>Directory · {headerMeta}</span>
           </div>
           <div className="flex items-baseline justify-between gap-3">
-            <h2
-              className="editorial-display m-0 truncate"
-              style={{ fontSize: "1.35rem", letterSpacing: "-0.018em" }}
-            >
-              {folderName}
-            </h2>
-            <span className="font-mono text-[10px] tabular-nums" style={{ color: "hsl(var(--brand))" }}>
+            {renaming ? (
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commitRename(); }
+                  if (e.key === "Escape") setRenaming(false);
+                }}
+                className="editorial-display m-0 min-w-0 flex-1 border-b border-primary bg-transparent outline-none"
+                style={{ fontSize: "1.35rem", letterSpacing: "-0.018em" }}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={canRename ? startRename : undefined}
+                title={canRename ? "Rename folder" : undefined}
+                className={cn(
+                  "group/title flex min-w-0 items-baseline gap-1.5 text-left",
+                  canRename ? "cursor-text" : "cursor-default",
+                )}
+              >
+                <h2
+                  className="editorial-display m-0 truncate"
+                  style={{ fontSize: "1.35rem", letterSpacing: "-0.018em" }}
+                >
+                  {folderName}
+                </h2>
+                {canRename && (
+                  <Pencil className="h-3 w-3 shrink-0 self-center text-muted-foreground opacity-0 transition-opacity group-hover/title:opacity-100" />
+                )}
+              </button>
+            )}
+            <span className="shrink-0 font-mono text-[10px] tabular-nums" style={{ color: "hsl(var(--brand))" }}>
               {countLabel} items
             </span>
           </div>

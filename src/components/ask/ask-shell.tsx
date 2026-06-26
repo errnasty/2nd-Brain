@@ -9,6 +9,7 @@ import {
   Check,
   CalendarDays,
   ChevronDown,
+  Copy,
   Cpu,
   FileText,
   Globe,
@@ -616,6 +617,35 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
+/** Copy an answer + a numbered footnote block of its sources to the clipboard. */
+function CopyMarkdownButton({ message }: { message: Message }) {
+  const [copied, setCopied] = useState(false);
+  function copy() {
+    let md = message.content ?? "";
+    const foot: string[] = [];
+    if (message.sources?.length) for (const s of message.sources) foot.push(`[${s.n}] ${s.title}`);
+    if (message.webSources?.length) for (const s of message.webSources) foot.push(`- ${s.title} — ${s.url}`);
+    if (foot.length) md += `\n\n## Sources\n${foot.join("\n")}`;
+    navigator.clipboard
+      ?.writeText(md)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {});
+  }
+  return (
+    <button
+      onClick={copy}
+      title="Copy as Markdown"
+      className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 const MessageBubble = memo(function MessageBubble({
   message,
   onOpenSource,
@@ -668,13 +698,16 @@ const MessageBubble = memo(function MessageBubble({
   }
   return (
     <div className="space-y-3">
-      <div className="editorial-eyebrow-brand inline-flex items-center gap-2">
-        <Sparkles className="h-3 w-3" /> § Answer
-        {message.sources && message.sources.length > 0 && (
-          <span className="text-muted-foreground" style={{ letterSpacing: 0, textTransform: "none" }}>
-            <span className="opacity-50">·</span> grounded in {message.sources.length} {message.sources.length === 1 ? "source" : "sources"}
-          </span>
-        )}
+      <div className="flex items-center justify-between gap-2">
+        <div className="editorial-eyebrow-brand inline-flex items-center gap-2">
+          <Sparkles className="h-3 w-3" /> § Answer
+          {message.sources && message.sources.length > 0 && (
+            <span className="text-muted-foreground" style={{ letterSpacing: 0, textTransform: "none" }}>
+              <span className="opacity-50">·</span> grounded in {message.sources.length} {message.sources.length === 1 ? "source" : "sources"}
+            </span>
+          )}
+        </div>
+        {message.content && <CopyMarkdownButton message={message} />}
       </div>
       <div className="prose-reader max-w-[70ch] text-[15px] leading-[1.7]">
         {message.content ? (

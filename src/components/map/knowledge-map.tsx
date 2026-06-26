@@ -3,7 +3,8 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronRight, Loader2, Network, X } from "lucide-react";
+import { useTheme } from "next-themes";
+import { ChevronRight, Loader2, Network, Search, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -40,7 +41,12 @@ type Detail = {
 
 // Warm brass-and-parchment graph palette so the map sits in the same world as
 // the rest of the app instead of looking like a different product.
-const COLORS = {
+type Palette = {
+  folder: string; tag: string; article: string; document: string; note: string;
+  link: string; folderLink: string; tagLink: string; halo: string;
+};
+
+const COLORS: Palette = {
   folder: "#A86223", // brass
   tag: "#C57A35",    // lighter brass
   article: "#4A4640", // ink
@@ -49,18 +55,32 @@ const COLORS = {
   link: "rgba(168,98,35,0.85)",
   folderLink: "rgba(168,98,35,0.55)",
   tagLink: "rgba(120,114,103,0.45)",
+  halo: "rgba(250,246,238,0.92)", // parchment halo behind labels (light mode)
 };
 
-function nodeColorFor(node: MapNode): string {
-  if (node.kind === "folder") return COLORS.folder;
-  if (node.kind === "tag") return COLORS.tag;
+// Dark mode: lift node/label tones off the charcoal background, raise edge alpha.
+const COLORS_DARK: Palette = {
+  folder: "#D9923F",
+  tag: "#E0A45C",
+  article: "#CFC8BC",
+  document: "#FAF6EE",
+  note: "#9A938A",
+  link: "rgba(217,146,63,0.95)",
+  folderLink: "rgba(217,146,63,0.6)",
+  tagLink: "rgba(180,172,160,0.4)",
+  halo: "rgba(20,18,16,0.92)", // dark halo so light labels stay legible
+};
+
+function nodeColorFor(node: MapNode, c: Palette = COLORS): string {
+  if (node.kind === "folder") return c.folder;
+  if (node.kind === "tag") return c.tag;
   switch (node.itemKind) {
     case "saved_article":
-      return COLORS.article;
+      return c.article;
     case "uploaded_document":
-      return COLORS.document;
+      return c.document;
     default:
-      return COLORS.note;
+      return c.note;
   }
 }
 function nodeRadiusFor(node: MapNode, degree = 0): number {
@@ -73,6 +93,9 @@ type ForceGraphHandle = any;
 
 export function KnowledgeMap() {
   const router = useRouter();
+  const { resolvedTheme } = useTheme();
+  const palette = resolvedTheme === "dark" ? COLORS_DARK : COLORS;
+  const [query, setQuery] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<ForceGraphHandle>(null);
   const [data, setData] = useState<{
@@ -197,7 +220,25 @@ export function KnowledgeMap() {
     return map;
   }, [data]);
 
-  const itemNodeColor = useCallback((n: object) => nodeColorFor(n as MapNode), []);
+  // Search filter: when a query is set, show only matching nodes + their
+  // immediate neighbors. null = everything visible.
+  const visibleIds = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || !data) return null as Set<string> | null;
+    const matches = new Set(
+      data.nodes.filter((n) => n.label.toLowerCase().includes(q)).map((n) => n.id),
+    );
+    const allow = new Set(matches);
+    for (const l of data.links) {
+      const s = typeof l.source === "string" ? l.source : (l.source as MapNode).id;
+      const t = typeof l.target === "string" ? l.target : (l.target as MapNode).id;
+      if (matches.has(s)) allow.add(t);
+      if (matches.has(t)) allow.add(s);
+    }
+    return allow;
+  }, [query, data]);
+
+  const itemNodeColor = useCallback((n: object) => nodeColorFor(n as MapNode, palette), [palette]);
   const itemNodeSize = useCallback(
     (n: object) => nodeRadiusFor(n as MapNode, degreeMap[(n as MapNode).id] ?? 0),
     [degreeMap],
@@ -232,13 +273,32 @@ export function KnowledgeMap() {
             </span>
           )}
         </div>
-        <div className="flex items-baseline justify-between gap-3">
+        <div className="flex items-center justify-between gap-3">
           <h1
             className="editorial-display m-0"
             style={{ fontSize: "clamp(1.5rem, 2.8vw, 1.875rem)" }}
           >
             {centerId ? "Local graph" : "Knowledge map"}
           </h1>
+          <div className="flex items-center gap-3">
+            <div className="relative hidden sm:block">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Filter nodes…"
+                className="h-8 w-44 rounded-md border border-border bg-background pl-8 pr-7 text-[13px] outline-none focus:border-primary"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  title="Clear"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           {centerId && (
             <button
               onClick={() => setCenterId(null)}
@@ -248,6 +308,7 @@ export function KnowledgeMap() {
               ← Exit local graph
             </button>
           )}
+          </div>
         </div>
       </header>
 
@@ -283,11 +344,18 @@ export function KnowledgeMap() {
               nodeColor={itemNodeColor}
               nodeVal={itemNodeSize}
               nodeLabel={nodeLabel}
+              nodeVisibility={(n: object) => !visibleIds || visibleIds.has((n as MapNode).id)}
+              linkVisibility={(l: object) => {
+                if (!visibleIds) return true;
+                const s = typeof (l as MapLink).source === "string" ? (l as MapLink).source : ((l as MapLink).source as MapNode).id;
+                const t = typeof (l as MapLink).target === "string" ? (l as MapLink).target : ((l as MapLink).target as MapNode).id;
+                return visibleIds.has(s as string) && visibleIds.has(t as string);
+              }}
               linkColor={(l: object) => {
                 const k = (l as MapLink).kind;
-                if (k === "link") return COLORS.link;
-                if (k === "folder") return COLORS.folderLink;
-                return COLORS.tagLink;
+                if (k === "link") return palette.link;
+                if (k === "folder") return palette.folderLink;
+                return palette.tagLink;
               }}
               linkWidth={(l: object) => {
                 const k = (l as MapLink).kind;
@@ -327,10 +395,10 @@ export function KnowledgeMap() {
                 const y = (n.y ?? 0) + radius + 3 / globalScale;
                 // Parchment halo behind text for contrast.
                 ctx.lineWidth = 3.5 / globalScale;
-                ctx.strokeStyle = "rgba(250,246,238,0.92)";
+                ctx.strokeStyle = palette.halo;
                 ctx.lineJoin = "round";
                 ctx.strokeText(label, x, y);
-                ctx.fillStyle = nodeColorFor(n);
+                ctx.fillStyle = nodeColorFor(n, palette);
                 ctx.fillText(label, x, y);
               }}
             />
@@ -340,11 +408,11 @@ export function KnowledgeMap() {
           <div className="absolute bottom-4 left-4 rounded-lg border border-border bg-card/95 px-3 py-2.5 backdrop-blur">
             <div className="mb-1.5 editorial-eyebrow-brand">§ Legend</div>
             <div className="space-y-0.5 text-[11px]">
-              <LegendDot color={COLORS.folder} label="Folder" />
-              <LegendDot color={COLORS.tag} label="Tag" />
-              <LegendDot color={COLORS.article} label="Saved article" />
-              <LegendDot color={COLORS.document} label="Uploaded document" />
-              <LegendDot color={COLORS.note} label="User note" />
+              <LegendDot color={palette.folder} label="Folder" />
+              <LegendDot color={palette.tag} label="Tag" />
+              <LegendDot color={palette.article} label="Saved article" />
+              <LegendDot color={palette.document} label="Uploaded document" />
+              <LegendDot color={palette.note} label="User note" />
               <LegendDot color="hsl(var(--brand))" label="Wikilink (animated)" />
             </div>
             {data?.truncated && (
