@@ -98,7 +98,7 @@ Identify any articles that appear to be clickbait, standard PR announcements, hi
 
 Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
 
-export function DailyBrief() {
+export function DailyBrief({ name }: { name?: string }) {
   const router = useRouter();
   const [content, setContent] = useState("");
   const [sources, setSources] = useState<BriefSource[]>([]);
@@ -468,7 +468,7 @@ export function DailyBrief() {
           className="editorial-display m-0"
           style={{ fontSize: "clamp(2.25rem, 4.6vw, 3.5rem)" }}
         >
-          {greeting}.
+          {greeting}{name ? `, ${name}` : ""}.
         </h1>
         <div className="not-prose mt-3.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />

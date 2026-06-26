@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { BarChart3, Brain, CalendarDays, CheckSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { localKey, utcKey } from "@/lib/study/calendar";
 import { StatsOverview } from "./stats-overview";
 import { CalendarView } from "./calendar-view";
 import { TasksView } from "@/components/tasks/tasks-view";
@@ -51,6 +52,12 @@ export function StudyShell({
     setTab(defaultTab);
   }, [defaultTab]);
 
+  // Due-today task count for the Tasks tab badge (overdue + due today).
+  const todayKey = localKey(new Date());
+  const taskDue = tasks.filter(
+    (t) => !t.done && t.dueDate && utcKey(new Date(t.dueDate)) <= todayKey,
+  ).length;
+
   function select(next: StudyTab) {
     setTab(next);
     const url = new URL(window.location.href);
@@ -65,8 +72,13 @@ export function StudyShell({
       <div className="flex items-center gap-1 border-b border-border px-3 py-2.5">
         {TABS.map((t) => {
           const active = tab === t.id;
-          // Map duecount badge to Review only
-          const badge = t.id === "review" && dueCount > 0 ? dueCount : undefined;
+          // Brass badges: due flashcards on Review, due tasks on Tasks.
+          const badge =
+            t.id === "review"
+              ? dueCount > 0 ? dueCount : undefined
+              : t.id === "tasks"
+                ? taskDue > 0 ? taskDue : undefined
+                : undefined;
           return (
             <button
               key={t.id}

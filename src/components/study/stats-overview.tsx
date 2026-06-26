@@ -18,6 +18,16 @@ export function StatsOverview({ stats, game }: { stats: StudyStats; game: GameSt
   const now = new Date();
   const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
 
+  const baseHeadline =
+    stats.cardsReviewedWeek > 0
+      ? `${stats.cardsReviewedWeek} reviews this week.`
+      : stats.dueToday > 0
+        ? `${stats.dueToday} cards waiting.`
+        : "Caught up on review.";
+  // A 7-day+ streak leads — it's the most motivating signal.
+  const streak = game?.player.streakDays ?? 0;
+  const headline = streak >= 7 ? `${streak}-day streak. ${baseHeadline}` : baseHeadline;
+
   return (
     <div className="mx-auto max-w-3xl px-6 py-8">
       {/* ── Editorial masthead ──────────────────────────────────── */}
@@ -30,11 +40,7 @@ export function StatsOverview({ stats, game }: { stats: StudyStats; game: GameSt
           className="editorial-display m-0"
           style={{ fontSize: "clamp(1.875rem, 3.6vw, 2.625rem)" }}
         >
-          {stats.cardsReviewedWeek > 0
-            ? `${stats.cardsReviewedWeek} reviews this week.`
-            : stats.dueToday > 0
-              ? `${stats.dueToday} cards waiting.`
-              : "Caught up on review."}
+          {headline}
         </h1>
         {stats.dueToday > 0 && stats.cardsReviewedWeek > 0 && (
           <p className="mt-3 max-w-[60ch] text-[15px] italic leading-snug text-muted-foreground">
