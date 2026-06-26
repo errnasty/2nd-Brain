@@ -287,7 +287,7 @@ export function CommandPalette() {
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="mb-1">
-      <div className="px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="editorial-eyebrow-brand px-2 py-1">§ {label}</div>
       {children}
     </div>
   );

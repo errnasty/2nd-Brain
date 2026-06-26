@@ -94,26 +94,27 @@ export function ReviewView({
 
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col">
-      <div className="flex items-center justify-between border-b border-border px-6 py-4">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-6 py-4">
         <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-            <Brain className="h-5 w-5" /> Review
+          <div className="editorial-eyebrow mb-1">{scopeLabel ? `Review · ${scopeLabel}` : "Study · Review"}</div>
+          <h1 className="editorial-display m-0 flex items-center gap-2" style={{ fontSize: "clamp(1.5rem, 3vw, 2rem)" }}>
+            <Brain className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--brand))" }} /> Review
           </h1>
-          {scopeLabel && (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">Studying: {scopeLabel}</p>
-          )}
         </div>
-        <div className="shrink-0 text-xs text-muted-foreground">{remainingDue} due</div>
+        <span
+          className="shrink-0 rounded-full px-2.5 py-1 font-mono text-[11px] tabular-nums"
+          style={{ color: "hsl(var(--brand))", background: "hsl(var(--brand) / 0.08)" }}
+        >
+          {remainingDue} due
+        </span>
       </div>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-8">
         <div className="w-full rounded-xl border border-border bg-card p-6 shadow-sm">
           {current.itemTitle && (
-            <div className="mb-3 text-[11px] uppercase tracking-wider text-muted-foreground">
-              {current.itemTitle}
-            </div>
+            <div className="editorial-eyebrow mb-3">{current.itemTitle}</div>
           )}
-          <div className="text-lg font-medium leading-snug">{current.question}</div>
+          <div className="editorial-display text-xl font-medium leading-snug">{current.question}</div>
           {showAnswer && (
             <div className="mt-4 border-t border-border pt-4 text-[15px] leading-relaxed text-foreground/90">
               {current.answer}
@@ -160,8 +161,8 @@ function Empty({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
       <Brain className="h-10 w-10 text-muted-foreground/40" />
-      <div className="text-lg font-medium">{title}</div>
-      <p className="max-w-sm text-sm text-muted-foreground">{body}</p>
+      <div className="editorial-display text-2xl">{title}</div>
+      <p className="max-w-sm text-sm italic text-muted-foreground">{body}</p>
       {action}
     </div>
   );

@@ -84,8 +84,8 @@ export function QuickCapture() {
           onKeyDown={onKeyDown}
           className="fixed left-[50%] top-[15%] z-50 w-full max-w-xl translate-x-[-50%] overflow-hidden rounded-xl border border-border bg-background shadow-lg duration-200 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
-          <DialogPrimitive.Title className="flex items-center gap-2 border-b border-border px-4 py-3 text-sm font-semibold">
-            <NotebookPen className="h-4 w-4" /> Quick capture
+          <DialogPrimitive.Title className="editorial-eyebrow-brand flex items-center gap-2 border-b border-border px-4 py-3">
+            <NotebookPen className="h-3.5 w-3.5" /> § Quick capture
           </DialogPrimitive.Title>
           <div className="space-y-2 p-3">
             <Input

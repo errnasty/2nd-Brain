@@ -80,11 +80,12 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
 
   return (
     <div className="mx-auto max-w-2xl px-6 py-6">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2 text-sm font-semibold">
+      <div className="editorial-eyebrow mb-1.5">Study · Calendar</div>
+      <div className="mb-4 flex items-end justify-between gap-3 editorial-rule pb-3">
+        <h1 className="editorial-display m-0 flex items-center gap-2" style={{ fontSize: "clamp(1.5rem, 3vw, 2rem)" }}>
           {MONTH_NAMES[month]} {year}
-          {loadingMonth && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />}
-        </div>
+          {loadingMonth && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        </h1>
         <div className="flex items-center gap-1">
           <button onClick={() => go(-1)} className="rounded p-1 hover:bg-accent" title="Previous month">
             <ChevronLeft className="h-4 w-4" />
@@ -104,7 +105,7 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
         </div>
       )}
 
-      <div className="grid grid-cols-7 gap-1 text-center text-[10px] uppercase tracking-wider text-muted-foreground">
+      <div className="grid grid-cols-7 gap-1 text-center font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
         {WEEKDAY_LABELS.map((d) => (
           <div key={d} className="py-1">{d}</div>
         ))}
@@ -121,16 +122,16 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
               className={cn(
                 "flex aspect-square flex-col items-center justify-start rounded-md border p-1 text-xs transition-colors",
                 day.inMonth ? "border-border" : "border-transparent text-muted-foreground/40",
-                day.isToday && "ring-1 ring-primary",
+                day.isToday && "ring-1 ring-brand",
                 selected === day.key && "bg-accent",
               )}
             >
-              <span className={cn("tabular-nums", day.isToday && "font-semibold text-primary")}>
+              <span className={cn("tabular-nums", day.isToday && "font-semibold text-brand")}>
                 {day.date.getDate()}
               </span>
               <span className="mt-auto flex gap-0.5">
                 {tasks > 0 && <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />}
-                {cards > 0 && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
+                {cards > 0 && <span className="h-1.5 w-1.5 rounded-full" style={{ background: "hsl(var(--brand))" }} />}
               </span>
             </button>
           );
@@ -138,12 +139,13 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
       </div>
 
       {/* Selected day detail */}
-      <div className="mt-5">
-        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {selected}
+      <div className="mt-6">
+        <div className="editorial-section-row mb-2">
+          <span className="editorial-eyebrow-brand">§ {selected}</span>
+          <span className="editorial-section-rule" />
         </div>
         {selectedEntries.length === 0 ? (
-          <div className="text-sm text-muted-foreground">Nothing scheduled.</div>
+          <div className="text-sm italic text-muted-foreground">Nothing scheduled.</div>
         ) : (
           <ul className="space-y-1">
             {selectedEntries.map((e) => (
@@ -155,7 +157,7 @@ export function CalendarView({ initial }: { initial: CalendarEntry[] }) {
                   {e.kind === "task" ? (
                     <CheckSquare className="h-3.5 w-3.5 shrink-0 text-sky-500" />
                   ) : (
-                    <Brain className="h-3.5 w-3.5 shrink-0 text-primary" />
+                    <Brain className="h-3.5 w-3.5 shrink-0" style={{ color: "hsl(var(--brand))" }} />
                   )}
                   <span className="truncate">{e.text}</span>
                 </button>

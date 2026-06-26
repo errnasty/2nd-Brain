@@ -58,10 +58,15 @@ function SignupForm() {
 
   return (
     <div className="grid min-h-dvh place-items-center bg-background p-6">
-      <Card className="w-full max-w-sm">
+      <div className="w-full max-w-sm">
+        <div className="mb-5 text-center">
+          <div className="editorial-eyebrow justify-center">Vol. III · Personal Edition</div>
+          <div className="editorial-display mt-1 text-2xl font-semibold">Second Brain</div>
+        </div>
+      <Card className="w-full">
         <CardHeader>
-          <CardTitle>Create account</CardTitle>
-          <CardDescription>Start building your Second Brain.</CardDescription>
+          <CardTitle className="editorial-display text-2xl">Create account</CardTitle>
+          <CardDescription className="italic">Start building your Second Brain.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -113,6 +118,7 @@ function SignupForm() {
           </p>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

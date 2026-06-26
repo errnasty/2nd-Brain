@@ -91,7 +91,7 @@ function BoardColumn({
   const { setNodeRef, isOver } = useDroppable({ id: `status:${status}` });
   return (
     <div className="flex w-72 shrink-0 flex-col rounded-lg bg-muted/40">
-      <div className="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center justify-between px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
         <span>{label}</span>
         <span className="tabular-nums">{items.length}</span>
       </div>

@@ -84,34 +84,41 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
 
   return (
     <div className="mx-auto flex h-full max-w-2xl flex-col">
-      <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-            <CheckSquare className="h-5 w-5" /> Tasks
+      <div className="border-b border-border px-6 py-4">
+        <div className="editorial-eyebrow mb-1.5 flex items-baseline justify-between gap-3">
+          <span>Study · Tasks</span>
+          <span style={{ color: "hsl(var(--brand))" }}>
+            {openCount} open
+          </span>
+        </div>
+        <div className="flex items-end justify-between gap-3">
+          <h1 className="editorial-display m-0 flex items-center gap-2" style={{ fontSize: "clamp(1.5rem, 3vw, 2rem)" }}>
+            <CheckSquare className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--brand))" }} /> Tasks
           </h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {openCount} open · pulled from checkboxes in your Directory notes
-          </p>
+          <div className="flex items-center rounded-md border border-border p-0.5 font-mono text-[11px] uppercase tracking-wide">
+            {(["today", "open", "done", "all"] as Filter[]).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                // "today" shows overdue + today, so label it "Due" — calling it
+                // "Today" while listing past-due items read as a mismatch.
+                title={f === "today" ? "Due today or overdue" : undefined}
+                className={cn(
+                  "rounded px-2.5 py-1 transition-colors",
+                  filter === f
+                    ? "font-semibold text-brand"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+                style={filter === f ? { background: "hsl(var(--brand) / 0.08)" } : undefined}
+              >
+                {f === "today" ? "Due" : f}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex items-center rounded-md border border-border p-0.5 text-xs">
-          {(["today", "open", "done", "all"] as Filter[]).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              // "today" shows overdue + today, so label it "Due" — calling it
-              // "Today" while listing past-due items read as a mismatch.
-              title={f === "today" ? "Due today or overdue" : undefined}
-              className={cn(
-                "rounded px-2.5 py-1 capitalize transition-colors",
-                filter === f
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {f === "today" ? "Due" : f}
-            </button>
-          ))}
-        </div>
+        <p className="mt-2 text-xs italic text-muted-foreground">
+          pulled from checkboxes in your Directory notes
+        </p>
       </div>
 
       <div className="flex-1 overflow-y-auto px-6 py-4">
@@ -130,13 +137,18 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
             if (!rows || rows.length === 0) return null;
             return (
               <div key={bucket} className="mb-6">
-                <div
-                  className={cn(
-                    "mb-2 text-[10px] font-semibold uppercase tracking-wider",
-                    bucket === "Overdue" ? "text-destructive" : "text-muted-foreground",
-                  )}
-                >
-                  {bucket} · {rows.length}
+                <div className="editorial-section-row mb-2">
+                  <span
+                    className={cn(
+                      "font-mono text-[11px] font-semibold uppercase tracking-[0.12em]",
+                      bucket === "Overdue" ? "text-destructive" : "text-muted-foreground",
+                    )}
+                    style={bucket !== "Overdue" ? { color: "hsl(var(--brand))" } : undefined}
+                  >
+                    § {bucket}
+                  </span>
+                  <span className="editorial-section-rule" />
+                  <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{rows.length}</span>
                 </div>
                 <ul className="space-y-0.5">
                   {rows.map((t) => (
@@ -158,7 +170,7 @@ export function TasksView({ tasks }: { tasks: TaskRow[] }) {
                         </div>
                         <button
                           onClick={() => router.push(`/directory?item=${t.itemId}`)}
-                          className="mt-0.5 truncate text-xs text-muted-foreground hover:text-foreground hover:underline"
+                          className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground hover:text-foreground hover:underline"
                         >
                           {t.itemTitle}
                           {t.dueDate && (

@@ -10,9 +10,12 @@ export default async function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10">
-        <header className="mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{user.email}</p>
+        <header className="editorial-rule mb-8 pb-4">
+          <div className="editorial-eyebrow mb-2">Account · Preferences</div>
+          <h1 className="editorial-display m-0" style={{ fontSize: "clamp(1.875rem, 3.6vw, 2.625rem)" }}>
+            Settings
+          </h1>
+          <p className="mt-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">{user.email}</p>
         </header>
         {isDesktop ? (
           <div className="mb-4">

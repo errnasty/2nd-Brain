@@ -51,10 +51,15 @@ function LoginForm() {
 
   return (
     <div className="grid min-h-dvh place-items-center bg-background p-6">
-      <Card className="w-full max-w-sm">
+      <div className="w-full max-w-sm">
+        <div className="mb-5 text-center">
+          <div className="editorial-eyebrow justify-center">Vol. III · Personal Edition</div>
+          <div className="editorial-display mt-1 text-2xl font-semibold">Second Brain</div>
+        </div>
+      <Card className="w-full">
         <CardHeader>
-          <CardTitle>Sign in</CardTitle>
-          <CardDescription>Welcome back to your Second Brain.</CardDescription>
+          <CardTitle className="editorial-display text-2xl">Sign in</CardTitle>
+          <CardDescription className="italic">Welcome back to your Second Brain.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -102,6 +107,7 @@ function LoginForm() {
           </p>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

@@ -313,8 +313,8 @@ export function ItemViewer({
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>
-        <div className="flex flex-1 items-center gap-2 text-xs text-muted-foreground">
-          <span className="capitalize">{item.kind.replace("_", " ")}</span>
+        <div className="flex flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+          <span>{item.kind.replace("_", " ")}</span>
           <span>·</span>
           <span>{formatRelativeTime(item.updatedAt)}</span>
           {saving ? (
@@ -418,7 +418,7 @@ export function ItemViewer({
           {full && (
             <nav
               aria-label="Folder path"
-              className="not-prose mb-3 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+              className="not-prose mb-3 flex flex-wrap items-center gap-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground"
             >
               <button
                 onClick={() => router.push("/directory")}
@@ -450,11 +450,11 @@ export function ItemViewer({
 
           {/* Essence — pinned distilled summary (Second Brain "Distill"). */}
           {full?.summary && (
-            <div className="not-prose mb-5 rounded-lg border border-primary/30 bg-primary/[0.04] p-3">
+            <div className="not-prose mb-5 rounded-lg border p-3" style={{ borderColor: "hsl(var(--brand) / 0.3)", background: "hsl(var(--brand) / 0.05)" }}>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setEssenceOpen((v) => !v)}
-                  className="flex flex-1 items-center gap-1.5 text-left text-xs font-semibold uppercase tracking-wider text-primary"
+                  className="editorial-eyebrow-brand flex flex-1 items-center gap-1.5 text-left"
                 >
                   <Lightbulb className="h-3.5 w-3.5" />
                   Essence
@@ -505,11 +505,11 @@ export function ItemViewer({
                 setDirty(true);
                 editBufRef.current = { id: item.id, kind: item.kind, title: e.target.value, content };
               }}
-              className="border-0 px-0 text-2xl font-bold tracking-tight shadow-none focus-visible:ring-0"
+              className="editorial-display border-0 px-0 text-3xl font-bold tracking-tight shadow-none focus-visible:ring-0"
               placeholder="Title"
             />
           ) : (
-            <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+            <h1 className="editorial-display text-3xl font-bold tracking-tight">{title}</h1>
           )}
 
           <Separator className="my-6" />

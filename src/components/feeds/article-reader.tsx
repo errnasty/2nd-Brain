@@ -291,7 +291,7 @@ export function ArticleReader({
           <ChevronRight className="h-4 w-4" />
         </Button>
         <Separator orientation="vertical" className="mx-1 h-5" />
-        <div className="flex flex-1 items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
           {article?.feedIconUrl ? (
             <Image
               src={article.feedIconUrl}
@@ -303,7 +303,7 @@ export function ArticleReader({
             />
           ) : null}
           <span className="truncate">{article?.feedTitle ?? ""}</span>
-          {readingMinutes && <span className="hidden sm:inline">· ~{readingMinutes} min</span>}
+          {readingMinutes && <span className="hidden sm:inline">· ≈{readingMinutes} min</span>}
         </div>
         <Button
           size="icon"
@@ -366,7 +366,7 @@ export function ArticleReader({
               {/* Folder breadcrumb */}
               <nav
                 aria-label="Feed path"
-                className="not-prose mb-3 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground"
+                className="not-prose mb-3 flex flex-wrap items-center gap-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground"
               >
                 <button
                   onClick={() => router.push("/feeds")}
@@ -392,10 +392,10 @@ export function ArticleReader({
                 <span>{article.feedTitle}</span>
               </nav>
 
-              <h1>{article.title}</h1>
-              <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <h1 className="editorial-display">{article.title}</h1>
+              <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
                 {article.author && (
-                  <span className="font-medium text-foreground/75">{article.author}</span>
+                  <span className="font-medium" style={{ color: "hsl(var(--brand))" }}>{article.author}</span>
                 )}
                 {article.author && <span className="text-border">·</span>}
                 <span>{formatRelativeTime(article.publishDate)}</span>
