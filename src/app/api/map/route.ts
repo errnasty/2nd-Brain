@@ -37,9 +37,10 @@ export async function GET(req: Request) {
   const { user, error } = await getApiUser();
   if (!user) return NextResponse.json({ error: error?.message }, { status: error?.status });
 
-  // Local graph: ?center=<itemId> restricts the graph to that item's depth-1
-  // neighborhood (its folder, tags, wikilink neighbors, and tag-siblings).
-  const center = new URL(req.url).searchParams.get("center");
+  // Local graph: ?center=<itemId> restricts to that item's depth-N neighborhood.
+  const sp = new URL(req.url).searchParams;
+  const center = sp.get("center");
+  const depth = Math.max(1, Math.min(4, parseInt(sp.get("depth") ?? "1", 10) || 1));
 
   // Serve the cached full graph when available (local graphs are small + skip
   // the cache so they're always fresh).
@@ -101,26 +102,38 @@ export async function GET(req: Request) {
   // Show all folders that contain something or nest something.
   let referencedFolders = folders.filter((f) => folderConn.has(f.id) || folders.some((c) => c.parentId === f.id));
 
-  // ── Local graph: restrict to the center item's depth-1 neighborhood ──
+  // ── Local graph: BFS the center item's depth-N neighborhood ──────────
+  // Walk a unified adjacency (item↔folder, folder↔parent, tag↔item, wikilinks)
+  // out to `depth` hops so 1/2/3 expand the graph like Obsidian's local view.
   let isLocal = false;
   if (center && items.some((i) => i.id === center)) {
     isLocal = true;
-    const centerTags = new Set(allLinks.filter((l) => l.itemId === center).map((l) => l.tagId));
-    const centerItem = items.find((i) => i.id === center)!;
-    const neighborItems = new Set<string>([center]);
-    // wikilink neighbors (both directions)
-    for (const w of wikiLinks) {
-      if (w.source === center) neighborItems.add(w.target);
-      if (w.target === center) neighborItems.add(w.source);
-    }
-    // tag-siblings (items sharing any of the center's tags)
-    for (const l of allLinks) if (centerTags.has(l.tagId)) neighborItems.add(l.itemId);
-    const neighborFolders = new Set<string>();
-    if (centerItem.folderId) neighborFolders.add(centerItem.folderId);
+    const adj = new Map<string, Set<string>>();
+    const link = (a: string, b: string) => {
+      (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+      (adj.get(b) ?? adj.set(b, new Set()).get(b)!).add(a);
+    };
+    for (const it of items) if (it.folderId) link(`i:${it.id}`, `f:${it.folderId}`);
+    for (const f of folders) if (f.parentId) link(`f:${f.id}`, `f:${f.parentId}`);
+    for (const l of allLinks) link(`t:${l.tagId}`, `i:${l.itemId}`);
+    for (const w of wikiLinks) link(`i:${w.source}`, `i:${w.target}`);
 
-    referencedItems = items.filter((i) => neighborItems.has(i.id));
-    referencedTags = allTags.filter((t) => centerTags.has(t.id));
-    referencedFolders = folders.filter((f) => neighborFolders.has(f.id));
+    const reached = new Set<string>([`i:${center}`]);
+    let frontier = [`i:${center}`];
+    for (let d = 0; d < depth; d++) {
+      const next: string[] = [];
+      for (const node of frontier) {
+        for (const nb of adj.get(node) ?? []) {
+          if (!reached.has(nb)) { reached.add(nb); next.push(nb); }
+        }
+      }
+      frontier = next;
+      if (frontier.length === 0) break;
+    }
+
+    referencedItems = items.filter((i) => reached.has(`i:${i.id}`));
+    referencedTags = allTags.filter((t) => reached.has(`t:${t.id}`));
+    referencedFolders = folders.filter((f) => reached.has(`f:${f.id}`));
   }
 
   const totalReferenced = referencedItems.length + referencedTags.length + referencedFolders.length;
