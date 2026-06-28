@@ -209,7 +209,15 @@ export function KnowledgeMap() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { loadGraph(centerId, depth); }, [centerId, depth, loadGraph]);
+  // Reload on focus change; on a depth change, only reload when actually focused
+  // (depth is meaningless for the global graph, so don't rebuild/reset it).
+  const prevDepthRef = useRef(depth);
+  useEffect(() => {
+    const depthChanged = prevDepthRef.current !== depth;
+    prevDepthRef.current = depth;
+    if (depthChanged && !centerId) return;
+    loadGraph(centerId, depth);
+  }, [centerId, depth, loadGraph]);
 
   const selectNode = useCallback((node: MapNode) => {
     setSelected(node);
@@ -473,8 +481,16 @@ export function KnowledgeMap() {
   }, [selectNode]);
   const onDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const node = hitTest(e.clientX, e.clientY);
-    if (node) { node.fixed = !node.fixed; alphaRef.current = Math.max(alphaRef.current, 0.3); }
+    if (node) { node.fixed = !node.fixed; node.vx = 0; node.vy = 0; alphaRef.current = Math.max(alphaRef.current, 0.3); }
   }, [hitTest]);
+  // Clear hover highlight when the cursor leaves the canvas (otherwise the last
+  // hovered node + neighbors stay lit and everything else stays dimmed).
+  const onPointerLeave = useCallback(() => {
+    if (!pointer.current) {
+      hoveredRef.current = null;
+      if (canvasRef.current) canvasRef.current.style.cursor = "grab";
+    }
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -568,6 +584,7 @@ export function KnowledgeMap() {
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
               onPointerCancel={onPointerUp}
+              onPointerLeave={onPointerLeave}
               onDoubleClick={onDoubleClick}
             />
           )}
