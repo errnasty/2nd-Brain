@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { ChevronRight, Loader2, Network, Search, SlidersHorizontal, X } from "lucide-react";
+import { ChevronRight, Loader2, Maximize2, Minus, Network, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -99,6 +99,8 @@ export function KnowledgeMap() {
   const [repel, setRepel] = useState(11000);
   const [linkDist, setLinkDist] = useState(120);
   const [centerForce, setCenterForce] = useState(0.018);
+  const [zoomPct, setZoomPct] = useState(100);
+  const fitFnRef = useRef<(() => void) | null>(null);
 
   // Engine refs (read live by the render/physics loop — no restart on change).
   const nodesRef = useRef<SimNode[]>([]);
@@ -300,6 +302,7 @@ export function KnowledgeMap() {
       camRef.current.x = -((minX + maxX) / 2) * camRef.current.scale;
       camRef.current.y = -((minY + maxY) / 2) * camRef.current.scale;
     }
+    fitFnRef.current = fitToView;
 
     function step() {
       const a = alphaRef.current;
@@ -411,7 +414,7 @@ export function KnowledgeMap() {
 
     function frame() {
       if (alphaRef.current > MIN_ALPHA || draggingRef.current) step();
-      else if (!fittedRef.current) { fitToView(); fittedRef.current = true; }
+      else if (!fittedRef.current) { fitToView(); fittedRef.current = true; setZoomPct(Math.round(camRef.current.scale * 100)); }
       render();
       rafRef.current = requestAnimationFrame(frame);
     }
@@ -492,6 +495,21 @@ export function KnowledgeMap() {
     }
   }, []);
 
+  // Zoom controls (zoom toward canvas center; centered coords → px=py=0).
+  const applyScale = useCallback((next: number) => {
+    const cam = camRef.current;
+    const s = Math.min(4, Math.max(0.1, next));
+    cam.x = (cam.x * s) / cam.scale;
+    cam.y = (cam.y * s) / cam.scale;
+    cam.scale = s;
+    setZoomPct(Math.round(s * 100));
+  }, []);
+  const fitView = useCallback(() => {
+    fitFnRef.current?.();
+    setZoomPct(Math.round(camRef.current.scale * 100));
+  }, []);
+  const activeFilters = (hideTags ? 1 : 0) + (hideDocs ? 1 : 0) + (hideOrphans ? 1 : 0);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -503,6 +521,7 @@ export function KnowledgeMap() {
       cam.x = px - ((px - cam.x) * next) / cam.scale;
       cam.y = py - ((py - cam.y) * next) / cam.scale;
       cam.scale = next;
+      setZoomPct(Math.round(next * 100));
     }
     canvas.addEventListener("wheel", onWheel, { passive: false });
     return () => canvas.removeEventListener("wheel", onWheel);
@@ -610,6 +629,10 @@ export function KnowledgeMap() {
               <Toggle label="Hide tags" checked={hideTags} onChange={setHideTags} />
               <Toggle label="Hide attachments" checked={hideDocs} onChange={setHideDocs} />
               <Toggle label="Hide orphans" checked={hideOrphans} onChange={setHideOrphans} />
+              <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                <span>Showing</span>
+                <span className="tabular-nums">{3 - activeFilters} / 3 types</span>
+              </div>
               <Toggle label="Link arrows" checked={arrows} onChange={setArrows} />
               <div className="my-2 border-t border-border" />
               <Field label="Label fade"><Range min={0.1} max={1.2} step={0.05} value={labelScale} onChange={setLabelScale} /></Field>
@@ -633,6 +656,43 @@ export function KnowledgeMap() {
               <div className="mt-2 border-t border-border pt-1.5 font-mono text-[10px] italic text-muted-foreground">
                 {data!.truncated ? `Top ${data!.shown} of ${data!.total} · ` : ""}drag · scroll zoom · dbl-click pin
               </div>
+            </div>
+          )}
+
+          {/* Zoom controls */}
+          {hasGraph && (
+            <div className="absolute bottom-4 right-4 flex items-center gap-0.5 rounded-lg border border-border bg-card/95 p-0.5 shadow-lg backdrop-blur">
+              <button
+                onClick={() => applyScale(camRef.current.scale / 1.2)}
+                title="Zoom out"
+                aria-label="Zoom out"
+                className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={fitView}
+                title="Fit to view"
+                className="min-w-[3rem] rounded px-1 py-1 text-center font-mono text-[11px] tabular-nums text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                {zoomPct}%
+              </button>
+              <button
+                onClick={() => applyScale(camRef.current.scale * 1.2)}
+                title="Zoom in"
+                aria-label="Zoom in"
+                className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={fitView}
+                title="Fit to view"
+                aria-label="Fit to view"
+                className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
         </div>

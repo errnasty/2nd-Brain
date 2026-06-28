@@ -9,9 +9,12 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Pause,
+  Play,
   Rss,
   Sparkles,
   Star,
+  Volume2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -68,7 +71,18 @@ export function ArticleReader({
   const [loadingContent, setLoadingContent] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [queryOpen, setQueryOpen] = useState(false);
+  const [ttsState, setTtsState] = useState<"idle" | "speaking" | "paused">("idle");
+  const [ttsSupported, setTtsSupported] = useState(false);
   const [, startTransition] = useTransition();
+
+  useEffect(() => {
+    setTtsSupported(typeof window !== "undefined" && "speechSynthesis" in window);
+    return () => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   const currentIdx = useMemo(
     () => (selectedId ? orderedIds.indexOf(selectedId) : -1),
@@ -135,6 +149,38 @@ export function ArticleReader({
     });
   }
 
+  // #3 "Listen" — read the article aloud via the Web Speech API. Plain text is
+  // the title + the de-HTML'd body (falls back to the RSS excerpt).
+  const ttsText = useMemo(() => {
+    const html = content ?? article?.excerpt ?? "";
+    const body = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    if (!body) return "";
+    return article ? `${article.title}. ${body}` : body;
+  }, [content, article]);
+
+  const toggleListen = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const synth = window.speechSynthesis;
+    if (ttsState === "speaking") {
+      synth.pause();
+      setTtsState("paused");
+      return;
+    }
+    if (ttsState === "paused") {
+      synth.resume();
+      setTtsState("speaking");
+      return;
+    }
+    if (!ttsText) return;
+    synth.cancel();
+    // Cap length so a long article doesn't queue an unbounded utterance.
+    const utterance = new SpeechSynthesisUtterance(ttsText.slice(0, 30_000));
+    utterance.onend = () => setTtsState("idle");
+    utterance.onerror = () => setTtsState("idle");
+    synth.speak(utterance);
+    setTtsState("speaking");
+  }, [ttsState, ttsText]);
+
   useShortcuts(
     {
       j: () => nextId && goToArticle(nextId),
@@ -146,6 +192,7 @@ export function ArticleReader({
       m: () => toggleRead(),
       s: () => toggleStar(),
       b: () => toggleReadLater(),
+      l: () => toggleListen(),
       v: () => article && window.open(article.url, "_blank"),
       o: () => article && window.open(article.url, "_blank"),
       escape: close,
@@ -161,6 +208,10 @@ export function ArticleReader({
     setExtractError(null);
     setContent(null);
     setQueryOpen(false);
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setTtsState("idle");
 
     if (!selectedId) {
       setArticle(null);
@@ -305,6 +356,30 @@ export function ArticleReader({
           <span className="truncate">{article?.feedTitle ?? ""}</span>
           {readingMinutes && <span className="hidden sm:inline">· ≈{readingMinutes} min</span>}
         </div>
+        {ttsSupported && (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={toggleListen}
+            title={
+              ttsState === "speaking"
+                ? "Pause (l)"
+                : ttsState === "paused"
+                  ? "Resume (l)"
+                  : "Listen (l)"
+            }
+            disabled={!article || (!ttsText && ttsState === "idle")}
+            className={ttsState !== "idle" ? "text-brand" : ""}
+          >
+            {ttsState === "speaking" ? (
+              <Pause className="h-4 w-4" />
+            ) : ttsState === "paused" ? (
+              <Play className="h-4 w-4" />
+            ) : (
+              <Volume2 className="h-4 w-4" />
+            )}
+          </Button>
+        )}
         <Button
           size="icon"
           variant="ghost"

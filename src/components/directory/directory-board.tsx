@@ -89,11 +89,23 @@ function BoardColumn({
   onOpen: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `status:${status}` });
+  const avgAge = (() => {
+    if (items.length === 0) return null;
+    const now = Date.now();
+    const ms = items.reduce((s, it) => s + (now - new Date(it.updatedAt).getTime()), 0) / items.length;
+    const days = Math.floor(ms / 86_400_000);
+    if (days >= 1) return `avg ${days}d`;
+    const hrs = Math.floor(ms / 3_600_000);
+    return `avg ${Math.max(1, hrs)}h`;
+  })();
   return (
     <div className="flex w-72 shrink-0 flex-col rounded-lg bg-muted/40">
       <div className="flex items-center justify-between px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
         <span>{label}</span>
-        <span className="tabular-nums">{items.length}</span>
+        <span className="flex items-center gap-2">
+          {avgAge && <span className="font-normal normal-case opacity-70">{avgAge}</span>}
+          <span className="tabular-nums">{items.length}</span>
+        </span>
       </div>
       <div
         ref={setNodeRef}

@@ -1,8 +1,9 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
-import { Check, GitMerge, Hash, Pencil, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { Check, GitMerge, Hash, Pencil, Search, Trash2, X } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -30,7 +31,28 @@ export function TagManager({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [filterMode, setFilterMode] = useState<"all" | "active" | "orphaned">("all");
+  const [sortBy, setSortBy] = useState<"usage" | "name" | "recent">("usage");
   const [, startTransition] = useTransition();
+
+  // #16 Search + segmented filter (All/Active/Orphaned) + sort.
+  const visibleTags = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const list = tags.filter((t) => {
+      if (q && !t.name.toLowerCase().includes(q)) return false;
+      const total = usage[t.id]?.total ?? 0;
+      if (filterMode === "active") return total > 0;
+      if (filterMode === "orphaned") return total === 0;
+      return true;
+    });
+    return [...list].sort((a, b) => {
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      if (sortBy === "recent")
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      return (usage[b.id]?.total ?? 0) - (usage[a.id]?.total ?? 0);
+    });
+  }, [tags, usage, search, filterMode, sortBy]);
 
   useEffect(() => {
     setChecked((prev) => {
@@ -51,8 +73,9 @@ export function TagManager({
   }
 
   function toggleAll() {
-    if (checked.size === tags.length) setChecked(new Set());
-    else setChecked(new Set(tags.map((t) => t.id)));
+    const allSel = visibleTags.length > 0 && visibleTags.every((t) => checked.has(t.id));
+    if (allSel) setChecked(new Set());
+    else setChecked(new Set(visibleTags.map((t) => t.id)));
   }
 
   function startEdit(tag: Tag) {
@@ -154,12 +177,56 @@ export function TagManager({
 
   if (tags.length === 0) return null;
 
-  const allChecked = checked.size === tags.length;
+  const allChecked = visibleTags.length > 0 && visibleTags.every((t) => checked.has(t.id));
   const someChecked = checked.size > 0 && !allChecked;
   const maxTotal = Math.max(1, ...tags.map((t) => usage[t.id]?.total ?? 0));
+  const activeCount = tags.filter((t) => (usage[t.id]?.total ?? 0) > 0).length;
+  const orphanCount = tags.length - activeCount;
 
   return (
     <>
+      {/* #16 Search · segmented filter · sort */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[180px] flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search tags…"
+            className="h-8 pl-8 text-sm"
+          />
+        </div>
+        <div className="inline-flex rounded-md border border-border p-0.5">
+          {(["all", "active", "orphaned"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setFilterMode(m)}
+              className={cn(
+                "rounded px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide transition-colors",
+                filterMode === m
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {m === "all" ? "All" : m === "active" ? `Active · ${activeCount}` : `Orphaned · ${orphanCount}`}
+            </button>
+          ))}
+        </div>
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as "usage" | "name" | "recent")}
+          className="h-8 rounded-md border border-border bg-background px-2 text-xs outline-none"
+          aria-label="Sort tags"
+        >
+          <option value="usage">Most used</option>
+          <option value="name">A–Z</option>
+          <option value="recent">Newest</option>
+        </select>
+      </div>
+      <p className="mb-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+        Showing {visibleTags.length} of {tags.length}
+      </p>
+
       <div className="overflow-hidden rounded-lg border border-border">
         <table className="w-full text-sm">
           <thead className="border-b border-border bg-muted/30 text-left font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
@@ -179,7 +246,14 @@ export function TagManager({
             </tr>
           </thead>
           <tbody className="divide-y divide-border">
-            {tags.map((tag) => {
+            {visibleTags.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-sm italic text-muted-foreground">
+                  No tags match.
+                </td>
+              </tr>
+            )}
+            {visibleTags.map((tag) => {
               const u = usage[tag.id] ?? { total: 0, article: 0, document: 0, directoryItem: 0 };
               const isChecked = checked.has(tag.id);
               const pct = Math.round((u.total / maxTotal) * 100);

@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
+  BookmarkPlus,
   Check,
   CalendarDays,
   ChevronDown,
@@ -16,15 +17,19 @@ import {
   GraduationCap,
   Loader2,
   MessageCircle,
+  Mic,
   Newspaper,
   NotebookPen,
   RefreshCw,
   Sparkles,
   Square,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { createNoteAction } from "@/app/(app)/directory/actions";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +38,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
@@ -76,6 +82,38 @@ const SUGGESTIONS = [
   "Find anything I have on Singapore semiconductor policy",
 ];
 
+// ── Voice input (#9) — Web Speech API, browser-only, feature-detected ───
+type SpeechResultLike = { 0: { transcript: string }; isFinal: boolean };
+type SpeechEventLike = { results: ArrayLike<SpeechResultLike> };
+type SpeechRecognitionLike = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((e: SpeechEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+function getSpeechRecognition(): (new () => SpeechRecognitionLike) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  };
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
+}
+
+/** Numbered footnote block for an answer's sources (shared by Copy + Save-as-note). */
+function answerToMarkdown(message: Message): string {
+  let md = message.content ?? "";
+  const foot: string[] = [];
+  if (message.sources?.length) for (const s of message.sources) foot.push(`[${s.n}] ${s.title}`);
+  if (message.webSources?.length) for (const s of message.webSources) foot.push(`- ${s.title} — ${s.url}`);
+  if (foot.length) md += `\n\n## Sources\n${foot.join("\n")}`;
+  return md;
+}
+
 export function AskShell() {
   const router = useRouter();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -88,13 +126,49 @@ export function AskShell() {
   const [studyMode, setStudyMode] = useState(false);
   const [deadline, setDeadline] = useState("");
   const [hoursPerWeek, setHoursPerWeek] = useState("5");
+  const [listening, setListening] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const voiceBaseRef = useRef("");
+  const voiceSupported = useMemo(() => getSpeechRecognition() !== null, []);
 
   useEffect(() => {
-    return () => abortRef.current?.abort();
+    return () => {
+      abortRef.current?.abort();
+      recognitionRef.current?.stop();
+    };
   }, []);
+
+  // #9 Dictate into the composer. Toggles a one-shot recognition session and
+  // appends the live transcript onto whatever was already typed.
+  const toggleVoice = useCallback(() => {
+    if (listening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+    const Ctor = getSpeechRecognition();
+    if (!Ctor) {
+      toast.error("Voice input isn't supported in this browser");
+      return;
+    }
+    const rec = new Ctor();
+    recognitionRef.current = rec;
+    rec.lang = "en-US";
+    rec.interimResults = true;
+    rec.continuous = false;
+    voiceBaseRef.current = input ? input.trimEnd() + " " : "";
+    rec.onresult = (e) => {
+      let transcript = "";
+      for (let i = 0; i < e.results.length; i++) transcript += e.results[i][0].transcript;
+      setInput(voiceBaseRef.current + transcript);
+    };
+    rec.onerror = () => setListening(false);
+    rec.onend = () => setListening(false);
+    rec.start();
+    setListening(true);
+  }, [listening, input]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -501,6 +575,19 @@ export function AskShell() {
           >
             <GraduationCap className="h-3.5 w-3.5" /> Study plan
           </Button>
+          {voiceSupported && (
+            <Button
+              size="sm"
+              variant={listening ? "brand" : "outline"}
+              onClick={toggleVoice}
+              disabled={streaming}
+              className="h-7 gap-1.5 text-xs"
+              title={listening ? "Stop dictation" : "Dictate your question"}
+            >
+              <Mic className={cn("h-3.5 w-3.5", listening && "animate-pulse")} />
+              {listening ? "Listening…" : "Voice"}
+            </Button>
+          )}
         </div>
         {studyMode && (
           <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -617,32 +704,139 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-/** Copy an answer + a numbered footnote block of its sources to the clipboard. */
-function CopyMarkdownButton({ message }: { message: Message }) {
+const ACTION_BTN =
+  "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
+
+/**
+ * #6 Grounding-strength meter. Blends how many library sources backed the answer
+ * with their average similarity into a 5-bar readout (weak → strong). Web-only
+ * answers read as "moderate"; an answer with no citations reads as "ungrounded".
+ */
+function GroundingMeter({ message }: { message: Message }) {
+  const sources = message.sources ?? [];
+  const web = message.webSources ?? [];
+  if (sources.length === 0 && web.length === 0) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+        title="No sources were cited for this answer"
+      >
+        Ungrounded
+      </span>
+    );
+  }
+  const avgSim = sources.length
+    ? sources.reduce((s, x) => s + x.similarity, 0) / sources.length
+    : 0;
+  let filled: number;
+  if (sources.length === 0) {
+    filled = 2; // web-only
+  } else {
+    const countPart = (Math.min(sources.length, 4) / 4) * 2; // 0–2
+    const simPart = avgSim * 3; // 0–3
+    filled = Math.max(1, Math.min(5, Math.round(countPart + simPart)));
+  }
+  const label = filled >= 4 ? "Strong" : filled >= 3 ? "Moderate" : "Weak";
+  const tip =
+    sources.length > 0
+      ? `${label} grounding · ${sources.length} ${sources.length === 1 ? "source" : "sources"} · avg ${Math.round(avgSim * 100)}% match`
+      : `${label} grounding · ${web.length} web ${web.length === 1 ? "source" : "sources"}`;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+      title={tip}
+    >
+      <span className="flex items-end gap-[2px]" aria-hidden>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <span
+            key={i}
+            className="w-[3px] rounded-sm"
+            style={{
+              height: `${4 + i * 2}px`,
+              background: i < filled ? "hsl(var(--brand))" : "hsl(var(--muted-foreground) / 0.25)",
+            }}
+          />
+        ))}
+      </span>
+      {label}
+    </span>
+  );
+}
+
+/**
+ * #7 Per-message action row: copy as Markdown, save the answer as a note, and a
+ * 👍/👎 feedback toggle.
+ */
+function MessageActions({ message }: { message: Message }) {
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [vote, setVote] = useState<"up" | "down" | null>(null);
+
   function copy() {
-    let md = message.content ?? "";
-    const foot: string[] = [];
-    if (message.sources?.length) for (const s of message.sources) foot.push(`[${s.n}] ${s.title}`);
-    if (message.webSources?.length) for (const s of message.webSources) foot.push(`- ${s.title} — ${s.url}`);
-    if (foot.length) md += `\n\n## Sources\n${foot.join("\n")}`;
     navigator.clipboard
-      ?.writeText(md)
+      ?.writeText(answerToMarkdown(message))
       .then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       })
       .catch(() => {});
   }
+
+  async function saveAsNote() {
+    if (saving || saved) return;
+    setSaving(true);
+    // Title = first non-empty line of the answer, trimmed of markdown heading marks.
+    const firstLine =
+      (message.content ?? "")
+        .split("\n")
+        .map((l) => l.replace(/^#+\s*/, "").trim())
+        .find((l) => l.length > 0) ?? "Saved answer";
+    const title = firstLine.length > 80 ? `${firstLine.slice(0, 80)}…` : firstLine;
+    try {
+      const res = await createNoteAction({ title, content: answerToMarkdown(message) });
+      if (res.ok) {
+        setSaved(true);
+        toast.success("Saved to your notes");
+      } else {
+        toast.error(res.error ?? "Couldn't save note");
+      }
+    } catch {
+      toast.error("Couldn't save note");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
-    <button
-      onClick={copy}
-      title="Copy as Markdown"
-      className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-    >
-      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-      {copied ? "Copied" : "Copy"}
-    </button>
+    <div className="flex flex-wrap items-center gap-1 border-t border-border pt-2">
+      <button onClick={copy} title="Copy as Markdown" className={ACTION_BTN}>
+        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <button onClick={saveAsNote} disabled={saving || saved} title="Save this answer as a note" className={ACTION_BTN}>
+        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : saved ? <Check className="h-3 w-3" /> : <BookmarkPlus className="h-3 w-3" />}
+        {saved ? "Saved" : "Save as note"}
+      </button>
+      <div className="ml-auto flex items-center gap-0.5">
+        <button
+          onClick={() => setVote((v) => (v === "up" ? null : "up"))}
+          title="Helpful"
+          aria-pressed={vote === "up"}
+          className={cn(ACTION_BTN, vote === "up" && "text-brand")}
+        >
+          <ThumbsUp className="h-3 w-3" />
+        </button>
+        <button
+          onClick={() => setVote((v) => (v === "down" ? null : "down"))}
+          title="Not helpful"
+          aria-pressed={vote === "down"}
+          className={cn(ACTION_BTN, vote === "down" && "text-destructive")}
+        >
+          <ThumbsDown className="h-3 w-3" />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -707,7 +901,7 @@ const MessageBubble = memo(function MessageBubble({
             </span>
           )}
         </div>
-        {message.content && <CopyMarkdownButton message={message} />}
+        {message.content && <GroundingMeter message={message} />}
       </div>
       <div className="prose-reader max-w-[70ch] text-[15px] leading-[1.7]">
         {message.content ? (
@@ -763,6 +957,7 @@ const MessageBubble = memo(function MessageBubble({
           ))}
         </div>
       )}
+      {message.content && <MessageActions message={message} />}
     </div>
   );
 });
