@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
@@ -9,6 +9,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  ListChecks,
+  Loader2,
   Pause,
   Play,
   Rss,
@@ -73,7 +75,33 @@ export function ArticleReader({
   const [queryOpen, setQueryOpen] = useState(false);
   const [ttsState, setTtsState] = useState<"idle" | "speaking" | "paused">("idle");
   const [ttsSupported, setTtsSupported] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
+  const [takeawaysLoading, setTakeawaysLoading] = useState(false);
+  const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
+  const scrollRootRef = useRef<HTMLDivElement>(null);
+  const restoredFor = useRef<string | null>(null);
   const [, startTransition] = useTransition();
+
+  const loadTakeaways = useCallback(async () => {
+    if (!selectedId || takeawaysLoading) return;
+    setTakeawaysLoading(true);
+    const started = Date.now();
+    try {
+      const res = await fetch(`/api/articles/${selectedId}/takeaways`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(typeof data.error === "string" ? data.error : "Couldn't generate takeaways");
+        return;
+      }
+      setTakeaways({ tldr: data.tldr, keyPoints: data.keyPoints });
+      setTakeawaysSecs(Math.max(1, Math.round((Date.now() - started) / 1000)));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't generate takeaways");
+    } finally {
+      setTakeawaysLoading(false);
+    }
+  }, [selectedId, takeawaysLoading]);
 
   useEffect(() => {
     setTtsSupported(typeof window !== "undefined" && "speechSynthesis" in window);
@@ -83,6 +111,50 @@ export function ArticleReader({
       }
     };
   }, []);
+
+  // #2 Reading-progress: track the radix ScrollArea viewport, persist + restore
+  // per article. The shadcn ScrollArea exposes its viewport via a data attr, not
+  // a ref, so we reach in by selector.
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!root || !selectedId) return;
+    const vp = root.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]");
+    if (!vp) return;
+
+    // Restore saved position once per article, after content has laid out.
+    if (content && restoredFor.current !== selectedId) {
+      restoredFor.current = selectedId;
+      try {
+        const saved = parseFloat(localStorage.getItem(`article.progress.${selectedId}`) ?? "0");
+        const max = vp.scrollHeight - vp.clientHeight;
+        if (saved > 0.02 && saved < 0.99 && max > 0) vp.scrollTop = saved * max;
+      } catch {
+        // ignore
+      }
+    }
+
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const max = vp.scrollHeight - vp.clientHeight;
+        const p = max > 0 ? Math.min(1, Math.max(0, vp.scrollTop / max)) : 0;
+        setProgress(p);
+        try {
+          localStorage.setItem(`article.progress.${selectedId}`, String(p));
+        } catch {
+          // ignore
+        }
+      });
+    };
+    vp.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      vp.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [selectedId, content]);
 
   const currentIdx = useMemo(
     () => (selectedId ? orderedIds.indexOf(selectedId) : -1),
@@ -212,6 +284,9 @@ export function ArticleReader({
       window.speechSynthesis.cancel();
     }
     setTtsState("idle");
+    setProgress(0);
+    setTakeaways(null);
+    setTakeawaysSecs(null);
 
     if (!selectedId) {
       setArticle(null);
@@ -313,6 +388,7 @@ export function ArticleReader({
   const readingMinutes = content
     ? Math.max(1, Math.ceil(content.replace(/<[^>]+>/g, " ").split(/\s+/).length / 250))
     : null;
+  const minutesRemaining = readingMinutes ? Math.max(0, Math.ceil(readingMinutes * (1 - progress))) : null;
 
   return (
     <section className="flex flex-1 flex-col overflow-hidden" data-reader-theme={prefs.theme}>
@@ -354,7 +430,13 @@ export function ArticleReader({
             />
           ) : null}
           <span className="truncate">{article?.feedTitle ?? ""}</span>
-          {readingMinutes && <span className="hidden sm:inline">· ≈{readingMinutes} min</span>}
+          {readingMinutes && (
+            <span className="hidden sm:inline">
+              {progress > 0.02
+                ? `· ≈${minutesRemaining} min left · ${Math.round(progress * 100)}%`
+                : `· ≈${readingMinutes} min`}
+            </span>
+          )}
         </div>
         {ttsSupported && (
           <Button
@@ -380,6 +462,16 @@ export function ArticleReader({
             )}
           </Button>
         )}
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={loadTakeaways}
+          title="Key takeaways"
+          disabled={!article || takeawaysLoading}
+          className={takeaways ? "text-brand" : ""}
+        >
+          {takeawaysLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+        </Button>
         <Button
           size="icon"
           variant="ghost"
@@ -418,7 +510,14 @@ export function ArticleReader({
         </Button>
         <ReaderControls />
       </div>
-      <ScrollArea className="flex-1">
+      {/* #2 Reading-progress strip */}
+      <div className="h-0.5 w-full bg-border/60" aria-hidden>
+        <div
+          className="h-full transition-[width] duration-150 ease-out"
+          style={{ width: `${Math.round(progress * 100)}%`, background: "hsl(var(--brand))" }}
+        />
+      </div>
+      <ScrollArea ref={scrollRootRef} className="flex-1">
         <article
           className="prose-reader px-4 py-8"
           style={
@@ -481,6 +580,33 @@ export function ArticleReader({
                   </>
                 )}
               </div>
+              {/* #1 Key-takeaways callout */}
+              {takeaways && (
+                <div
+                  className="not-prose mb-8 rounded-xl border p-4"
+                  style={{ borderColor: "hsl(var(--brand) / 0.35)", background: "hsl(var(--brand) / 0.05)" }}
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="editorial-eyebrow-brand inline-flex items-center gap-1.5">
+                      <ListChecks className="h-3 w-3" /> § Key takeaways
+                    </span>
+                    {takeawaysSecs != null && (
+                      <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                        Generated · {takeawaysSecs} sec
+                      </span>
+                    )}
+                  </div>
+                  <p className="mb-2 text-[14px] font-medium leading-snug">{takeaways.tldr}</p>
+                  <ul className="space-y-1">
+                    {takeaways.keyPoints.slice(0, 5).map((p, i) => (
+                      <li key={i} className="flex gap-2 text-[13px] leading-snug text-foreground/85">
+                        <span style={{ color: "hsl(var(--brand))" }}>—</span>
+                        <span>{p}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {loadingContent && !content && (
                 <div className="space-y-3">
                   <Skeleton className="h-4 w-3/4" />
