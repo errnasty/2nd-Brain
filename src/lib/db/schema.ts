@@ -526,6 +526,34 @@ export type PlayerProfile = typeof playerProfile.$inferSelect;
 export type Skill = typeof skills.$inferSelect;
 export type XpEvent = typeof xpEvents.$inferSelect;
 
+// ── User settings ───────────────────────────────────────────────────────
+// One row per user; `settings` is a merged JSONB blob of UI preferences that
+// must persist + sync (board WIP limits, board filters, …). SYNCED to desktop.
+export type UserSettingsData = {
+  // #10 Directory board WIP limits, keyed by reading-status column id.
+  wipLimits?: Record<string, number>;
+  // #1 Auto-summarize an article when it's opened in the reader.
+  autoSummarizeOnOpen?: boolean;
+};
+
+export const userSettings = pgTable(
+  "user_settings",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    settings: jsonb("settings").$type<UserSettingsData>().default({}).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userUnique: uniqueIndex("user_settings_user_unique").on(t.userId),
+  }),
+);
+
+export type UserSettings = typeof userSettings.$inferSelect;
+
 // ── Sync (desktop ⇄ cloud) ──────────────────────────────────────────────
 // Row deletions recorded by an AFTER DELETE trigger (see migration 0013 /
 // local bootstrap) so the desktop⇄cloud sync can propagate deletes. Exists on

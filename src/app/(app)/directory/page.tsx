@@ -3,6 +3,8 @@ import { db } from "@/lib/db";
 import { directoryFolders, type DirectoryFolder } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { DirectoryShell } from "@/components/directory/directory-shell";
+import { getUserSettings } from "@/lib/settings/store";
+import type { UserSettingsData } from "@/lib/db/schema";
 import {
   DIRECTORY_PAGE_SIZE,
   fetchDirectoryPage,
@@ -29,8 +31,9 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
   // crash the whole route. Render an empty Directory instead of white-screening.
   let page: DirectoryPage = { items: [], itemTagsById: {}, hasMore: false };
   let allFolders: DirectoryFolder[] = [];
+  let settings: UserSettingsData = {};
   try {
-    [page, allFolders] = await Promise.all([
+    [page, allFolders, settings] = await Promise.all([
       fetchDirectoryPage(user.id, {
         folder: sp.folder ?? null,
         tagIds,
@@ -43,6 +46,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
         .from(directoryFolders)
         .where(eq(directoryFolders.userId, user.id))
         .orderBy(asc(directoryFolders.name)),
+      getUserSettings(user.id),
     ]);
   } catch (err) {
     console.error("DirectoryPage data fetch failed:", err instanceof Error ? err.message : err);
@@ -57,6 +61,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
       activeFolder={sp.folder ?? null}
       activeTagIds={tagIds}
       activeSort={sort}
+      wipLimits={settings.wipLimits ?? {}}
     />
   );
 }

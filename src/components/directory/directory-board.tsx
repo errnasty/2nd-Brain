@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { FileText, GripVertical, Newspaper, NotebookPen } from "lucide-react";
+import { Check, FileText, GripVertical, Newspaper, NotebookPen, Pencil, X } from "lucide-react";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { updateUserSettingsAction } from "@/lib/settings/actions";
 import type { ReadingStatus } from "@/lib/directory/query";
 import type { DirectoryListItem } from "./directory-shell";
 import { useBoardOptimistic } from "./board-optimistic";
@@ -32,12 +33,28 @@ export function DirectoryBoard({
   items,
   selectedId,
   onOpen,
+  wipLimits = {},
 }: {
   items: DirectoryListItem[];
   selectedId: string | null;
   onOpen: (id: string) => void;
+  wipLimits?: Record<string, number>;
 }) {
   const { overrides, revert } = useBoardOptimistic();
+
+  // #10 WIP limits per column. Seeded from server settings; edits update locally
+  // (optimistic) and persist via the user_settings store.
+  const [limits, setLimits] = useState<Record<string, number>>(wipLimits);
+  useEffect(() => setLimits(wipLimits), [wipLimits]);
+  function setLimit(columnId: string, value: number | null) {
+    setLimits((prev) => {
+      const next = { ...prev };
+      if (value && value > 0) next[columnId] = value;
+      else delete next[columnId];
+      void updateUserSettingsAction({ wipLimits: next });
+      return next;
+    });
+  }
 
   // Apply pending optimistic moves so a just-dropped card shows in its target
   // column immediately, before the server confirm + router.refresh land.
@@ -69,6 +86,8 @@ export function DirectoryBoard({
           items={effItems.filter((i) => i.readingStatus === col.id)}
           selectedId={selectedId}
           onOpen={onOpen}
+          limit={limits[col.id] ?? null}
+          onSetLimit={(v) => setLimit(col.id, v)}
         />
       ))}
     </div>
@@ -81,12 +100,16 @@ function BoardColumn({
   items,
   selectedId,
   onOpen,
+  limit,
+  onSetLimit,
 }: {
   status: ReadingStatus;
   label: string;
   items: DirectoryListItem[];
   selectedId: string | null;
   onOpen: (id: string) => void;
+  limit: number | null;
+  onSetLimit: (value: number | null) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `status:${status}` });
   const avgAge = (() => {
@@ -98,13 +121,15 @@ function BoardColumn({
     const hrs = Math.floor(ms / 3_600_000);
     return `avg ${Math.max(1, hrs)}h`;
   })();
+  const over = limit != null && items.length > limit;
+  const atLimit = limit != null && items.length === limit;
   return (
     <div className="flex w-72 shrink-0 flex-col rounded-lg bg-muted/40">
       <div className="flex items-center justify-between px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
         <span>{label}</span>
         <span className="flex items-center gap-2">
           {avgAge && <span className="font-normal normal-case opacity-70">{avgAge}</span>}
-          <span className="tabular-nums">{items.length}</span>
+          <WipCount count={items.length} limit={limit} over={over} atLimit={atLimit} onSetLimit={onSetLimit} />
         </span>
       </div>
       <div
@@ -130,6 +155,77 @@ function BoardColumn({
         )}
       </div>
     </div>
+  );
+}
+
+/** #10 Editable "count / limit" WIP badge. Click to set/clear a column limit. */
+function WipCount({
+  count,
+  limit,
+  over,
+  atLimit,
+  onSetLimit,
+}: {
+  count: number;
+  limit: number | null;
+  over: boolean;
+  atLimit: boolean;
+  onSetLimit: (value: number | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(limit != null ? String(limit) : "");
+
+  if (editing) {
+    return (
+      <span className="flex items-center gap-1">
+        <span className="tabular-nums">{count}</span>
+        <span className="opacity-50">/</span>
+        <input
+          autoFocus
+          type="number"
+          min={0}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { onSetLimit(Number(value) || null); setEditing(false); }
+            if (e.key === "Escape") setEditing(false);
+          }}
+          className="h-5 w-10 rounded border border-border bg-background px-1 text-[11px] tabular-nums outline-none"
+        />
+        <button
+          onClick={() => { onSetLimit(Number(value) || null); setEditing(false); }}
+          className="rounded p-0.5 hover:bg-accent"
+          title="Save limit"
+        >
+          <Check className="h-3 w-3" />
+        </button>
+        {limit != null && (
+          <button
+            onClick={() => { onSetLimit(null); setValue(""); setEditing(false); }}
+            className="rounded p-0.5 hover:bg-accent"
+            title="Remove limit"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => { setValue(limit != null ? String(limit) : ""); setEditing(true); }}
+      title={limit != null ? "Edit WIP limit" : "Set a WIP limit"}
+      className={cn(
+        "group/wip flex items-center gap-1 rounded px-1 tabular-nums hover:bg-accent",
+        over && "text-destructive",
+        atLimit && !over && "text-brand",
+      )}
+    >
+      <span>{count}</span>
+      {limit != null && <><span className="opacity-50">/</span><span>{limit}</span></>}
+      <Pencil className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover/wip:opacity-60" />
+    </button>
   );
 }
 

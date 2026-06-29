@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Pencil, Plus, Upload } from "lucide-react";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Pencil, Plus, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -61,6 +61,7 @@ export function DirectoryShell({
   activeFolder,
   activeTagIds,
   activeSort = "updated",
+  wipLimits = {},
 }: {
   items: DirectoryListItem[];
   itemTagsById: Record<string, string[]>;
@@ -69,6 +70,7 @@ export function DirectoryShell({
   activeFolder: string | null;
   activeTagIds: string[];
   activeSort?: DirectorySort;
+  wipLimits?: Record<string, number>;
 }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -95,6 +97,21 @@ export function DirectoryShell({
 
   const allItems = useMemo(() => [...items, ...extraItems], [items, extraItems]);
   const allTags = useMemo(() => ({ ...itemTagsById, ...extraTags }), [itemTagsById, extraTags]);
+
+  // #13 Client-side filter strip (type + age) over the loaded items.
+  const [typeFilter, setTypeFilter] = useState<"all" | DirectoryListItem["kind"]>("all");
+  const [ageFilter, setAgeFilter] = useState<"any" | "7d" | "30d" | "90d">("any");
+  const filteredItems = useMemo(() => {
+    const now = Date.now();
+    const DAY = 86_400_000;
+    const maxAgeMs =
+      ageFilter === "7d" ? 7 * DAY : ageFilter === "30d" ? 30 * DAY : ageFilter === "90d" ? 90 * DAY : Infinity;
+    return allItems.filter((i) => {
+      if (typeFilter !== "all" && i.kind !== typeFilter) return false;
+      if (maxAgeMs !== Infinity && now - new Date(i.createdAt).getTime() > maxAgeMs) return false;
+      return true;
+    });
+  }, [allItems, typeFilter, ageFilter]);
 
   const loadMore = useCallback(() => {
     if (loadingMore || !pageHasMore) return;
@@ -435,20 +452,51 @@ export function DirectoryShell({
                 : "Create a note, upload a PDF, or save articles from your feeds."}
             </p>
           </div>
-        ) : view === "board" ? (
-          <DirectoryBoard items={allItems} selectedId={selectedId} onOpen={selectItem} />
         ) : (
-          <VirtualizedDirectoryList
-            items={allItems}
-            itemTagsById={allTags}
-            selectedId={selectedId}
-            checkedIds={checkedIds}
-            onCheck={toggleChecked}
-            onOpen={selectItem}
-            onReachEnd={loadMore}
-            loadingMore={loadingMore}
-            hasMore={pageHasMore}
-          />
+          <>
+            <FilterStrip
+              typeFilter={typeFilter}
+              onType={setTypeFilter}
+              ageFilter={ageFilter}
+              onAge={setAgeFilter}
+              hasTagFilter={activeTagIds.length > 0}
+              onClearTags={() => {
+                const sp = new URLSearchParams();
+                if (activeFolder) sp.set("folder", activeFolder);
+                if (activeSort !== "updated") sp.set("sort", activeSort);
+                router.push(`/directory${sp.toString() ? `?${sp.toString()}` : ""}`, { scroll: false });
+              }}
+              shown={filteredItems.length}
+              total={allItems.length}
+            />
+            {filteredItems.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+                <p className="text-sm italic text-muted-foreground">No items match these filters.</p>
+                <Button size="sm" variant="ghost" onClick={() => { setTypeFilter("all"); setAgeFilter("any"); }}>
+                  Reset filters
+                </Button>
+              </div>
+            ) : view === "board" ? (
+              <DirectoryBoard
+                items={filteredItems}
+                selectedId={selectedId}
+                onOpen={selectItem}
+                wipLimits={wipLimits}
+              />
+            ) : (
+              <VirtualizedDirectoryList
+                items={filteredItems}
+                itemTagsById={allTags}
+                selectedId={selectedId}
+                checkedIds={checkedIds}
+                onCheck={toggleChecked}
+                onOpen={selectItem}
+                onReachEnd={loadMore}
+                loadingMore={loadingMore}
+                hasMore={pageHasMore}
+              />
+            )}
+          </>
         )}
       </section>
 
@@ -476,6 +524,81 @@ export function DirectoryShell({
         folder={activeFolder}
       />
     </>
+  );
+}
+
+const TYPE_FILTERS: { id: "all" | DirectoryListItem["kind"]; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "saved_article", label: "Articles" },
+  { id: "uploaded_document", label: "Docs" },
+  { id: "user_note", label: "Notes" },
+];
+const AGE_LABELS: Record<"any" | "7d" | "30d" | "90d", string> = {
+  any: "Any time",
+  "7d": "Last 7 days",
+  "30d": "Last 30 days",
+  "90d": "Last 90 days",
+};
+
+/** #13 Filter chips strip: type segmented chips + age dropdown + tag-filter pill + count. */
+function FilterStrip({
+  typeFilter,
+  onType,
+  ageFilter,
+  onAge,
+  hasTagFilter,
+  onClearTags,
+  shown,
+  total,
+}: {
+  typeFilter: "all" | DirectoryListItem["kind"];
+  onType: (v: "all" | DirectoryListItem["kind"]) => void;
+  ageFilter: "any" | "7d" | "30d" | "90d";
+  onAge: (v: "any" | "7d" | "30d" | "90d") => void;
+  hasTagFilter: boolean;
+  onClearTags: () => void;
+  shown: number;
+  total: number;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+      <div className="inline-flex rounded-md border border-border p-0.5">
+        {TYPE_FILTERS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => onType(t.id)}
+            className={cn(
+              "rounded px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide transition-colors",
+              typeFilter === t.id ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <select
+        value={ageFilter}
+        onChange={(e) => onAge(e.target.value as "any" | "7d" | "30d" | "90d")}
+        className="h-7 rounded-md border border-border bg-background px-1.5 text-xs outline-none"
+        aria-label="Filter by date added"
+      >
+        {(Object.keys(AGE_LABELS) as (keyof typeof AGE_LABELS)[]).map((k) => (
+          <option key={k} value={k}>{AGE_LABELS[k]}</option>
+        ))}
+      </select>
+      {hasTagFilter && (
+        <button
+          onClick={onClearTags}
+          className="inline-flex items-center gap-1 rounded-full bg-accent px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-foreground hover:bg-accent/70"
+          title="Clear tag filter"
+        >
+          Tag filter <X className="h-3 w-3" />
+        </button>
+      )}
+      <span className="ml-auto font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+        Showing {shown} of {total}
+      </span>
+    </div>
   );
 }
 

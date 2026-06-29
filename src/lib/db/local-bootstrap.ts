@@ -77,12 +77,12 @@ declare
   touch_tables text[] := array[
     'profiles','folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','item_tags','directory_flashcards',
-    'skills','player_profile'
+    'skills','player_profile','user_settings'
   ];
   tomb_tables text[] := array[
     'folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','directory_flashcards',
-    'skills','player_profile'
+    'skills','player_profile','user_settings'
   ];
   t text;
 begin
@@ -148,6 +148,20 @@ create unique index if not exists xp_events_ref_unique on xp_events (user_id, so
 create index if not exists xp_events_feed_idx on xp_events (user_id, created_at desc);
 `;
 
+// User settings — mirrors cloud migration 0017. Always-run + idempotent so
+// existing local DBs gain it. SYNCED (triggers installed by SYNC_SUPPORT_SQL via
+// the table arrays above).
+const USER_SETTINGS_SQL = `
+create table if not exists user_settings (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  settings jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists user_settings_user_unique on user_settings (user_id);
+`;
+
 // Feeds-tab perf indexes — mirrors cloud migration 0015. No CONCURRENTLY: PGlite
 // is single-connection and runs these inline. create-if-not-exists = idempotent.
 const PERF_INDEX_SQL = `
@@ -204,6 +218,14 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(GAMIFY_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] gamify tables failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run BEFORE sync support (same reason as GAMIFY_SQL): the table must
+  // exist before SYNC_SUPPORT_SQL installs its triggers. Idempotent.
+  try {
+    await client.exec(USER_SETTINGS_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] user_settings table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and
