@@ -46,6 +46,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
 
   let stats: StudyStats = {
     itemsWeek: 0, notesWeek: 0, cardsReviewedWeek: 0, dueToday: 0, totalCards: 0, streak: 0,
+    dueTasks: 0, dueSubjects: [], itemsHistory: [], reviewsHistory: [], retentionBySubject: [],
   };
   let tasks: TaskRow[] = [];
   let dueCards: DueCard[] = [];
