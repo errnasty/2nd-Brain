@@ -1,7 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -10,6 +10,7 @@ import {
   Check,
   CalendarDays,
   ChevronDown,
+  CornerDownRight,
   Copy,
   Cpu,
   FileText,
@@ -20,12 +21,14 @@ import {
   Mic,
   Newspaper,
   NotebookPen,
+  Paperclip,
   RefreshCw,
   Sparkles,
   Square,
   ThumbsDown,
   ThumbsUp,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -42,6 +45,8 @@ import { cn } from "@/lib/utils";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { searchAttachableItemsAction, type AttachableItem } from "@/app/(app)/ask/actions";
+import { fetchDirectoryItemByIdAction } from "@/app/(app)/directory/actions";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
@@ -73,6 +78,7 @@ type Message = {
   webSources?: WebSource[];
   usage?: Usage;
   plan?: StudyPlanResult;
+  followups?: string[];
 };
 
 const SUGGESTIONS = [
@@ -127,6 +133,8 @@ export function AskShell() {
   const [deadline, setDeadline] = useState("");
   const [hoursPerWeek, setHoursPerWeek] = useState("5");
   const [listening, setListening] = useState(false);
+  const [contextItems, setContextItems] = useState<AttachableItem[]>([]);
+  const [attachOpen, setAttachOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -187,6 +195,34 @@ export function AskShell() {
     } catch {
       // ignore
     }
+  }, []);
+
+  // #4 Cross-surface hand-off: /ask?prefill=…&attach=<directoryItemId> lets
+  // other surfaces (e.g. the reader) open Ask with a question pre-typed and an
+  // item pinned as context.
+  const searchParams = useSearchParams();
+  useEffect(() => {
+    const prefill = searchParams.get("prefill");
+    if (prefill) {
+      setInput(prefill);
+      inputRef.current?.focus();
+    }
+    const attach = searchParams.get("attach");
+    if (attach) {
+      fetchDirectoryItemByIdAction(attach)
+        .then((item) => {
+          if (item) {
+            setContextItems((prev) =>
+              prev.some((p) => p.id === item.id)
+                ? prev
+                : [...prev, { id: item.id, title: item.title, kind: item.kind }],
+            );
+          }
+        })
+        .catch(() => {});
+    }
+    // Read once on mount only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function chooseModel(id: string) {
@@ -292,7 +328,13 @@ export function AskShell() {
         const res = await fetch("/api/ask", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: trimmed, history, model: modelId, web }),
+          body: JSON.stringify({
+            question: trimmed,
+            history,
+            model: modelId,
+            web,
+            contextIds: contextItems.map((c) => c.id),
+          }),
           cache: "no-store",
           signal: controller.signal,
         });
@@ -360,6 +402,25 @@ export function AskShell() {
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)),
         );
+
+        // #5 Fetch suggested follow-ups (non-blocking, fail-soft).
+        const finalAnswer = displayText(acc);
+        if (finalAnswer.trim()) {
+          void fetch("/api/ask/followups", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question: trimmed, answer: finalAnswer }),
+          })
+            .then((r) => r.json())
+            .then((d) => {
+              if (Array.isArray(d?.followups) && d.followups.length) {
+                setMessages((prev) =>
+                  prev.map((m) => (m.id === assistantId ? { ...m, followups: d.followups } : m)),
+                );
+              }
+            })
+            .catch(() => {});
+        }
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Request failed");
@@ -369,7 +430,7 @@ export function AskShell() {
         inputRef.current?.focus();
       }
     },
-    [messages, streaming, modelId, web],
+    [messages, streaming, modelId, web, contextItems],
   );
 
   const sendStudyPlan = useCallback(
@@ -505,7 +566,13 @@ export function AskShell() {
         ) : (
           <div className="space-y-7">
             {messages.map((m) => (
-              <MessageBubble key={m.id} message={m} onOpenSource={openSource} onOpenPath={openPath} />
+              <MessageBubble
+                key={m.id}
+                message={m}
+                onOpenSource={openSource}
+                onOpenPath={openPath}
+                onFollowup={send}
+              />
             ))}
             {streaming && (
               <div className="flex items-center gap-2 text-xs italic text-muted-foreground">
@@ -588,7 +655,50 @@ export function AskShell() {
               {listening ? "Listening…" : "Voice"}
             </Button>
           )}
+          <Button
+            size="sm"
+            variant={attachOpen || contextItems.length > 0 ? "brand" : "outline"}
+            onClick={() => setAttachOpen((v) => !v)}
+            disabled={streaming}
+            className="h-7 gap-1.5 text-xs"
+            title="Attach items as context"
+          >
+            <Paperclip className="h-3.5 w-3.5" /> Context
+            {contextItems.length > 0 && <span className="tabular-nums">· {contextItems.length}</span>}
+          </Button>
         </div>
+
+        {attachOpen && (
+          <AttachContextPanel
+            attachedIds={contextItems.map((c) => c.id)}
+            onAdd={(item) =>
+              setContextItems((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]))
+            }
+            onClose={() => setAttachOpen(false)}
+          />
+        )}
+
+        {contextItems.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {contextItems.map((c) => (
+              <span
+                key={c.id}
+                className="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-[12px]"
+                title={c.title}
+              >
+                <KindIcon kind={c.kind} />
+                <span className="max-w-[180px] truncate">{c.title}</span>
+                <button
+                  onClick={() => setContextItems((prev) => prev.filter((p) => p.id !== c.id))}
+                  className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                  title="Remove"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {studyMode && (
           <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <label className="flex items-center gap-1.5">
@@ -699,6 +809,85 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
             <span className="flex-1 leading-snug">{s}</span>
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/** #8 Picker panel: search recent directory items and attach them as context. */
+function AttachContextPanel({
+  attachedIds,
+  onAdd,
+  onClose,
+}: {
+  attachedIds: string[];
+  onAdd: (item: AttachableItem) => void;
+  onClose: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [items, setItems] = useState<AttachableItem[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const handle = setTimeout(() => {
+      searchAttachableItemsAction(query)
+        .then((r) => {
+          if (!cancelled) setItems(r);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [query]);
+
+  return (
+    <div className="mb-2 rounded-lg border border-border bg-card p-2 shadow-sm">
+      <div className="mb-2 flex items-center gap-2">
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search items to attach…"
+          className="h-7 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none"
+        />
+        <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-accent" title="Close">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="max-h-44 overflow-y-auto">
+        {loading ? (
+          <div className="flex items-center gap-2 px-2 py-3 text-xs italic text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Searching…
+          </div>
+        ) : items.length === 0 ? (
+          <div className="px-2 py-3 text-xs italic text-muted-foreground">No items found.</div>
+        ) : (
+          items.map((it) => {
+            const added = attachedIds.includes(it.id);
+            return (
+              <button
+                key={it.id}
+                onClick={() => onAdd(it)}
+                disabled={added}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] transition-colors",
+                  added ? "text-muted-foreground" : "hover:bg-accent",
+                )}
+              >
+                <KindIcon kind={it.kind} />
+                <span className="min-w-0 flex-1 truncate">{it.title}</span>
+                {added && <Check className="h-3.5 w-3.5 shrink-0" style={{ color: "hsl(var(--brand))" }} />}
+              </button>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -844,10 +1033,12 @@ const MessageBubble = memo(function MessageBubble({
   message,
   onOpenSource,
   onOpenPath,
+  onFollowup,
 }: {
   message: Message;
   onOpenSource: (directoryItemId: string) => void;
   onOpenPath: (path: string) => void;
+  onFollowup: (question: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -958,6 +1149,20 @@ const MessageBubble = memo(function MessageBubble({
         </div>
       )}
       {message.content && <MessageActions message={message} />}
+      {message.followups && message.followups.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pt-1">
+          {message.followups.map((f) => (
+            <button
+              key={f}
+              onClick={() => onFollowup(f)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-left text-[12.5px] text-foreground/85 transition-colors hover:border-brand/40 hover:bg-accent"
+            >
+              <CornerDownRight className="h-3 w-3 shrink-0" style={{ color: "hsl(var(--brand))" }} />
+              {f}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 });

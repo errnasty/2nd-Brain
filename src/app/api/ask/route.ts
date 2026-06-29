@@ -89,7 +89,7 @@ export async function POST(req: Request) {
     });
   }
 
-  let body: { question?: string; history?: Message[]; model?: string; web?: boolean };
+  let body: { question?: string; history?: Message[]; model?: string; web?: boolean; contextIds?: string[] };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -202,7 +202,12 @@ export async function POST(req: Request) {
     .filter((s) => s.similarity >= RELEVANCE_FLOOR)
     .map((s) => s.directoryItemId);
 
-  let orderedIds = Array.from(new Set([...folderIds, ...relevantVectorIds])).slice(0, 10);
+  // #8 User-attached context: explicitly pinned items always lead and bypass
+  // the relevance floor. Ownership is enforced downstream in fetchItemContents.
+  const attached = Array.isArray(body.contextIds)
+    ? body.contextIds.filter((id) => typeof id === "string").slice(0, 8)
+    : [];
+  let orderedIds = Array.from(new Set([...attached, ...folderIds, ...relevantVectorIds])).slice(0, 12);
 
   // Don't go empty-handed: if nothing cleared the floor and there were no
   // structural matches, keep the top few vector hits so we can still answer.
