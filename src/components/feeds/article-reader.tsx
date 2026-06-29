@@ -81,15 +81,21 @@ export function ArticleReader({
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const restoredFor = useRef<string | null>(null);
+  // Live mirror of selectedId so async resolvers can detect a stale article.
+  const latestIdRef = useRef<string | null>(selectedId);
+  latestIdRef.current = selectedId;
   const [, startTransition] = useTransition();
 
   const loadTakeaways = useCallback(async () => {
     if (!selectedId || takeawaysLoading) return;
+    const reqId = selectedId; // guard against the user paging away mid-fetch
     setTakeawaysLoading(true);
     const started = Date.now();
     try {
-      const res = await fetch(`/api/articles/${selectedId}/takeaways`, { method: "POST" });
+      const res = await fetch(`/api/articles/${reqId}/takeaways`, { method: "POST" });
       const data = await res.json().catch(() => ({}));
+      // Ignore a response for an article that's no longer open.
+      if (reqId !== latestIdRef.current) return;
       if (!res.ok) {
         toast.error(typeof data.error === "string" ? data.error : "Couldn't generate takeaways");
         return;
@@ -97,8 +103,11 @@ export function ArticleReader({
       setTakeaways({ tldr: data.tldr, keyPoints: data.keyPoints });
       setTakeawaysSecs(Math.max(1, Math.round((Date.now() - started) / 1000)));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't generate takeaways");
+      if (reqId === latestIdRef.current) {
+        toast.error(err instanceof Error ? err.message : "Couldn't generate takeaways");
+      }
     } finally {
+      // Always clear the (shared) loading flag so it can't stick after a switch.
       setTakeawaysLoading(false);
     }
   }, [selectedId, takeawaysLoading]);

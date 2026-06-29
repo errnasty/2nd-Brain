@@ -47,13 +47,14 @@ export function DirectoryBoard({
   const [limits, setLimits] = useState<Record<string, number>>(wipLimits);
   useEffect(() => setLimits(wipLimits), [wipLimits]);
   function setLimit(columnId: string, value: number | null) {
-    setLimits((prev) => {
-      const next = { ...prev };
-      if (value && value > 0) next[columnId] = value;
-      else delete next[columnId];
-      void updateUserSettingsAction({ wipLimits: next });
-      return next;
-    });
+    // Compute the next map from current state, then persist OUTSIDE the updater
+    // so the network write fires exactly once (a side effect inside a setState
+    // updater double-fires under React StrictMode).
+    const next = { ...limits };
+    if (value && value > 0) next[columnId] = value;
+    else delete next[columnId];
+    setLimits(next);
+    void updateUserSettingsAction({ wipLimits: next });
   }
 
   // Apply pending optimistic moves so a just-dropped card shows in its target
