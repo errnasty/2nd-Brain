@@ -96,6 +96,88 @@ export async function mergeTagsAction(input: { targetId: string; sourceIds: stri
   return { ok: true as const, merged: deleted.length };
 }
 
+export type DuplicateGroup = { ids: string[]; names: string[]; reason: string };
+
+const normTag = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, "");
+const singular = (s: string) => (s.endsWith("s") && s.length > 3 ? s.slice(0, -1) : s);
+
+/** Levenshtein edit distance (bounded use — only called on short tag strings). */
+function levenshtein(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, i) => i);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+/**
+ * #14 Likely-duplicate tags. No tag embeddings exist, so this is a string
+ * heuristic (not semantic): tags that collapse to the same normalized form
+ * (case/punctuation/plural) are grouped, then near-identical spellings (edit
+ * distance ≤ 1) are paired. The user confirms each merge.
+ */
+export async function findDuplicateTagsAction(): Promise<DuplicateGroup[]> {
+  const { user } = await requireUser();
+  const all = await db
+    .select({ id: tags.id, name: tags.name })
+    .from(tags)
+    .where(eq(tags.userId, user.id));
+
+  const groups: DuplicateGroup[] = [];
+  const grouped = new Set<string>();
+
+  // 1) Exact match after normalization (case / punctuation / trailing plural).
+  const byKey = new Map<string, { id: string; name: string }[]>();
+  for (const t of all) {
+    const key = singular(normTag(t.name));
+    if (!key) continue;
+    const arr = byKey.get(key) ?? [];
+    arr.push(t);
+    byKey.set(key, arr);
+  }
+  for (const arr of byKey.values()) {
+    if (arr.length > 1) {
+      groups.push({ ids: arr.map((a) => a.id), names: arr.map((a) => a.name), reason: "Same after normalization" });
+      for (const a of arr) grouped.add(a.id);
+    }
+  }
+
+  // 2) Near-identical spelling (edit distance ≤ 1). Capped to keep the O(n²)
+  // pass cheap for large tag sets.
+  const remaining = all
+    .filter((t) => !grouped.has(t.id))
+    .map((t) => ({ ...t, n: normTag(t.name) }))
+    .filter((t) => t.n.length >= 2)
+    .slice(0, 400);
+  for (let i = 0; i < remaining.length; i++) {
+    if (grouped.has(remaining[i].id)) continue;
+    for (let j = i + 1; j < remaining.length; j++) {
+      const a = remaining[i], b = remaining[j];
+      if (grouped.has(b.id)) continue;
+      if (Math.abs(a.n.length - b.n.length) > 1) continue;
+      if (levenshtein(a.n, b.n) <= 1) {
+        groups.push({ ids: [a.id, b.id], names: [a.name, b.name], reason: "Very similar spelling" });
+        grouped.add(a.id);
+        grouped.add(b.id);
+        break;
+      }
+    }
+  }
+
+  return groups;
+}
+
 export async function bulkDeleteTagsAction(tagIds: string[]) {
   if (tagIds.length === 0) return { ok: true as const, count: 0 };
   const { user } = await requireUser();

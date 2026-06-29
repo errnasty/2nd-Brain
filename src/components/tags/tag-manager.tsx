@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { Check, GitMerge, Hash, Pencil, Search, Trash2, X } from "lucide-react";
+import { Archive, Check, Copy, GitMerge, Hash, Loader2, Pencil, Search, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -10,8 +10,10 @@ import { Input } from "@/components/ui/input";
 import {
   bulkDeleteTagsAction,
   deleteTagAction,
+  findDuplicateTagsAction,
   mergeTagsAction,
   renameTagAction,
+  type DuplicateGroup,
 } from "@/app/(app)/tags/actions";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
@@ -34,7 +36,61 @@ export function TagManager({
   const [search, setSearch] = useState("");
   const [filterMode, setFilterMode] = useState<"all" | "active" | "orphaned">("all");
   const [sortBy, setSortBy] = useState<"usage" | "name" | "recent">("usage");
+  const [dupGroups, setDupGroups] = useState<DuplicateGroup[] | null>(null);
+  const [scanning, setScanning] = useState(false);
   const [, startTransition] = useTransition();
+
+  // #14 Scan for likely-duplicate tags.
+  async function scanDuplicates() {
+    if (scanning) return;
+    setScanning(true);
+    try {
+      const groups = await findDuplicateTagsAction();
+      setDupGroups(groups);
+      if (groups.length === 0) toast.success("No likely duplicates found");
+    } catch {
+      toast.error("Couldn't scan for duplicates");
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  function mergeGroup(group: DuplicateGroup) {
+    // Merge into the most-used tag in the group.
+    const target = [...group.ids].sort(
+      (a, b) => (usage[b]?.total ?? 0) - (usage[a]?.total ?? 0),
+    )[0];
+    const sources = group.ids.filter((id) => id !== target);
+    startTransition(async () => {
+      const r = await mergeTagsAction({ targetId: target, sourceIds: sources });
+      if (r.ok) {
+        toast.success("Tags merged");
+        setDupGroups((prev) => prev?.filter((g) => g !== group) ?? null);
+      } else {
+        toast.error(r.error);
+      }
+    });
+  }
+
+  async function archiveUnderused(ids: string[]) {
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: `Archive ${ids.length} underused tag${ids.length === 1 ? "" : "s"}?`,
+      body: "These have 2 or fewer items. Links are removed; the items themselves are kept.",
+      destructive: true,
+      confirmLabel: "Archive all",
+    });
+    if (!ok) return;
+    startTransition(async () => {
+      try {
+        const r = await bulkDeleteTagsAction(ids);
+        if (r.ok) toast.success(`Archived ${r.count} tag${r.count === 1 ? "" : "s"}`);
+        else toast.error("Couldn't archive the tags.");
+      } catch (e) {
+        toast.error(`Archive failed: ${e instanceof Error ? e.message : "error"}`);
+      }
+    });
+  }
 
   // #16 Search + segmented filter (All/Active/Orphaned) + sort.
   const visibleTags = useMemo(() => {
@@ -182,9 +238,90 @@ export function TagManager({
   const maxTotal = Math.max(1, ...tags.map((t) => usage[t.id]?.total ?? 0));
   const activeCount = tags.filter((t) => (usage[t.id]?.total ?? 0) > 0).length;
   const orphanCount = tags.length - activeCount;
+  // #15 Underused = 2 or fewer items.
+  const underused = tags.filter((t) => (usage[t.id]?.total ?? 0) <= 2);
 
   return (
     <>
+      {/* #14 Likely-duplicate tags */}
+      <div className="mb-3 rounded-lg border border-border bg-card p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="editorial-eyebrow-brand inline-flex items-center gap-1.5">
+            <Copy className="h-3 w-3" /> § Likely duplicates
+          </span>
+          <Button size="sm" variant="outline" onClick={scanDuplicates} disabled={scanning} className="h-7 text-xs">
+            {scanning ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+            {dupGroups ? "Re-scan" : "Scan"}
+          </Button>
+        </div>
+        {dupGroups && dupGroups.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {dupGroups.map((g, i) => (
+              <div key={i} className="flex items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {g.names.map((n, j) => (
+                      <span key={j} className="inline-flex items-center gap-1 font-mono text-[12px]">
+                        <Hash className="h-3 w-3 opacity-50" />{n}
+                        {j < g.names.length - 1 && <span className="opacity-40">≈</span>}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-0.5 text-[11px] italic text-muted-foreground">{g.reason}</div>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => mergeGroup(g)}>
+                    <GitMerge className="mr-1 h-3.5 w-3.5" /> Merge
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs text-muted-foreground"
+                    onClick={() => setDupGroups((prev) => prev?.filter((x) => x !== g) ?? null)}
+                  >
+                    Dismiss
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {dupGroups && dupGroups.length === 0 && (
+          <p className="mt-2 text-xs italic text-muted-foreground">No likely duplicates — your taxonomy is tidy.</p>
+        )}
+      </div>
+
+      {/* #15 Underused tags */}
+      {underused.length > 0 && (
+        <div className="mb-3 rounded-lg border border-border bg-card p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="editorial-eyebrow-brand inline-flex items-center gap-1.5">
+              <Archive className="h-3 w-3" /> § Underused · {underused.length}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-destructive hover:text-destructive"
+              onClick={() => archiveUnderused(underused.map((t) => t.id))}
+            >
+              <Archive className="mr-1 h-3.5 w-3.5" /> Archive all
+            </Button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {underused.map((t) => (
+              <span
+                key={t.id}
+                className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground"
+                title={`${usage[t.id]?.total ?? 0} item${(usage[t.id]?.total ?? 0) === 1 ? "" : "s"}`}
+              >
+                <Hash className="h-2.5 w-2.5 opacity-60" />{t.name}
+                <span className="opacity-50">· {usage[t.id]?.total ?? 0}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* #16 Search · segmented filter · sort */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative min-w-[180px] flex-1">
