@@ -6,13 +6,17 @@ import { useTheme } from "next-themes";
 import { ChevronRight, Loader2, Maximize2, Minus, Network, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { cn } from "@/lib/utils";
 
 type MapNode = {
   id: string;
   kind: "tag" | "item" | "folder";
   label: string;
   itemKind?: "saved_article" | "uploaded_document" | "user_note";
+  addedAt?: string;
 };
+type LayoutMode = "force" | "radial" | "cluster";
+type TimeRange = "all" | "7d" | "30d" | "90d";
 type MapLink = { source: string; target: string; kind?: "tag" | "folder" | "link" };
 type Detail = {
   id: string;
@@ -86,6 +90,18 @@ export function KnowledgeMap() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [centerId, setCenterId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // #23 Local-graph breadcrumb stack.
+  const [crumbs, setCrumbs] = useState<{ id: string; label: string }[]>([]);
+  // #17 / #18 layout + time-range.
+  const [layout, setLayout] = useState<LayoutMode>("force");
+  const [timeRange, setTimeRange] = useState<TimeRange>("all");
+  // #21 Find-connection.
+  const [findOpen, setFindOpen] = useState(false);
+  const [fromLabel, setFromLabel] = useState("");
+  const [toLabel, setToLabel] = useState("");
+  const layoutRef = useRef<LayoutMode>("force");
+  const pathRef = useRef<Set<string> | null>(null);
+  useEffect(() => { layoutRef.current = layout; }, [layout]);
 
   // Controls.
   const [showPanel, setShowPanel] = useState(false);
@@ -131,6 +147,10 @@ export function KnowledgeMap() {
   useEffect(() => { labelScaleRef.current = labelScale; }, [labelScale]);
   useEffect(() => { arrowsRef.current = arrows; }, [arrows]);
   useEffect(() => { colorModeRef.current = colorMode; }, [colorMode]);
+  // #17 Re-run physics when the layout changes so the new arrangement applies.
+  useEffect(() => { alphaRef.current = Math.max(alphaRef.current, 0.8); fittedRef.current = false; }, [layout]);
+  // #21 Drop a stale highlight path when the graph reloads (its ids are gone).
+  useEffect(() => { pathRef.current = null; setPathLen(null); setFindMsg(null); }, [data]);
 
   const degreeMap = useMemo(() => {
     const d: Record<string, number> = {};
@@ -142,11 +162,18 @@ export function KnowledgeMap() {
   const visibleIds = useMemo(() => {
     if (!data) return null as Set<string> | null;
     const q = query.trim().toLowerCase();
-    if (!q && !hideTags && !hideDocs && !hideOrphans) return null;
+    if (!q && !hideTags && !hideDocs && !hideOrphans && timeRange === "all") return null;
+    const DAY = 86_400_000;
+    const cutoff =
+      timeRange === "7d" ? Date.now() - 7 * DAY
+      : timeRange === "30d" ? Date.now() - 30 * DAY
+      : timeRange === "90d" ? Date.now() - 90 * DAY
+      : 0;
     const passes = (n: MapNode) =>
       !(hideTags && n.kind === "tag") &&
       !(hideDocs && n.itemKind === "uploaded_document") &&
-      !(hideOrphans && (degreeMap[n.id] ?? 0) === 0);
+      !(hideOrphans && (degreeMap[n.id] ?? 0) === 0) &&
+      !(cutoff > 0 && n.kind === "item" && n.addedAt != null && new Date(n.addedAt).getTime() < cutoff);
     let allowed = new Set(data.nodes.filter(passes).map((n) => n.id));
     if (q) {
       const matches = new Set(
@@ -160,7 +187,7 @@ export function KnowledgeMap() {
       allowed = expand;
     }
     return allowed;
-  }, [data, query, hideTags, hideDocs, hideOrphans, degreeMap]);
+  }, [data, query, hideTags, hideDocs, hideOrphans, timeRange, degreeMap]);
   useEffect(() => { visibleIdsRef.current = visibleIds; }, [visibleIds]);
 
   const summary = useMemo(() => {
@@ -304,8 +331,33 @@ export function KnowledgeMap() {
     }
     fitFnRef.current = fitToView;
 
+    // #17 Layout application. Radial pins nodes on rings by kind; force/cluster
+    // release pins and let physics run (cluster adds a folder-centroid pull).
+    let appliedLayout: LayoutMode | null = null;
+    function applyLayout(name: LayoutMode) {
+      appliedLayout = name;
+      if (name === "radial") {
+        const place = (arr: SimNode[], radius: number) => {
+          const N = Math.max(1, arr.length);
+          arr.forEach((nd, i) => {
+            const ang = (i / N) * Math.PI * 2;
+            nd.x = Math.cos(ang) * radius;
+            nd.y = Math.sin(ang) * radius;
+            nd.vx = 0; nd.vy = 0; nd.fixed = true;
+          });
+        };
+        place(nodes.filter((d) => d.kind === "folder"), 120);
+        place(nodes.filter((d) => d.kind === "item"), 320);
+        place(nodes.filter((d) => d.kind === "tag"), 520);
+      } else {
+        for (const nd of nodes) nd.fixed = false;
+      }
+      fittedRef.current = false;
+    }
+
     function step() {
       const a = alphaRef.current;
+      if (appliedLayout !== layoutRef.current) applyLayout(layoutRef.current);
       const REP = repelRef.current, LD = linkDistRef.current, G = gravityRef.current;
       for (let i = 0; i < n; i++) {
         const ni = nodes[i];
@@ -325,6 +377,24 @@ export function KnowledgeMap() {
         const fx = (dx / dist) * f, fy = (dy / dist) * f;
         l.source.vx += fx; l.source.vy += fy; l.target.vx -= fx; l.target.vy -= fy;
       }
+      // #17 Cluster: pull each node toward its folder's centroid.
+      if (layoutRef.current === "cluster") {
+        const cen = new Map<string, { x: number; y: number; c: number }>();
+        for (const nd of nodes) {
+          const fid = nd.kind === "folder" ? nd.id : itemFolder.get(nd.id);
+          if (!fid) continue;
+          const e = cen.get(fid) ?? { x: 0, y: 0, c: 0 };
+          e.x += nd.x; e.y += nd.y; e.c++; cen.set(fid, e);
+        }
+        for (const nd of nodes) {
+          const fid = nd.kind === "folder" ? nd.id : itemFolder.get(nd.id);
+          if (!fid) continue;
+          const e = cen.get(fid);
+          if (!e || e.c === 0) continue;
+          nd.vx += (e.x / e.c - nd.x) * 0.03 * a;
+          nd.vy += (e.y / e.c - nd.y) * 0.03 * a;
+        }
+      }
       for (const nd of nodes) {
         nd.vx += -nd.x * G * a; nd.vy += -nd.y * G * a;
         nd.vx *= DAMPING; nd.vy *= DAMPING;
@@ -337,9 +407,11 @@ export function KnowledgeMap() {
     function render() {
       const pal = paletteRef.current, cam = camRef.current, vis = visibleIdsRef.current;
       const selId = selectedIdRef.current, hovered = hoveredRef.current;
-      // Hover highlight set = hovered + neighbors.
+      // Highlight set: an active find-connection path wins; otherwise hovered +
+      // neighbors. Non-members are dimmed.
       let hi: Set<string> | null = null;
-      if (hovered) { hi = new Set([hovered]); for (const nb of adjRef.current.get(hovered) ?? []) hi.add(nb); }
+      if (pathRef.current) hi = pathRef.current;
+      else if (hovered) { hi = new Set([hovered]); for (const nb of adjRef.current.get(hovered) ?? []) hi.add(nb); }
       ctx!.setTransform(1, 0, 0, 1, 0, 0);
       ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
       ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -409,7 +481,41 @@ export function KnowledgeMap() {
           ctx!.fillText(label, nd.x, ly);
         }
       }
+
+      // #22 Minimap — overview of visible nodes + the current viewport rect,
+      // drawn in screen space (bottom-right).
       ctx!.globalAlpha = 1;
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const mmW = 132, mmH = 92, mmPad = 8;
+      const mmX = cssW - mmW - 12, mmY = cssH - mmH - 12;
+      let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+      for (const nd of nodes) {
+        if (vis && !vis.has(nd.id)) continue;
+        bMinX = Math.min(bMinX, nd.x); bMaxX = Math.max(bMaxX, nd.x);
+        bMinY = Math.min(bMinY, nd.y); bMaxY = Math.max(bMaxY, nd.y);
+      }
+      if (bMinX !== Infinity && cssW > 220 && cssH > 220) {
+        const spanX = Math.max(1, bMaxX - bMinX), spanY = Math.max(1, bMaxY - bMinY);
+        const s = Math.min((mmW - 2 * mmPad) / spanX, (mmH - 2 * mmPad) / spanY);
+        const ox = mmX + mmPad + ((mmW - 2 * mmPad) - spanX * s) / 2 - bMinX * s;
+        const oy = mmY + mmPad + ((mmH - 2 * mmPad) - spanY * s) / 2 - bMinY * s;
+        ctx!.fillStyle = darkRef.current ? "rgba(20,18,16,0.82)" : "rgba(250,246,238,0.9)";
+        ctx!.strokeStyle = pal.folderLink;
+        ctx!.lineWidth = 1;
+        ctx!.fillRect(mmX, mmY, mmW, mmH);
+        ctx!.strokeRect(mmX, mmY, mmW, mmH);
+        for (const nd of nodes) {
+          if (vis && !vis.has(nd.id)) continue;
+          ctx!.fillStyle = colorFor(nd, pal);
+          ctx!.fillRect(ox + nd.x * s - 0.75, oy + nd.y * s - 0.75, 1.5, 1.5);
+        }
+        // Viewport rect: invert the world transform for the screen corners.
+        const wl = (-cssW / 2 - cam.x) / cam.scale, wr = (cssW / 2 - cam.x) / cam.scale;
+        const wt = (-cssH / 2 - cam.y) / cam.scale, wb = (cssH / 2 - cam.y) / cam.scale;
+        ctx!.strokeStyle = "hsl(var(--brand))";
+        ctx!.lineWidth = 1;
+        ctx!.strokeRect(ox + wl * s, oy + wt * s, (wr - wl) * s, (wb - wt) * s);
+      }
     }
 
     function frame() {
@@ -510,6 +616,80 @@ export function KnowledgeMap() {
   }, []);
   const activeFilters = (hideTags ? 1 : 0) + (hideDocs ? 1 : 0) + (hideOrphans ? 1 : 0);
 
+  // #21 Find connection (BFS shortest path) + "Walk from here" (random walk).
+  const [pathLen, setPathLen] = useState<number | null>(null);
+  const [findMsg, setFindMsg] = useState<string | null>(null);
+  const resolveNode = useCallback((label: string): SimNode | null => {
+    const q = label.trim().toLowerCase();
+    if (!q) return null;
+    const ns = nodesRef.current;
+    return ns.find((n) => n.label.toLowerCase() === q) ?? ns.find((n) => n.label.toLowerCase().includes(q)) ?? null;
+  }, []);
+  const clearPath = useCallback(() => {
+    pathRef.current = null;
+    setPathLen(null);
+    setFindMsg(null);
+  }, []);
+  const findConnection = useCallback(() => {
+    const a = resolveNode(fromLabel), b = resolveNode(toLabel);
+    if (!a || !b) { setFindMsg("Pick two nodes that exist in the graph."); return; }
+    if (a.id === b.id) { setFindMsg("Pick two different nodes."); return; }
+    const adj = adjRef.current;
+    const prev = new Map<string, string | null>([[a.id, null]]);
+    const queue = [a.id];
+    let found = false;
+    while (queue.length) {
+      const cur = queue.shift()!;
+      if (cur === b.id) { found = true; break; }
+      for (const nb of adj.get(cur) ?? []) {
+        if (!prev.has(nb)) { prev.set(nb, cur); queue.push(nb); }
+      }
+    }
+    if (!found) { pathRef.current = null; setPathLen(null); setFindMsg("No connection found between them."); return; }
+    const path = new Set<string>();
+    let c: string | null = b.id;
+    while (c) { path.add(c); c = prev.get(c) ?? null; }
+    pathRef.current = path;
+    setPathLen(path.size);
+    setFindMsg(null);
+  }, [fromLabel, toLabel, resolveNode]);
+  const walkFrom = useCallback(() => {
+    const a = resolveNode(fromLabel);
+    if (!a) { setFindMsg("Pick a start node first."); return; }
+    const adj = adjRef.current;
+    const visited = new Set<string>([a.id]);
+    let cur = a.id;
+    for (let i = 0; i < 14; i++) {
+      const nbs = [...(adj.get(cur) ?? [])];
+      if (nbs.length === 0) break;
+      cur = nbs[Math.floor(Math.random() * nbs.length)];
+      visited.add(cur);
+    }
+    pathRef.current = visited;
+    setPathLen(visited.size);
+    setFindMsg(null);
+  }, [fromLabel, resolveNode]);
+
+  // #23 Focus a node's local graph + push a breadcrumb.
+  const focusLocal = useCallback((id: string, label: string) => {
+    clearPath();
+    setCrumbs((prev) => (prev.some((c) => c.id === id) ? prev : [...prev, { id, label }]));
+    setCenterId(id);
+  }, [clearPath]);
+  const exitLocal = useCallback(() => {
+    clearPath();
+    setCrumbs([]);
+    setCenterId(null);
+  }, [clearPath]);
+  const goToCrumb = useCallback((id: string) => {
+    clearPath();
+    setCrumbs((prev) => {
+      const idx = prev.findIndex((c) => c.id === id);
+      return idx >= 0 ? prev.slice(0, idx + 1) : prev;
+    });
+    setCenterId(id);
+  }, [clearPath]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -562,7 +742,7 @@ export function KnowledgeMap() {
               )}
             </div>
             {centerId && (
-              <button onClick={() => setCenterId(null)} className="font-mono text-xs uppercase tracking-[0.12em] hover:underline" style={{ color: "hsl(var(--brand))" }}>
+              <button onClick={exitLocal} className="font-mono text-xs uppercase tracking-[0.12em] hover:underline" style={{ color: "hsl(var(--brand))" }}>
                 ← Exit local graph
               </button>
             )}
@@ -608,6 +788,67 @@ export function KnowledgeMap() {
             />
           )}
 
+          {/* Top-left overlay: breadcrumb · layout · find-connection */}
+          {hasGraph && (
+            <div className="absolute left-4 top-4 flex flex-col gap-2">
+              {/* #23 Local-graph breadcrumb stack */}
+              {crumbs.length > 0 && (
+                <div className="flex items-center gap-1 rounded-lg border border-border bg-card/95 px-2 py-1 text-[11px] shadow-sm backdrop-blur">
+                  <button onClick={exitLocal} className="font-mono uppercase tracking-wide text-muted-foreground hover:text-foreground">Global</button>
+                  {crumbs.map((c) => (
+                    <span key={c.id} className="flex items-center gap-1">
+                      <ChevronRight className="h-3 w-3 opacity-40" />
+                      <button onClick={() => goToCrumb(c.id)} className="max-w-[120px] truncate hover:underline" style={{ color: "hsl(var(--brand))" }}>{c.label}</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {/* #17 Layout switcher */}
+              <div className="inline-flex self-start rounded-lg border border-border bg-card/95 p-0.5 shadow-sm backdrop-blur">
+                {(["force", "radial", "cluster"] as LayoutMode[]).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setLayout(m)}
+                    className={cn(
+                      "rounded px-2 py-1 font-mono text-[10px] uppercase tracking-wide transition-colors",
+                      layout === m ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+              {/* #21 Find connection */}
+              <div className="self-start">
+                <button
+                  onClick={() => setFindOpen((v) => !v)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg border border-border bg-card/95 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide shadow-sm backdrop-blur",
+                    findOpen || pathLen != null ? "text-brand" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Network className="h-3 w-3" /> Find connection
+                </button>
+                {findOpen && (
+                  <div className="mt-1 w-60 rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+                    <input list="map-node-labels" value={fromLabel} onChange={(e) => setFromLabel(e.target.value)} placeholder="From node…" className="mb-1 h-7 w-full rounded border border-border bg-background px-1.5 text-xs outline-none" />
+                    <input list="map-node-labels" value={toLabel} onChange={(e) => setToLabel(e.target.value)} placeholder="To node…" className="mb-2 h-7 w-full rounded border border-border bg-background px-1.5 text-xs outline-none" />
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="brand" className="h-7 flex-1 text-xs" onClick={findConnection}>Find path</Button>
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={walkFrom} title="Random walk from the start node">Walk</Button>
+                      {pathLen != null && <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={clearPath}>Clear</Button>}
+                    </div>
+                    {findMsg && <p className="mt-1.5 text-[11px] italic text-destructive">{findMsg}</p>}
+                    {pathLen != null && !findMsg && <p className="mt-1.5 text-[11px] italic text-muted-foreground">{pathLen} nodes highlighted</p>}
+                  </div>
+                )}
+              </div>
+              <datalist id="map-node-labels">
+                {data?.nodes.slice(0, 1000).map((n) => <option key={n.id} value={n.label} />)}
+              </datalist>
+            </div>
+          )}
+
           {/* Settings panel */}
           {hasGraph && showPanel && (
             <div className="absolute right-4 top-4 w-60 rounded-xl border border-border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
@@ -619,6 +860,14 @@ export function KnowledgeMap() {
                 <select value={colorMode} onChange={(e) => setColorMode(e.target.value as ColorMode)} className="h-7 w-full rounded border border-border bg-background px-1.5 text-xs outline-none">
                   <option value="type">Type</option>
                   <option value="folder">Folder</option>
+                </select>
+              </Field>
+              <Field label="Added within">
+                <select value={timeRange} onChange={(e) => setTimeRange(e.target.value as TimeRange)} className="h-7 w-full rounded border border-border bg-background px-1.5 text-xs outline-none">
+                  <option value="all">Any time</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d">Last 30 days</option>
+                  <option value="90d">Last 90 days</option>
                 </select>
               </Field>
               <Field label={`Local depth · ${depth}`}>
@@ -738,7 +987,7 @@ export function KnowledgeMap() {
                       {detail.sourceUrl && (
                         <Button asChild size="sm" variant="outline"><a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">Open original</a></Button>
                       )}
-                      <Button size="sm" variant="outline" onClick={() => setCenterId(detail.id)}><Network className="mr-1.5 h-3.5 w-3.5" /> Focus local graph</Button>
+                      <Button size="sm" variant="outline" onClick={() => focusLocal(detail.id, detail.title)}><Network className="mr-1.5 h-3.5 w-3.5" /> Focus local graph</Button>
                       <Button size="sm" variant="brand" onClick={() => router.push(`/directory?item=${detail.id}`)}>Open in Directory</Button>
                     </div>
                   </>

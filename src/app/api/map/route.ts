@@ -14,6 +14,7 @@ export type MapNode = {
   label: string;
   itemKind?: "saved_article" | "uploaded_document" | "user_note";
   connections: number;
+  addedAt?: string; // item creation time (ISO) — powers the time-range filter
 };
 
 export type MapLink = {
@@ -56,6 +57,7 @@ export async function GET(req: Request) {
         title: directoryItems.title,
         kind: directoryItems.kind,
         folderId: directoryItems.folderId,
+        createdAt: directoryItems.createdAt,
       })
       .from(directoryItems)
       .where(eq(directoryItems.userId, user.id)),
@@ -173,6 +175,7 @@ export async function GET(req: Request) {
       label: i.title,
       itemKind: i.kind,
       connections: itemConn.get(i.id) ?? 0,
+      addedAt: i.createdAt ? new Date(i.createdAt).toISOString() : undefined,
     })),
     ...displayTags.map<MapNode>((t) => ({
       id: `t:${t.id}`,
