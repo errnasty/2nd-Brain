@@ -42,6 +42,35 @@ export function ReviewView({
   // Live backlog: the true due count minus what we've graded this session.
   const remainingDue = Math.max(0, due - reviewed);
 
+  // Anki-style keyboard review: Space/Enter reveals the answer, 1–4 grades.
+  // Keeps the whole session hands-on-keyboard — no mouse round-trips between
+  // cards. Skips inputs and modifier chords so global shortcuts stay intact.
+  useEffect(() => {
+    if (!current) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)
+      ) {
+        return;
+      }
+      if (!showAnswer && (e.key === " " || e.key === "Enter")) {
+        e.preventDefault();
+        setShowAnswer(true);
+        return;
+      }
+      if (showAnswer && /^[1-4]$/.test(e.key)) {
+        e.preventDefault();
+        grade(GRADES[Number(e.key) - 1].quality);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, showAnswer]);
+
   function grade(quality: number) {
     if (!current) return;
     const card = current;
@@ -125,20 +154,26 @@ export function ReviewView({
         {!showAnswer ? (
           <Button onClick={() => setShowAnswer(true)} className="gap-1.5">
             <Check className="h-4 w-4" /> Show answer
+            <kbd className="ml-1 hidden rounded border border-border/50 bg-background/20 px-1 text-[10px] font-medium sm:inline">
+              space
+            </kbd>
           </Button>
         ) : (
           <div className="flex w-full justify-center gap-2">
-            {GRADES.map((g) => (
+            {GRADES.map((g, i) => (
               <Button
                 key={g.label}
                 variant="outline"
                 onClick={() => grade(g.quality)}
                 className={cn(
-                  "flex-1 max-w-[120px]",
+                  "flex-1 max-w-[120px] gap-1.5",
                   g.label === "Again" && "hover:border-destructive hover:text-destructive",
                   g.label === "Easy" && "hover:border-emerald-500 hover:text-emerald-600",
                 )}
               >
+                <kbd className="hidden rounded border border-border bg-muted px-1 text-[10px] font-medium text-muted-foreground sm:inline">
+                  {i + 1}
+                </kbd>
                 {g.label}
               </Button>
             ))}

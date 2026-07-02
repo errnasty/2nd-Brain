@@ -45,6 +45,16 @@ export const SHORTCUT_GROUPS: Group[] = [
       { keys: ["esc"], label: "Close reader" },
     ],
   },
+  {
+    title: "Flashcard review (Study)",
+    items: [
+      { keys: ["space"], label: "Show answer" },
+      { keys: ["1"], label: "Grade: Again" },
+      { keys: ["2"], label: "Grade: Hard" },
+      { keys: ["3"], label: "Grade: Good" },
+      { keys: ["4"], label: "Grade: Easy" },
+    ],
+  },
 ];
 
 // chord key → destination, derived from the data above.
