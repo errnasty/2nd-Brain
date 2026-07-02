@@ -106,6 +106,11 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
               <Link
                 key={href}
                 href={href}
+                // Full prefetch (RSC data included, not just the loading
+                // boundary): the sidebar is always in the viewport, so every
+                // section is fetched once at load and tab switches render from
+                // the router cache (staleTimes.dynamic) with no skeleton.
+                prefetch={true}
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "group/item relative flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors",
@@ -129,6 +134,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
       <div className="p-2">
         <Link
           href="/settings"
+          prefetch={true}
           aria-current={isActive("/settings") ? "page" : undefined}
           className={cn(
             "block rounded-md px-3 py-2 text-sm transition-colors",

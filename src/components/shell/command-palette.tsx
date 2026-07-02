@@ -97,14 +97,17 @@ export function CommandPalette() {
     };
   }, []);
 
-  // Reset on open/close.
+  // Reset on open/close. Opening also signals imminent navigation, so warm
+  // every jump target (full prefetch; deduped against the sidebar's by the
+  // router cache) — Enter then renders from cache instead of a skeleton.
   useEffect(() => {
     if (open) {
       setQuery("");
       setHits([]);
       setActive(0);
+      for (const { href } of NAV) router.prefetch(href);
     }
-  }, [open]);
+  }, [open, router]);
 
   // Debounced cross-surface search.
   useEffect(() => {

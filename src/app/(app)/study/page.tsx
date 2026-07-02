@@ -23,22 +23,23 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   // set; the rest of the hub (stats/tasks/calendar) stays library-wide.
   const scope: StudyScope = { folderId: sp.folder ?? null, itemId: sp.item ?? null };
   const isScoped = !!(scope.folderId || scope.itemId);
-  let scopeLabel: string | null = null;
-  if (scope.folderId) {
-    const [f] = await db
-      .select({ name: directoryFolders.name })
-      .from(directoryFolders)
-      .where(and(eq(directoryFolders.id, scope.folderId), eq(directoryFolders.userId, user.id)))
-      .limit(1);
-    scopeLabel = f?.name ?? null;
-  } else if (scope.itemId) {
-    const [i] = await db
-      .select({ title: directoryItems.title })
-      .from(directoryItems)
-      .where(and(eq(directoryItems.id, scope.itemId), eq(directoryItems.userId, user.id)))
-      .limit(1);
-    scopeLabel = i?.title ?? null;
-  }
+  // Runs in parallel with the panel batch below (awaited alongside it) — the
+  // label lookup must not add a serial round-trip in front of six queries.
+  const scopeLabelPromise: Promise<string | null> = scope.folderId
+    ? db
+        .select({ name: directoryFolders.name })
+        .from(directoryFolders)
+        .where(and(eq(directoryFolders.id, scope.folderId), eq(directoryFolders.userId, user.id)))
+        .limit(1)
+        .then(([f]) => f?.name ?? null)
+    : scope.itemId
+      ? db
+          .select({ title: directoryItems.title })
+          .from(directoryItems)
+          .where(and(eq(directoryItems.id, scope.itemId), eq(directoryItems.userId, user.id)))
+          .limit(1)
+          .then(([i]) => i?.title ?? null)
+      : Promise.resolve(null);
 
   const now = new Date();
   const from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
@@ -57,14 +58,16 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
 
   // allSettled (not Promise.all): one failing panel query must not blank the
   // whole Study hub. Each panel falls back to its own empty default.
-  const [statsR, tasksR, dueR, cardStatsR, calR, gameR] = await Promise.allSettled([
+  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR] = await Promise.allSettled([
     fetchStudyStats(user.id),
     fetchTasks(user.id),
     fetchDueCards(user.id, 50, isScoped ? scope : undefined),
     fetchCardStats(user.id, isScoped ? scope : undefined),
     fetchCalendar(user.id, from.toISOString(), to.toISOString()),
     fetchGameState(user.id),
+    scopeLabelPromise,
   ]);
+  const scopeLabel = scopeLabelR.status === "fulfilled" ? scopeLabelR.value : null;
   if (statsR.status === "fulfilled") stats = statsR.value;
   if (tasksR.status === "fulfilled") tasks = tasksR.value;
   if (dueR.status === "fulfilled") dueCards = dueR.value;

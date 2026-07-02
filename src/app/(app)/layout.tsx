@@ -7,6 +7,7 @@ import { Confetti } from "@/components/shell/confetti";
 import { Onboarding } from "@/components/shell/onboarding";
 import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
+import { PageTransition } from "@/components/shell/page-transition";
 import { AppDialogProvider } from "@/components/ui/app-dialogs";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -23,7 +24,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             areas). Desktop has neither, so the padding collapses at md+. */}
         <main className="flex-1 overflow-hidden pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pt-0 md:pb-0">
           <SyncConflictBanner />
-          {children}
+          <PageTransition>{children}</PageTransition>
         </main>
         <MobileNav />
         <CommandPalette />

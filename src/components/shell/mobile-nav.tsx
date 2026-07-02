@@ -65,9 +65,19 @@ function titleFor(pathname: string): string {
  */
 export function MobileNav() {
   const pathname = usePathname();
+  const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const onMoreRoute = MORE_LINKS.some((l) => pathname.startsWith(l.href));
+
+  // The More-sheet links sit offscreen (translate-y-full) so viewport-based
+  // Link prefetch never fires before the sheet opens — too late for an
+  // instant tap. Prefetch those routes eagerly instead (full RSC data;
+  // router.prefetch defaults to a full prefetch). Deduped by the router
+  // cache, so the desktop sidebar doing the same is free.
+  useEffect(() => {
+    for (const { href } of MORE_LINKS) router.prefetch(href);
+  }, [router]);
 
   return (
     <>
@@ -114,6 +124,9 @@ export function MobileNav() {
             <Link
               key={href}
               href={href}
+              // Full prefetch: bottom-bar tabs are always visible, so every
+              // primary section is warm before the first tap — no skeleton.
+              prefetch={true}
               aria-current={active ? "page" : undefined}
               className={cn(
                 "relative flex min-h-[3rem] flex-1 flex-col items-center justify-center gap-0.5 py-1.5 transition-colors",
