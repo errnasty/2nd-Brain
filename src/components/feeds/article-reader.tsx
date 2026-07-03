@@ -36,6 +36,8 @@ import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-contr
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
+import { SelectionToCard } from "@/components/review/selection-card";
+import { createCardsFromTextAction } from "@/app/(app)/review/actions";
 
 type ArticleData = {
   id: string;
@@ -79,6 +81,7 @@ export function ArticleReader({
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
+  const [takeawayCards, setTakeawayCards] = useState<"idle" | "making" | "done">("idle");
   const scrollRootRef = useRef<HTMLDivElement>(null);
   const restoredFor = useRef<string | null>(null);
   // Live mirror of selectedId so async resolvers can detect a stale article.
@@ -111,6 +114,27 @@ export function ArticleReader({
       setTakeawaysLoading(false);
     }
   }, [selectedId, takeawaysLoading]);
+
+  // Takeaways → flashcards: the distilled points are exactly the durable
+  // knowledge worth spacing, so feed them (not the whole article) to the deck.
+  const makeTakeawayCards = useCallback(async () => {
+    if (!takeaways || takeawayCards !== "idle") return;
+    setTakeawayCards("making");
+    try {
+      const text = `${takeaways.tldr}\n\n${takeaways.keyPoints.map((p) => `- ${p}`).join("\n")}`;
+      const res = await createCardsFromTextAction({ title: article?.title ?? "Article", text });
+      if (res.ok) {
+        setTakeawayCards("done");
+        toast.success(`${res.count} flashcard${res.count === 1 ? "" : "s"} added to your deck`);
+      } else {
+        setTakeawayCards("idle");
+        toast.error(res.error);
+      }
+    } catch {
+      setTakeawayCards("idle");
+      toast.error("Couldn't create flashcards");
+    }
+  }, [takeaways, takeawayCards, article?.title]);
 
   useEffect(() => {
     setTtsSupported(typeof window !== "undefined" && "speechSynthesis" in window);
@@ -296,6 +320,7 @@ export function ArticleReader({
     setProgress(0);
     setTakeaways(null);
     setTakeawaysSecs(null);
+    setTakeawayCards("idle");
 
     if (!selectedId) {
       setArticle(null);
@@ -595,15 +620,31 @@ export function ArticleReader({
                   className="not-prose mb-8 rounded-xl border p-4"
                   style={{ borderColor: "hsl(var(--brand) / 0.35)", background: "hsl(var(--brand) / 0.05)" }}
                 >
-                  <div className="mb-2 flex items-center justify-between">
+                  <div className="mb-2 flex items-center justify-between gap-2">
                     <span className="editorial-eyebrow-brand inline-flex items-center gap-1.5">
                       <ListChecks className="h-3 w-3" /> § Key takeaways
                     </span>
-                    {takeawaysSecs != null && (
-                      <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                        Generated · {takeawaysSecs} sec
-                      </span>
-                    )}
+                    <span className="flex items-center gap-2">
+                      {takeawaysSecs != null && (
+                        <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                          Generated · {takeawaysSecs} sec
+                        </span>
+                      )}
+                      {/* Takeaways are pre-distilled card material — one click
+                          turns them into recall cards for the review deck. */}
+                      <button
+                        onClick={makeTakeawayCards}
+                        disabled={takeawayCards !== "idle"}
+                        className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-0.5 text-[11px] font-medium transition-colors hover:bg-accent disabled:opacity-60"
+                      >
+                        {takeawayCards === "making" ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <ListChecks className="h-3 w-3" style={{ color: "hsl(var(--brand))" }} />
+                        )}
+                        {takeawayCards === "done" ? "Cards added" : "Make cards"}
+                      </button>
+                    </span>
                   </div>
                   <p className="mb-2 text-[14px] font-medium leading-snug">{takeaways.tldr}</p>
                   <ul className="space-y-1">
@@ -631,7 +672,10 @@ export function ArticleReader({
                 </div>
               )}
               {content ? (
-                <div dangerouslySetInnerHTML={{ __html: content }} />
+                // Highlight any passage → floating "Make flashcard" button.
+                <SelectionToCard sourceTitle={article?.title ?? ""}>
+                  <div dangerouslySetInnerHTML={{ __html: content }} />
+                </SelectionToCard>
               ) : !loadingContent && article ? (
                 article.excerpt ? (
                   <p>{article.excerpt}</p>

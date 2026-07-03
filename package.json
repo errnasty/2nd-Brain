@@ -59,7 +59,6 @@
     "postgres": "^3.4.5",
     "react": "^19.0.0-rc-66855b96-20241106",
     "react-dom": "^19.0.0-rc-66855b96-20241106",
-    "react-force-graph-2d": "^1.29.1",
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^2.1.9",
     "remark-gfm": "^4.0.1",
@@ -94,9 +93,15 @@
   "build": {
     "appId": "com.secondbrain.desktop",
     "productName": "Second Brain",
-    "directories": { "output": "dist-desktop" },
+    "directories": {
+      "output": "dist-desktop"
+    },
     "publish": [
-      { "provider": "github", "owner": "REPLACE_WITH_GITHUB_USER", "repo": "2nd-Brain" }
+      {
+        "provider": "github",
+        "owner": "REPLACE_WITH_GITHUB_USER",
+        "repo": "2nd-Brain"
+      }
     ],
     "files": [
       "electron/**/*",
@@ -120,13 +125,39 @@
       "node_modules/universalify/**/*"
     ],
     "extraResources": [
-      { "from": ".next/standalone", "to": "app/.next/standalone" },
-      { "from": ".next/standalone/node_modules", "to": "app/.next/standalone/node_modules" },
-      { "from": ".next/static", "to": "app/.next/standalone/.next/static" },
-      { "from": "public", "to": "app/.next/standalone/public" }
+      {
+        "from": ".next/standalone",
+        "to": "app/.next/standalone"
+      },
+      {
+        "from": ".next/standalone/node_modules",
+        "to": "app/.next/standalone/node_modules"
+      },
+      {
+        "from": ".next/static",
+        "to": "app/.next/standalone/.next/static"
+      },
+      {
+        "from": "public",
+        "to": "app/.next/standalone/public"
+      }
     ],
-    "win": { "target": "nsis", "icon": "build/icon.ico" },
-    "mac": { "target": "dmg", "category": "public.app-category.productivity", "icon": "build/icon.png" },
-    "linux": { "target": ["AppImage", "deb"], "category": "Utility", "icon": "build/icon.png" }
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "icon": "build/icon.png"
+    }
   }
 }

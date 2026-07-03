@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Crimson_Pro, DM_Sans, Lora } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SettingsEffects } from "@/components/settings-effects";
+import { SwRegister } from "@/components/shell/sw-register";
 import { Toaster } from "sonner";
 import "./globals.css";
 
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
           <SettingsEffects />
+          <SwRegister />
           {children}
           <Toaster richColors closeButton position="bottom-right" />
         </ThemeProvider>

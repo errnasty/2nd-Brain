@@ -48,3 +48,6 @@ drizzle/meta
 
 # Electron build output
 dist-desktop/
+
+# design scratch (kept local)
+Front-end redesigned/

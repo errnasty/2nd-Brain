@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
   BookmarkPlus,
+  Brain,
   Check,
   CalendarDays,
   ChevronDown,
@@ -44,7 +45,7 @@ import {
 import { cn } from "@/lib/utils";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
-import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { generateFlashcardsAction, createFlashcardAction } from "@/app/(app)/review/actions";
 import { searchAttachableItemsAction, type AttachableItem } from "@/app/(app)/ask/actions";
 import { fetchDirectoryItemByIdAction } from "@/app/(app)/directory/actions";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
@@ -565,10 +566,17 @@ export function AskShell() {
           <Empty onPick={(s) => send(s)} />
         ) : (
           <div className="space-y-7">
-            {messages.map((m) => (
+            {messages.map((m, i) => (
               <MessageBubble
                 key={m.id}
                 message={m}
+                // The user question this answer responds to — becomes the
+                // flashcard front when the answer is saved as a card.
+                question={
+                  m.role === "assistant" && messages[i - 1]?.role === "user"
+                    ? messages[i - 1].content
+                    : undefined
+                }
                 onOpenSource={openSource}
                 onOpenPath={openPath}
                 onFollowup={send}
@@ -953,14 +961,38 @@ function GroundingMeter({ message }: { message: Message }) {
 }
 
 /**
- * #7 Per-message action row: copy as Markdown, save the answer as a note, and a
- * 👍/👎 feedback toggle.
+ * #7 Per-message action row: copy as Markdown, save the answer as a note, save
+ * it as a flashcard (your own question = the highest-signal card front there
+ * is), and a 👍/👎 feedback toggle.
  */
-function MessageActions({ message }: { message: Message }) {
+function MessageActions({ message, question }: { message: Message; question?: string }) {
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [carding, setCarding] = useState(false);
+  const [carded, setCarded] = useState(false);
   const [vote, setVote] = useState<"up" | "down" | null>(null);
+
+  async function saveAsCard() {
+    if (carding || carded || !question) return;
+    setCarding(true);
+    try {
+      const res = await createFlashcardAction({
+        question: question.slice(0, 300),
+        answer: answerToMarkdown(message).slice(0, 2000),
+      });
+      if (res.ok) {
+        setCarded(true);
+        toast.success("Flashcard added to your review deck");
+      } else {
+        toast.error(res.error ?? "Couldn't create flashcard");
+      }
+    } catch {
+      toast.error("Couldn't create flashcard");
+    } finally {
+      setCarding(false);
+    }
+  }
 
   function copy() {
     navigator.clipboard
@@ -1007,6 +1039,17 @@ function MessageActions({ message }: { message: Message }) {
         {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : saved ? <Check className="h-3 w-3" /> : <BookmarkPlus className="h-3 w-3" />}
         {saved ? "Saved" : "Save as note"}
       </button>
+      {question && (
+        <button
+          onClick={saveAsCard}
+          disabled={carding || carded}
+          title="Turn this Q&A into a flashcard (your question = the front)"
+          className={ACTION_BTN}
+        >
+          {carding ? <Loader2 className="h-3 w-3 animate-spin" /> : carded ? <Check className="h-3 w-3" /> : <Brain className="h-3 w-3" />}
+          {carded ? "Card added" : "Make flashcard"}
+        </button>
+      )}
       <div className="ml-auto flex items-center gap-0.5">
         <button
           onClick={() => setVote((v) => (v === "up" ? null : "up"))}
@@ -1031,11 +1074,13 @@ function MessageActions({ message }: { message: Message }) {
 
 const MessageBubble = memo(function MessageBubble({
   message,
+  question,
   onOpenSource,
   onOpenPath,
   onFollowup,
 }: {
   message: Message;
+  question?: string;
   onOpenSource: (directoryItemId: string) => void;
   onOpenPath: (path: string) => void;
   onFollowup: (question: string) => void;
@@ -1148,7 +1193,7 @@ const MessageBubble = memo(function MessageBubble({
           ))}
         </div>
       )}
-      {message.content && <MessageActions message={message} />}
+      {message.content && <MessageActions message={message} question={question} />}
       {message.followups && message.followups.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pt-1">
           {message.followups.map((f) => (
