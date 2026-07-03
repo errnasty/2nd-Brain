@@ -1,8 +1,6 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-
-const HAIKU = "claude-haiku-4-5-20251001";
+import { aiAvailable, fastModel } from "@/lib/ai/provider";
 
 const SkillSchema = z.object({
   // Reuse an existing skill name when the content fits one; else a concise new one.
@@ -22,12 +20,12 @@ export async function classifyItemSkills(
   content: string,
   existingSkills: string[],
 ): Promise<ClassifiedSkill | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!aiAvailable()) return null;
   if (!title.trim() && !content.trim()) return null;
 
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU),
+      model: fastModel(),
       schema: SkillSchema,
       system: `You assign learning content to ONE skill the user is building.
 

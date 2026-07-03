@@ -1,13 +1,11 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { aiAvailable, fastModel } from "./provider";
 
-// Phase 2 semantic analysis. Each function is ONE structured Haiku call with
-// capped inputs — vector search (the expensive-at-scale part) happens in the
-// caller via the indexed pgvector query. Returns [] on any failure so the UI
-// degrades quietly.
-
-const HAIKU = "claude-haiku-4-5-20251001";
+// Phase 2 semantic analysis. Each function is ONE structured fast-model call
+// with capped inputs — vector search (the expensive-at-scale part) happens in
+// the caller via the indexed pgvector query. Returns [] on any failure so the
+// UI degrades quietly.
 
 export type Relation = "connection" | "tension";
 
@@ -32,7 +30,7 @@ export async function classifyConnections(
   source: { title: string; snippet: string },
   candidates: { title: string; snippet: string }[],
 ): Promise<ClassifiedConnection[]> {
-  if (!process.env.ANTHROPIC_API_KEY || candidates.length === 0) return [];
+  if (!aiAvailable() || candidates.length === 0) return [];
 
   const list = candidates
     .map((c, i) => `[${i}] ${c.title}\n${c.snippet.slice(0, 400)}`)
@@ -40,7 +38,7 @@ export async function classifyConnections(
 
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU),
+      model: fastModel(),
       schema: ConnSchema,
       system: `You compare a SOURCE note against CANDIDATE notes from the same personal knowledge base.
 
@@ -79,7 +77,7 @@ export async function detectGaps(
   scopeName: string,
   items: { title: string; preview: string }[],
 ): Promise<KnowledgeGap[]> {
-  if (!process.env.ANTHROPIC_API_KEY || items.length === 0) return [];
+  if (!aiAvailable() || items.length === 0) return [];
 
   const list = items
     .slice(0, 40)
@@ -88,7 +86,7 @@ export async function detectGaps(
 
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU),
+      model: fastModel(),
       schema: GapSchema,
       system: `You audit a cluster of notes/articles in someone's knowledge base and identify GAPS — important subtopics, prerequisites, or counter-perspectives that are missing given what's already there.
 

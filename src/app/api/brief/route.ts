@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import { and, eq, gte, desc, sql } from "drizzle-orm";
-import { anthropic } from "@ai-sdk/anthropic";
 import { streamText } from "ai";
+import { aiAvailable, smartModel } from "@/lib/ai/provider";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -137,9 +137,9 @@ export async function POST(req: Request) {
     });
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!aiAvailable()) {
     return new Response(
-      "ANTHROPIC_API_KEY not configured. Add it to your env vars to enable the Daily Brief.",
+      "No AI provider configured. Add ANTHROPIC_API_KEY or OPENROUTER_API_KEY to your env vars to enable the Daily Brief.",
       { status: 503 },
     );
   }
@@ -234,7 +234,7 @@ export async function POST(req: Request) {
   // Anthropic prompt caching: cache the large article block so daily reruns (and
   // re-generations within the same conversation window) reuse the same tokens.
   const result = streamText({
-    model: anthropic("claude-sonnet-4-6"),
+    model: smartModel(),
     system: systemPrompt,
     messages: [
       {

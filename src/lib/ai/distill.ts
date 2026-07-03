@@ -1,8 +1,6 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-
-const HAIKU = "claude-haiku-4-5-20251001";
+import { aiAvailable, fastModel } from "./provider";
 
 const DistillSchema = z.object({
   tldr: z.string().min(1).max(400),
@@ -17,12 +15,12 @@ export type Distilled = { tldr: string; keyPoints: string[] };
  * Haiku call; returns null on failure so the caller degrades quietly.
  */
 export async function distill(title: string, content: string): Promise<Distilled | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!aiAvailable()) return null;
   if (!content.trim()) return null;
 
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU),
+      model: fastModel(),
       schema: DistillSchema,
       system: `You distill a document into its durable essence for fast future recall.
 

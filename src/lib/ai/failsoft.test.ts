@@ -3,16 +3,25 @@ import { distill } from "./distill";
 import { generateFlashcards } from "./flashcards";
 import { classifyItemSkills } from "@/lib/gamify/skill-classifier";
 
-// These AI helpers must degrade quietly (never throw) when the API key is
-// missing or the input is empty — callers depend on the [] / null fallback.
+// These AI helpers must degrade quietly (never throw) when NO provider key is
+// configured — callers depend on the [] / null fallback. Both provider keys
+// (and the override) are cleared so aiAvailable() is genuinely false.
 describe("AI helpers fail soft", () => {
   const saved = process.env.ANTHROPIC_API_KEY;
+  const savedOr = process.env.OPENROUTER_API_KEY;
+  const savedProvider = process.env.AI_PROVIDER;
   beforeEach(() => {
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.AI_PROVIDER;
   });
   afterEach(() => {
     if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
     else process.env.ANTHROPIC_API_KEY = saved;
+    if (savedOr === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = savedOr;
+    if (savedProvider === undefined) delete process.env.AI_PROVIDER;
+    else process.env.AI_PROVIDER = savedProvider;
   });
 
   it("generateFlashcards returns [] with no key", async () => {

@@ -5,6 +5,7 @@ import { directoryFolders } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { generateStudyPlan } from "@/lib/ai/study-plan";
+import { aiAvailable } from "@/lib/ai/provider";
 import { createNoteAction, createDirectoryFolderAction } from "@/app/(app)/directory/actions";
 import { checkRateLimit } from "@/lib/rate-limit";
 
@@ -62,8 +63,11 @@ export async function POST(req: Request) {
 
   const rl = await checkRateLimit(user.id, "analyze", 20, 60);
   if (!rl.allowed) return NextResponse.json({ error: "Rate limited" }, { status: 429 });
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 503 });
+  if (!aiAvailable()) {
+    return NextResponse.json(
+      { error: "No AI provider configured (ANTHROPIC_API_KEY or OPENROUTER_API_KEY)" },
+      { status: 503 },
+    );
   }
 
   let body: { goal?: string; deadline?: string; hoursPerWeek?: number; startDate?: string };

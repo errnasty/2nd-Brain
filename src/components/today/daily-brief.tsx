@@ -625,10 +625,11 @@ export function DailyBrief({ name }: { name?: string }) {
         <div className="not-prose mb-7 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm">
           <p className="font-medium text-destructive">Couldn&apos;t generate brief</p>
           <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{error}</p>
-          {error.includes("ANTHROPIC_API_KEY") && (
+          {(error.includes("ANTHROPIC_API_KEY") || error.includes("OPENROUTER_API_KEY")) && (
             <p className="mt-3 text-xs text-muted-foreground">
-              Add an <code className="rounded bg-background px-1">ANTHROPIC_API_KEY</code> environment variable
-              and redeploy.
+              Add an <code className="rounded bg-background px-1">ANTHROPIC_API_KEY</code> or{" "}
+              <code className="rounded bg-background px-1">OPENROUTER_API_KEY</code> environment
+              variable and redeploy.
             </p>
           )}
         </div>

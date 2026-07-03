@@ -18,6 +18,7 @@ type Env = {
   NEXT_PUBLIC_SUPABASE_URL: string;
   NEXT_PUBLIC_SUPABASE_ANON_KEY: string;
   ANTHROPIC_API_KEY: string;
+  OPENROUTER_API_KEY: string;
   OPENAI_API_KEY: string;
   VOYAGE_API_KEY: string;
   EMBEDDINGS_PROVIDER: string;
@@ -28,6 +29,7 @@ const EMPTY: Env = {
   NEXT_PUBLIC_SUPABASE_URL: "",
   NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
   ANTHROPIC_API_KEY: "",
+  OPENROUTER_API_KEY: "",
   OPENAI_API_KEY: "",
   VOYAGE_API_KEY: "",
   EMBEDDINGS_PROVIDER: "local",
@@ -37,7 +39,8 @@ const EMPTY: Env = {
 const FIELDS: { key: keyof Env; label: string; desc: string; secret?: boolean; placeholder?: string }[] = [
   { key: "NEXT_PUBLIC_SUPABASE_URL", label: "Supabase URL", desc: "Project Settings → API.", placeholder: "https://xxxx.supabase.co" },
   { key: "NEXT_PUBLIC_SUPABASE_ANON_KEY", label: "Supabase anon key", desc: "Project Settings → API (public anon key).", secret: true },
-  { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", desc: "Powers Ask, Daily Brief, Study plan.", secret: true, placeholder: "sk-ant-…" },
+  { key: "ANTHROPIC_API_KEY", label: "Anthropic API key", desc: "Powers Ask, Daily Brief, Study plan (and web search).", secret: true, placeholder: "sk-ant-…" },
+  { key: "OPENROUTER_API_KEY", label: "OpenRouter API key", desc: "Optional: one key for many models, usually cheaper. Takes over background AI when set.", secret: true, placeholder: "sk-or-…" },
   { key: "OPENAI_API_KEY", label: "OpenAI API key", desc: "Only if embeddings provider = openai.", secret: true },
   { key: "VOYAGE_API_KEY", label: "Voyage API key", desc: "Only if embeddings provider = voyage.", secret: true },
   { key: "DATABASE_URL", label: "Cloud database URL", desc: "Supabase → Database → Connection string. Enables cloud sync. Blank = local-only.", secret: true, placeholder: "postgresql://postgres:…@db.xxxx.supabase.co:5432/postgres" },

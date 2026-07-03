@@ -1,8 +1,6 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
-
-const HAIKU = "claude-haiku-4-5-20251001";
+import { aiAvailable, fastModel } from "./provider";
 
 const FlashSchema = z.object({
   cards: z
@@ -19,19 +17,19 @@ const FlashSchema = z.object({
 export type GeneratedCard = { question: string; answer: string };
 
 /**
- * Generate 3-5 recall flashcards from an item's text. One Haiku call; returns
- * [] on failure so the caller degrades quietly.
+ * Generate 3-5 recall flashcards from an item's text. One fast-model call;
+ * returns [] on failure so the caller degrades quietly.
  */
 export async function generateFlashcards(
   title: string,
   content: string,
 ): Promise<GeneratedCard[]> {
-  if (!process.env.ANTHROPIC_API_KEY) return [];
+  if (!aiAvailable()) return [];
   if (!content.trim()) return [];
 
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU),
+      model: fastModel(),
       schema: FlashSchema,
       system: `You create spaced-repetition flashcards that test understanding of a document.
 
@@ -46,5 +44,39 @@ Rules:
   } catch (err) {
     console.warn("generateFlashcards failed:", err instanceof Error ? err.message : err);
     return [];
+  }
+}
+
+const RewriteSchema = z.object({
+  question: z.string().min(3).max(300),
+  answer: z.string().min(1).max(800),
+});
+
+/**
+ * Rewrite a "leech" (repeatedly failed) card into a sharper formulation.
+ * Returns null on failure so the caller degrades quietly.
+ */
+export async function rewriteFlashcard(
+  question: string,
+  answer: string,
+): Promise<GeneratedCard | null> {
+  if (!aiAvailable()) return null;
+
+  try {
+    const { object } = await generateObject({
+      model: fastModel(),
+      schema: RewriteSchema,
+      system: `You fix spaced-repetition flashcards the learner keeps failing.
+
+Failed cards are usually too broad, test multiple facts at once, or have a
+vague question. Rewrite this one so it tests EXACTLY ONE atomic fact with an
+unambiguous question and a minimal answer. Keep the same underlying knowledge —
+do not invent new facts.`,
+      prompt: `Question: ${question}\n\nAnswer: ${answer}`,
+    });
+    return object;
+  } catch (err) {
+    console.warn("rewriteFlashcard failed:", err instanceof Error ? err.message : err);
+    return null;
   }
 }

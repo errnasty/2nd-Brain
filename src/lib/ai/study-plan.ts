@@ -1,14 +1,20 @@
 import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
+import type { LanguageModelV1 } from "ai";
 import { z } from "zod";
+import { aiAvailable, fastModel, smartModel } from "./provider";
 
 // Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
 // bounded output. The desktop app runs the server locally with no such limit,
 // so it uses a stronger model + a bigger budget for a more detailed plan.
-// Override either with STUDY_PLAN_MODEL (e.g. "claude-opus-4-7").
+// STUDY_PLAN_MODEL still force-overrides with a specific Anthropic model id.
 const isDesktop = process.env.APP_RUNTIME === "desktop";
-const MODEL = process.env.STUDY_PLAN_MODEL || (isDesktop ? "claude-sonnet-4-6" : "claude-haiku-4-5-20251001");
 const MAX_OUTPUT_TOKENS = isDesktop ? 8000 : 3500;
+
+function planModel(): LanguageModelV1 {
+  if (process.env.STUDY_PLAN_MODEL) return anthropic(process.env.STUDY_PLAN_MODEL);
+  return isDesktop ? smartModel() : fastModel();
+}
 
 // One study session / task. `dayOffset` is days from the start date — the
 // SERVER turns it into a real due date (models are unreliable at calendar
@@ -49,7 +55,7 @@ export async function generateStudyPlan(input: {
   deadlineISO: string | null;
   contextTitles: string[];
 }): Promise<StudyPlan> {
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not configured");
+  if (!aiAvailable()) throw new Error("No AI provider configured (set ANTHROPIC_API_KEY or OPENROUTER_API_KEY)");
   const goal = input.goal.trim();
   if (!goal) throw new Error("Study goal is empty");
 
@@ -83,7 +89,7 @@ Available existing library items (use the exact title in "link" when relevant):
 ${linkList}`;
 
   const { object } = await generateObject({
-    model: anthropic(MODEL),
+    model: planModel(),
     schema: StudyPlanSchema,
     system,
     prompt,

@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { aiAvailable, fastModel } from "./provider";
 
 /**
  * The model returns a list of commands. Two shapes:
@@ -64,7 +64,7 @@ export async function organizeItems(
   items: OrganizeItem[],
   existingFolderNames: string[],
 ): Promise<OrganizeCommand[]> {
-  if (!process.env.ANTHROPIC_API_KEY) return [];
+  if (!aiAvailable()) return [];
   if (items.length === 0) return [];
 
   const folderList =
@@ -81,7 +81,7 @@ export async function organizeItems(
 
   try {
     const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: fastModel(),
       schema: OrganizeResponseSchema,
       system: SYSTEM,
       prompt: `EXISTING FOLDERS: ${folderList}\n\nUNCATEGORIZED ITEMS:\n${itemList}\n\nReturn the commands list.`,

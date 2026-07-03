@@ -21,6 +21,7 @@ const EDITABLE = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "ANTHROPIC_API_KEY",
+  "OPENROUTER_API_KEY",
   "OPENAI_API_KEY",
   "VOYAGE_API_KEY",
   "EMBEDDINGS_PROVIDER",
@@ -30,7 +31,7 @@ const EDITABLE = [
 // Server secrets — never echoed back to the renderer; blank on save = keep.
 // (The NEXT_PUBLIC_* values are already exposed to the browser by design, and
 // the embeddings provider is a non-sensitive enum.)
-const SECRET = new Set<string>(["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "VOYAGE_API_KEY", "DATABASE_URL"]);
+const SECRET = new Set<string>(["ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "VOYAGE_API_KEY", "DATABASE_URL"]);
 
 /** Desktop + loopback Host + authenticated session. Returns an error Response or null. */
 async function guard(req: Request): Promise<NextResponse | null> {

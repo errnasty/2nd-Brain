@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { aiAvailable, fastModel } from "./provider";
 
 const TagSchema = z.object({
   tags: z.array(z.string().min(1).max(40)).min(2).max(5),
@@ -16,14 +16,14 @@ export async function generateTags(
   content: string,
   existingTagNames: string[],
 ): Promise<string[]> {
-  if (!process.env.ANTHROPIC_API_KEY) return [];
+  if (!aiAvailable()) return [];
 
   const existing =
     existingTagNames.length > 0 ? existingTagNames.slice(0, 200).join(", ") : "(none yet)";
 
   try {
     const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: fastModel(),
       schema: TagSchema,
       system: `You generate 3-5 short, descriptive tags for an article.
 

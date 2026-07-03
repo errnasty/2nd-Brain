@@ -3,6 +3,7 @@ import { openai } from "@ai-sdk/openai";
 import { streamText, type LanguageModelV1 } from "ai";
 import { requireUser } from "@/lib/auth";
 import { getChatModel, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { openrouterClient, openrouterKey } from "@/lib/ai/provider";
 import { streamWebAnswer } from "@/lib/ai/web-answer";
 import { checkRateLimit } from "@/lib/rate-limit";
 
@@ -52,6 +53,9 @@ function resolveModel(modelId: string | undefined): { model: LanguageModelV1; pr
   const chosen = getChatModel(modelId);
   if (chosen.provider === "openai") {
     return { model: openai(chosen.id), provider: "openai" };
+  }
+  if (chosen.provider === "openrouter") {
+    return { model: openrouterClient()(chosen.id), provider: "openrouter" };
   }
   return { model: anthropic(chosen.id), provider: "anthropic" };
 }
@@ -108,6 +112,10 @@ export async function POST(req: Request) {
     }
   } else if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
     return new Response("ANTHROPIC_API_KEY not configured.", { status: 503 });
+  } else if (provider === "openrouter" && !openrouterKey()) {
+    return new Response("OPENROUTER_API_KEY not configured — pick a Claude model instead.", {
+      status: 503,
+    });
   } else if (provider === "openai" && !process.env.OPENAI_API_KEY) {
     return new Response("OPENAI_API_KEY not configured — pick a Claude model instead.", {
       status: 503,

@@ -1,13 +1,11 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { aiAvailable, fastModel } from "@/lib/ai/provider";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
-
-const HAIKU = "claude-haiku-4-5-20251001";
 const Schema = z.object({ followups: z.array(z.string().min(1).max(120)).min(1).max(3) });
 
 /**
@@ -25,7 +23,7 @@ export async function POST(req: Request) {
 
   const rl = await checkRateLimit(auth.user.id, "ask-followups", 60, 60);
   if (!rl.allowed) return Response.json({ followups: [] });
-  if (!process.env.ANTHROPIC_API_KEY) return Response.json({ followups: [] });
+  if (!aiAvailable()) return Response.json({ followups: [] });
 
   let body: { question?: string; answer?: string };
   try {
@@ -39,7 +37,7 @@ export async function POST(req: Request) {
 
   try {
     const { object } = await generateObject({
-      model: anthropic(HAIKU),
+      model: fastModel(),
       schema: Schema,
       system:
         "Given a question and its answer, propose up to 3 natural follow-up questions the user " +

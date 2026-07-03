@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
+import { aiAvailable, fastModel } from "./provider";
 
 const RouteSchema = z.object({
   folderName: z
@@ -22,12 +22,12 @@ export async function routeToFolder(
   excerpt: string,
   folderNames: string[],
 ): Promise<{ folderName: string | null; confidence: number }> {
-  if (!process.env.ANTHROPIC_API_KEY) return { folderName: null, confidence: 0 };
+  if (!aiAvailable()) return { folderName: null, confidence: 0 };
   if (folderNames.length === 0) return { folderName: null, confidence: 0 };
 
   try {
     const { object } = await generateObject({
-      model: anthropic("claude-haiku-4-5-20251001"),
+      model: fastModel(),
       schema: RouteSchema,
       system: `You route articles into one of the user's existing folders.
 
