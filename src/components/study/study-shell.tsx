@@ -11,7 +11,7 @@ import { TasksView } from "@/components/tasks/tasks-view";
 import { ReviewView } from "@/components/review/review-view";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";
-import type { DueCard } from "@/app/(app)/review/actions";
+import type { DueCard, LeechCard } from "@/app/(app)/review/actions";
 import type { GameState } from "@/lib/gamify/state";
 
 export type StudyTab = "overview" | "tasks" | "review" | "calendar";
@@ -33,6 +33,7 @@ export function StudyShell({
   calendar,
   game,
   reviewScopeLabel,
+  leeches,
 }: {
   defaultTab: StudyTab;
   stats: StudyStats;
@@ -43,6 +44,7 @@ export function StudyShell({
   calendar: CalendarEntry[];
   game: GameState | null;
   reviewScopeLabel?: string | null;
+  leeches?: LeechCard[];
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -119,7 +121,13 @@ export function StudyShell({
         {tab === "overview" && <StatsOverview stats={stats} game={game} />}
         {tab === "tasks" && <TasksView tasks={tasks} />}
         {tab === "review" && (
-          <ReviewView cards={dueCards} total={totalCards} due={dueCount} scopeLabel={reviewScopeLabel} />
+          <ReviewView
+            cards={dueCards}
+            total={totalCards}
+            due={dueCount}
+            scopeLabel={reviewScopeLabel}
+            leeches={leeches ?? []}
+          />
         )}
         {tab === "calendar" && <CalendarView initial={calendar} />}
       </div>

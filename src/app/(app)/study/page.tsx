@@ -4,7 +4,7 @@ import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { fetchStudyStats, fetchCalendar, type StudyStats, type CalendarEntry } from "./actions";
 import { fetchTasks, type TaskRow } from "../tasks/actions";
-import { fetchDueCards, fetchCardStats, type DueCard, type StudyScope } from "../review/actions";
+import { fetchDueCards, fetchCardStats, fetchLeeches, type DueCard, type StudyScope, type LeechCard } from "../review/actions";
 import { fetchGameState, type GameState } from "@/lib/gamify/state";
 import { StudyShell, type StudyTab } from "@/components/study/study-shell";
 
@@ -55,10 +55,11 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   let dueCardsCount = 0;
   let calendar: CalendarEntry[] = [];
   let game: GameState | null = null;
+  let leeches: LeechCard[] = [];
 
   // allSettled (not Promise.all): one failing panel query must not blank the
   // whole Study hub. Each panel falls back to its own empty default.
-  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR] = await Promise.allSettled([
+  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR, leechR] = await Promise.allSettled([
     fetchStudyStats(user.id),
     fetchTasks(user.id),
     fetchDueCards(user.id, 50, isScoped ? scope : undefined),
@@ -66,8 +67,10 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
     fetchCalendar(user.id, from.toISOString(), to.toISOString()),
     fetchGameState(user.id),
     scopeLabelPromise,
+    fetchLeeches(user.id),
   ]);
   const scopeLabel = scopeLabelR.status === "fulfilled" ? scopeLabelR.value : null;
+  if (leechR.status === "fulfilled") leeches = leechR.value;
   if (statsR.status === "fulfilled") stats = statsR.value;
   if (tasksR.status === "fulfilled") tasks = tasksR.value;
   if (dueR.status === "fulfilled") dueCards = dueR.value;
@@ -96,6 +99,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
       calendar={calendar}
       game={game}
       reviewScopeLabel={isScoped ? scopeLabel : null}
+      leeches={leeches}
     />
   );
 }

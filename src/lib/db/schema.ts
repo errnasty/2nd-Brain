@@ -415,7 +415,9 @@ export type DocumentChunk = typeof documentChunks.$inferSelect;
 export type DirectoryFolder = typeof directoryFolders.$inferSelect;
 export type DirectoryItem = typeof directoryItems.$inferSelect;
 export type DirectoryLink = typeof directoryLinks.$inferSelect;
-// Spaced-repetition flashcards (SM-2). Generated on demand from a Directory item.
+// Spaced-repetition flashcards. Scheduled by FSRS (stability/difficulty);
+// legacy SM-2 columns (ease/intervalDays/repetitions) remain for seeding old
+// rows and for stats. Cloud migration 0018 adds the FSRS columns.
 export const directoryFlashcards = pgTable(
   "directory_flashcards",
   {
@@ -429,6 +431,11 @@ export const directoryFlashcards = pgTable(
     ease: real("ease").default(2.5).notNull(),
     intervalDays: integer("interval_days").default(0).notNull(),
     repetitions: integer("repetitions").default(0).notNull(),
+    // FSRS state — null until the card's first FSRS review.
+    stability: real("stability"),
+    difficulty: real("difficulty"),
+    lapses: integer("lapses").default(0).notNull(),
+    lastReviewedAt: timestamp("last_reviewed_at", { withTimezone: true }),
     dueDate: timestamp("due_date", { withTimezone: true }).defaultNow().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),

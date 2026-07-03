@@ -162,6 +162,17 @@ create table if not exists user_settings (
 create unique index if not exists user_settings_user_unique on user_settings (user_id);
 `;
 
+// FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
+// idempotent so existing local DBs gain them without a reinstall.
+const FSRS_SQL = `
+alter table directory_flashcards add column if not exists stability real;
+alter table directory_flashcards add column if not exists difficulty real;
+alter table directory_flashcards add column if not exists lapses integer not null default 0;
+alter table directory_flashcards add column if not exists last_reviewed_at timestamptz;
+create index if not exists directory_flashcards_lapses_idx
+  on directory_flashcards (user_id, lapses desc);
+`;
+
 // Feeds-tab perf indexes — mirrors cloud migration 0015. No CONCURRENTLY: PGlite
 // is single-connection and runs these inline. create-if-not-exists = idempotent.
 const PERF_INDEX_SQL = `
@@ -234,6 +245,13 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(SYNC_SUPPORT_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] sync support failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: FSRS columns on flashcards (mirror cloud migration 0018).
+  try {
+    await client.exec(FSRS_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] fsrs columns failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: feeds-tab perf indexes (mirror cloud migration 0015). Idempotent

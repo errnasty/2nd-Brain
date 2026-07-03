@@ -2,12 +2,18 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Check, RotateCcw } from "lucide-react";
+import { Brain, Check, Loader2, RotateCcw, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { GRADES } from "@/lib/srs/sm2";
-import { gradeCardAction, type DueCard } from "@/app/(app)/review/actions";
+import {
+  gradeCardAction,
+  rewriteLeechAction,
+  type DueCard,
+  type LeechCard,
+} from "@/app/(app)/review/actions";
+import { enqueueGrade, flushGrades, pendingGradeCount } from "@/lib/offline/grade-queue";
 import { celebrate } from "@/lib/gamify/celebrate";
 
 export function ReviewView({
@@ -15,6 +21,7 @@ export function ReviewView({
   total,
   due,
   scopeLabel,
+  leeches = [],
 }: {
   cards: DueCard[];
   total: number;
@@ -22,6 +29,8 @@ export function ReviewView({
   due: number;
   /** When set, this session is scoped to a folder/note ("study this folder"). */
   scopeLabel?: string | null;
+  /** Repeatedly-failed cards surfaced for rewriting. */
+  leeches?: LeechCard[];
 }) {
   const router = useRouter();
   const [queue, setQueue] = useState<DueCard[]>(cards);
@@ -71,22 +80,48 @@ export function ReviewView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, showAnswer]);
 
+  // Flush grades queued while offline: on mount and whenever we reconnect.
+  useEffect(() => {
+    async function flush() {
+      if (pendingGradeCount() === 0 || !navigator.onLine) return;
+      const n = await flushGrades(gradeCardAction);
+      if (n > 0) {
+        toast.success(`Synced ${n} offline review${n === 1 ? "" : "s"}`);
+        router.refresh();
+      }
+    }
+    void flush();
+    window.addEventListener("online", flush);
+    return () => window.removeEventListener("online", flush);
+  }, [router]);
+
   function grade(quality: number) {
     if (!current) return;
     const card = current;
-    setQueue((q) => q.slice(1));
+    const lapse = quality < 3;
+    // Anki-style relearning: a failed card goes to the BACK of the session for
+    // an immediate same-day retry (the server still schedules it for
+    // tomorrow). Only successful grades count toward the session tally.
+    setQueue((q) => (lapse ? [...q.slice(1), card] : q.slice(1)));
     setShowAnswer(false);
-    setReviewed((n) => n + 1);
+    if (!lapse) setReviewed((n) => n + 1);
     startTransition(async () => {
-      const r = await gradeCardAction({ id: card.id, quality });
-      if (r.ok) celebrate(r.xp);
-      if (!r.ok) {
-        // Server rejected the grade — put the card back so it isn't silently
-        // lost from the session, and undo the optimistic counters.
-        setQueue((q) => [card, ...q]);
-        setReviewed((n) => Math.max(0, n - 1));
-        setShowAnswer(true);
-        toast.error(r.error);
+      try {
+        const r = await gradeCardAction({ id: card.id, quality });
+        if (r.ok) celebrate(r.xp);
+        if (!r.ok) {
+          // Server rejected the grade — put the card back so it isn't silently
+          // lost from the session, and undo the optimistic counters.
+          setQueue((q) => [card, ...q.filter((c) => c.id !== card.id)]);
+          if (!lapse) setReviewed((n) => Math.max(0, n - 1));
+          setShowAnswer(true);
+          toast.error(r.error);
+        }
+      } catch {
+        // Network down (offline study): keep the optimistic advance and queue
+        // the grade — it syncs on reconnect via the flush effect above.
+        enqueueGrade(card.id, quality);
+        toast.info("Offline — review saved, will sync when you're back online");
       }
     });
   }
@@ -105,19 +140,24 @@ export function ReviewView({
     // don't claim "all caught up" — invite loading the next batch.
     const moreDue = remainingDue > 0;
     return (
-      <Empty
-        title={moreDue ? "Batch done" : "All caught up 🎉"}
-        body={
-          moreDue
-            ? `Reviewed ${reviewed}. ${remainingDue} more due — load the next batch.`
-            : `Reviewed ${reviewed} card${reviewed === 1 ? "" : "s"}. Nothing else is due right now.`
-        }
-        action={
-          <Button variant="outline" onClick={() => router.refresh()} className="gap-1.5">
-            <RotateCcw className="h-3.5 w-3.5" /> {moreDue ? "Load next batch" : "Check again"}
-          </Button>
-        }
-      />
+      <div className="flex h-full flex-col">
+        <div className="min-h-0 flex-1">
+          <Empty
+            title={moreDue ? "Batch done" : "All caught up 🎉"}
+            body={
+              moreDue
+                ? `Reviewed ${reviewed}. ${remainingDue} more due — load the next batch.`
+                : `Reviewed ${reviewed} card${reviewed === 1 ? "" : "s"}. Nothing else is due right now.`
+            }
+            action={
+              <Button variant="outline" onClick={() => router.refresh()} className="gap-1.5">
+                <RotateCcw className="h-3.5 w-3.5" /> {moreDue ? "Load next batch" : "Check again"}
+              </Button>
+            }
+          />
+        </div>
+        <LeechPanel leeches={leeches} />
+      </div>
     );
   }
 
@@ -180,7 +220,78 @@ export function ReviewView({
           </div>
         )}
       </div>
+      <LeechPanel leeches={leeches} />
     </div>
+  );
+}
+
+/**
+ * Cards failed 4+ times are "leeches": almost always badly formulated, and
+ * they eat review time forever if left alone. Surface them with a one-click
+ * AI rewrite that resets the card's scheduling as a fresh formulation.
+ */
+function LeechPanel({ leeches }: { leeches: LeechCard[] }) {
+  const router = useRouter();
+  const [busyId, setBusyId] = useState<string | null>(null);
+  if (leeches.length === 0) return null;
+
+  async function rewrite(id: string) {
+    setBusyId(id);
+    try {
+      const r = await rewriteLeechAction(id);
+      if (r.ok) {
+        toast.success("Card rewritten — it's back in today's queue as a fresh card");
+        router.refresh();
+      } else {
+        toast.error(r.error);
+      }
+    } catch {
+      toast.error("Couldn't rewrite card");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="border-t border-border px-6 py-4">
+      <div className="mb-2 flex items-baseline justify-between">
+        <span className="editorial-eyebrow">
+          Leeches · {leeches.length} card{leeches.length === 1 ? "" : "s"} you keep failing
+        </span>
+        <span className="text-[11px] italic text-muted-foreground">
+          rewrite = sharper card, scheduling resets
+        </span>
+      </div>
+      <ul className="space-y-1.5">
+        {leeches.slice(0, 5).map((l) => (
+          <li
+            key={l.id}
+            className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2"
+          >
+            <span className="min-w-0 flex-1 truncate text-[13px]" title={l.question}>
+              {l.question}
+            </span>
+            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-destructive/80">
+              ×{l.lapses}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 gap-1 px-2 text-xs"
+              disabled={busyId !== null}
+              onClick={() => rewrite(l.id)}
+            >
+              {busyId === l.id ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Wand2 className="h-3 w-3" />
+              )}
+              Rewrite
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
