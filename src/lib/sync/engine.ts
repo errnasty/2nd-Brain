@@ -53,6 +53,9 @@ const TABLES: TableCfg[] = [
   { name: "directory_items", pk: ["id"], userCol: "user_id", exclude: ["embedding"] },
   { name: "item_tags", pk: ["tag_id", "item_kind", "item_id"], userCol: "user_id", exclude: [] },
   { name: "directory_flashcards", pk: ["id"], userCol: "user_id", exclude: [] },
+  // Rabbithole branches. parent_id has no FK, so self-referencing rows can
+  // apply in any order within the batch.
+  { name: "rabbithole_nodes", pk: ["id"], userCol: "user_id", exclude: [] },
   // Gamification aggregates. xp_events is the local-only ledger (not synced).
   { name: "player_profile", pk: ["id"], userCol: "user_id", exclude: [] },
   { name: "skills", pk: ["id"], userCol: "user_id", exclude: [] },

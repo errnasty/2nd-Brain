@@ -6,8 +6,9 @@
 export const USAGE_SENTINEL = "<<<SB_USAGE:";
 export const WEBSOURCES_SENTINEL = "<<<SB_WEBSOURCES:";
 export const BRIEFSOURCES_SENTINEL = "<<<SB_BRIEFSOURCES:";
+export const RABBITHOLE_SENTINEL = "<<<SB_RH_NODE:";
 
-const ALL = [USAGE_SENTINEL, WEBSOURCES_SENTINEL, BRIEFSOURCES_SENTINEL];
+const ALL = [USAGE_SENTINEL, WEBSOURCES_SENTINEL, BRIEFSOURCES_SENTINEL, RABBITHOLE_SENTINEL];
 
 /** Index of the first complete sentinel marker in `acc`, or -1. */
 export function firstSentinel(acc: string): number {

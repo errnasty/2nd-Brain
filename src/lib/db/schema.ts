@@ -446,10 +446,49 @@ export const directoryFlashcards = pgTable(
   }),
 );
 
+// ── Rabbithole: recursive select→ask→child-document trees ───────────────
+// Each node is one AI-answered branch hanging off a Directory item: the user
+// selected `anchor_text` (in the root document when parent_id is null, else in
+// the parent node's answer), asked `question`, and got `content` back as a
+// standalone mini-document. Deleting an item cascades its whole hole away.
+// parent_id is intentionally NOT a foreign key (matching folders.parent_id /
+// directory_folders.parent_id) — subtree deletes are done in app code.
+export const rabbitholeNodes = pgTable(
+  "rabbithole_nodes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    itemId: uuid("item_id")
+      .notNull()
+      .references(() => directoryItems.id, { onDelete: "cascade" }),
+    parentId: uuid("parent_id"),
+    anchorText: text("anchor_text").notNull(),
+    question: text("question").notNull(),
+    // Preset lens key (explain | eli5 | example | deeper) or null for a custom question.
+    lens: text("lens"),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    model: text("model"),
+    // 1 = branched from the root document; children are parent.depth + 1.
+    depth: integer("depth").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    itemIdx: index("rabbithole_nodes_item_idx").on(t.itemId, t.createdAt),
+    parentIdx: index("rabbithole_nodes_parent_idx").on(t.parentId),
+    // Supports the desktop⇄cloud sync pull ("changed since cursor").
+    userUpdatedIdx: index("rabbithole_nodes_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
 export type DirectoryFlashcard = typeof directoryFlashcards.$inferSelect;
+export type RabbitholeNode = typeof rabbitholeNodes.$inferSelect;
 
 // ── Gamification ────────────────────────────────────────────────────────
 // A generic XP/skill engine. Domain-agnostic ('knowledge' now; 'fitness' etc

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, Library, Lightbulb, Loader2, Pencil, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, Library, Lightbulb, Loader2, Pencil, Rabbit, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import type { DirectoryListItem } from "./directory-shell";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 import { ConnectionsPanel } from "@/components/reader/connections-panel";
+import { Rabbithole } from "@/components/reader/rabbithole";
 
 type ResolvedLink = { title: string; id: string | null };
 type Backlink = { id: string; title: string; kind: string };
@@ -85,6 +86,8 @@ export function ItemViewer({
   const [fullLoading, setFullLoading] = useState(false);
   const [articleData, setArticleData] = useState<ArticleContent | null>(null);
   const [queryOpen, setQueryOpen] = useState(false);
+  const [rabbitholeOpen, setRabbitholeOpen] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const [distilling, setDistilling] = useState(false);
   const [essenceOpen, setEssenceOpen] = useState(true);
@@ -122,6 +125,7 @@ export function ItemViewer({
     setContent("");
     setDirty(false);
     setQueryOpen(false);
+    setRabbitholeOpen(false);
     setMode(item.kind === "user_note" ? "edit" : "preview");
     setArticleData(null);
     setFullLoading(true);
@@ -374,6 +378,16 @@ export function ItemViewer({
         <Button
           size="icon"
           variant="ghost"
+          onClick={() => setRabbitholeOpen((v) => !v)}
+          title="Rabbithole — select text to dig deeper"
+          className={rabbitholeOpen ? "text-primary" : ""}
+        >
+          <Rabbit className="h-4 w-4" />
+        </Button>
+
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={runDistill}
           disabled={distilling}
           title={full?.summary ? "Re-distill the essence" : "Distill the essence (TL;DR + key points)"}
@@ -413,7 +427,7 @@ export function ItemViewer({
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-[68ch] px-6 py-8">
+        <div ref={bodyRef} className="mx-auto max-w-[68ch] px-6 py-8">
           {/* Breadcrumb */}
           {full && (
             <nav
@@ -621,6 +635,14 @@ export function ItemViewer({
         title={title}
         content={isNote ? content : isDoc ? content || docBody : articleData?.fullText ?? articleData?.excerpt ?? ""}
         onClose={() => setQueryOpen(false)}
+      />
+      <Rabbithole
+        itemId={item.id}
+        rootTitle={title}
+        bodyRef={bodyRef}
+        enabled={!fullLoading}
+        open={rabbitholeOpen}
+        onOpenChange={setRabbitholeOpen}
       />
     </section>
   );

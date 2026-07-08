@@ -77,12 +77,12 @@ declare
   touch_tables text[] := array[
     'profiles','folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','item_tags','directory_flashcards',
-    'skills','player_profile','user_settings'
+    'skills','player_profile','user_settings','rabbithole_nodes'
   ];
   tomb_tables text[] := array[
     'folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','directory_flashcards',
-    'skills','player_profile','user_settings'
+    'skills','player_profile','user_settings','rabbithole_nodes'
   ];
   t text;
 begin
@@ -162,6 +162,31 @@ create table if not exists user_settings (
 create unique index if not exists user_settings_user_unique on user_settings (user_id);
 `;
 
+// Rabbithole nodes — mirrors cloud migration 0019. Always-run + idempotent so
+// existing local DBs gain the table without a reinstall. SYNCED (triggers
+// installed by SYNC_SUPPORT_SQL via the table arrays above). No RLS locally —
+// the embedded DB is single-user.
+const RABBITHOLE_SQL = `
+create table if not exists rabbithole_nodes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  item_id uuid not null references directory_items(id) on delete cascade,
+  parent_id uuid,
+  anchor_text text not null,
+  question text not null,
+  lens text,
+  title text not null,
+  content text not null,
+  model text,
+  depth integer not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists rabbithole_nodes_item_idx on rabbithole_nodes (item_id, created_at);
+create index if not exists rabbithole_nodes_parent_idx on rabbithole_nodes (parent_id);
+create index if not exists rabbithole_nodes_user_updated_idx on rabbithole_nodes (user_id, updated_at);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -237,6 +262,14 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(USER_SETTINGS_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] user_settings table failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run BEFORE sync support (same reason): rabbithole_nodes must exist
+  // before SYNC_SUPPORT_SQL installs its triggers. Idempotent.
+  try {
+    await client.exec(RABBITHOLE_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] rabbithole table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and
