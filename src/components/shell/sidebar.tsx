@@ -9,6 +9,7 @@ import {
   Loader2,
   MessageCircle,
   Network,
+  Rabbit,
   Rss,
   Search,
   Sparkles,
@@ -25,6 +26,7 @@ const nav = [
   { href: "/feeds", label: "Feeds", icon: Rss, chord: "F" },
   { href: "/directory", label: "Directory", icon: Library, chord: "D" },
   { href: "/study", label: "Study", icon: GraduationCap, chord: "S" },
+  { href: "/rabbithole", label: "Rabbithole", icon: Rabbit, chord: "R" },
   { href: "/map", label: "Knowledge Map", icon: Network, chord: "M" },
   { href: "/tags", label: "Tags", icon: Tag, chord: "G" },
 ];

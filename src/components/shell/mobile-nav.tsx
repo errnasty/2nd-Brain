@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   Network,
   NotebookPen,
+  Rabbit,
   Rss,
   Search,
   Settings,
@@ -38,6 +39,7 @@ const TABS = [
 const MORE_LINKS = [
   { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/study", label: "Study", icon: GraduationCap },
+  { href: "/rabbithole", label: "Rabbithole", icon: Rabbit },
   { href: "/tags", label: "Tags", icon: Tag },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -49,6 +51,7 @@ const TITLES: Record<string, string> = {
   "/ask": "Ask",
   "/map": "Knowledge Map",
   "/study": "Study",
+  "/rabbithole": "Rabbithole",
   "/tags": "Tags",
   "/settings": "Settings",
 };

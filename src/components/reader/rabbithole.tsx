@@ -65,6 +65,7 @@ export function Rabbithole({
   enabled,
   open,
   onOpenChange,
+  variant = "drawer",
 }: {
   itemId: string;
   rootTitle: string;
@@ -74,6 +75,8 @@ export function Rabbithole({
   enabled: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** drawer = overlay (reader); inline = static fill-height column (Rabbithole tab). */
+  variant?: "drawer" | "inline";
 }) {
   const confirm = useConfirm();
   const [nodes, setNodes] = useState<RhNode[]>([]);
@@ -395,22 +398,30 @@ export function Rabbithole({
         </div>
       )}
 
-      {/* Drawer panel — mirrors DocQueryPanel (mobile scrim, right drawer, inert when closed) */}
-      <div
-        className={cn(
-          "fixed inset-0 z-40 bg-black/40 transition-opacity sm:hidden",
-          open ? "opacity-100" : "pointer-events-none opacity-0",
-        )}
-        onClick={() => onOpenChange(false)}
-        aria-hidden
-      />
+      {/* Panel — drawer mirrors DocQueryPanel (mobile scrim, right overlay,
+          inert when closed); inline is a static column for the Rabbithole tab. */}
+      {variant === "drawer" && (
+        <div
+          className={cn(
+            "fixed inset-0 z-40 bg-black/40 transition-opacity sm:hidden",
+            open ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+          onClick={() => onOpenChange(false)}
+          aria-hidden
+        />
+      )}
       <aside
         className={cn(
-          "not-prose fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-border bg-background shadow-xl transition-transform duration-200 sm:w-[480px]",
-          open ? "translate-x-0" : "translate-x-full",
+          "not-prose flex flex-col bg-background",
+          variant === "drawer"
+            ? cn(
+                "fixed inset-y-0 right-0 z-50 w-full border-l border-border shadow-xl transition-transform duration-200 sm:w-[480px]",
+                open ? "translate-x-0" : "translate-x-full",
+              )
+            : "h-full min-h-0 w-full",
         )}
-        aria-hidden={!open}
-        inert={!open}
+        aria-hidden={variant === "drawer" ? !open : undefined}
+        inert={variant === "drawer" ? !open : undefined}
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Rabbit className="h-4 w-4 text-primary" />
@@ -421,13 +432,15 @@ export function Rabbithole({
               deep
             </span>
           )}
-          <button
-            onClick={() => onOpenChange(false)}
-            className="ml-auto text-muted-foreground hover:text-foreground"
-            title="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {variant === "drawer" && (
+            <button
+              onClick={() => onOpenChange(false)}
+              className="ml-auto text-muted-foreground hover:text-foreground"
+              title="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
 
         {/* Breadcrumbs: root document → node path */}
