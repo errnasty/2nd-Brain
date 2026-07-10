@@ -1,13 +1,14 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ExternalLink, Library, Rabbit } from "lucide-react";
+import { ExternalLink, LayoutGrid, Library, Rabbit, Rows } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Rabbithole } from "@/components/reader/rabbithole";
+import { RabbitholeCanvas } from "@/components/rabbithole/canvas/rabbithole-canvas";
 
 export type HoleSummary = {
   itemId: string;
@@ -20,8 +21,7 @@ export type RootDoc = { itemId: string; title: string; text: string; markdown: b
 
 /**
  * The Rabbithole tab: browse every hole you've dug, resume one, or start a new
- * one from a recent Directory item. Split view — the root document on the left
- * (select text to dig), the always-visible branch panel on the right.
+ * one from a recent Directory item. Canvas or Split view.
  */
 export function RabbitholeShell({
   holes,
@@ -34,6 +34,23 @@ export function RabbitholeShell({
 }) {
   const router = useRouter();
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<"canvas" | "split">("split");
+
+  // Resolve the default once on the client: canvas on desktop, split on mobile,
+  // unless the user has a saved preference.
+  useEffect(() => {
+    const saved = window.localStorage.getItem("rh.tab.mode");
+    if (saved === "canvas" || saved === "split") {
+      setMode(saved);
+      return;
+    }
+    setMode(window.matchMedia("(min-width: 1024px)").matches ? "canvas" : "split");
+  }, []);
+
+  const chooseMode = (m: "canvas" | "split") => {
+    setMode(m);
+    try { window.localStorage.setItem("rh.tab.mode", m); } catch {}
+  };
 
   const holeList = (
     <>
@@ -105,56 +122,89 @@ export function RabbitholeShell({
       </aside>
 
       {root ? (
-        <div className="flex min-w-0 flex-1 flex-col lg:flex-row">
-          {/* Root document */}
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-              <span className="truncate text-sm font-semibold">{root.title}</span>
-              <span className="hidden text-xs text-muted-foreground sm:inline">
-                — select text to dig
-              </span>
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* View toggle */}
+          <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+            <span className="truncate text-sm font-semibold">{root.title}</span>
+            <div className="ml-auto flex items-center gap-0.5 rounded-md border border-border p-0.5">
               <button
-                onClick={() => router.push(`/directory?item=${root.itemId}`)}
-                className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                title="Open in Directory"
+                onClick={() => chooseMode("canvas")}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded px-2 py-1 text-xs",
+                  mode === "canvas" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+                title="Canvas view"
               >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Directory
+                <LayoutGrid className="h-3.5 w-3.5" /> Canvas
+              </button>
+              <button
+                onClick={() => chooseMode("split")}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded px-2 py-1 text-xs",
+                  mode === "split" ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground",
+                )}
+                title="Split view"
+              >
+                <Rows className="h-3.5 w-3.5" /> Split
               </button>
             </div>
-            <ScrollArea className="flex-1">
-              <div ref={bodyRef} className="mx-auto max-w-[68ch] px-6 py-8">
-                {root.text.trim() ? (
-                  root.markdown ? (
-                    <div className="prose-reader">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{root.text}</ReactMarkdown>
-                    </div>
-                  ) : (
-                    <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
-                      {root.text}
-                    </div>
-                  )
-                ) : (
-                  <p className="italic text-muted-foreground">
-                    No readable text in this item yet.
-                  </p>
-                )}
-              </div>
-            </ScrollArea>
+            <button
+              onClick={() => router.push(`/directory?item=${root.itemId}`)}
+              className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              title="Open in Directory"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+              Directory
+            </button>
           </div>
 
-          {/* Branch panel — stacked below on mobile, right column on desktop */}
-          <div className="h-[45vh] shrink-0 border-t border-border lg:h-auto lg:w-[440px] lg:border-l lg:border-t-0">
-            <Rabbithole
-              variant="inline"
+          {mode === "canvas" ? (
+            <RabbitholeCanvas
+              key={root.itemId}
               itemId={root.itemId}
               rootTitle={root.title}
-              bodyRef={bodyRef}
-              enabled
-              open
-              onOpenChange={() => {}}
+              rootText={root.text}
+              onOpenInSplit={() => chooseMode("split")}
             />
-          </div>
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+              {/* Root document */}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <ScrollArea className="flex-1">
+                  <div ref={bodyRef} className="mx-auto max-w-[68ch] px-6 py-8">
+                    {root.text.trim() ? (
+                      root.markdown ? (
+                        <div className="prose-reader">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{root.text}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
+                          {root.text}
+                        </div>
+                      )
+                    ) : (
+                      <p className="italic text-muted-foreground">
+                        No readable text in this item yet.
+                      </p>
+                    )}
+                  </div>
+                </ScrollArea>
+              </div>
+
+              {/* Branch panel — stacked below on mobile, right column on desktop */}
+              <div className="h-[45vh] shrink-0 border-t border-border lg:h-auto lg:w-[440px] lg:border-l lg:border-t-0">
+                <Rabbithole
+                  variant="inline"
+                  itemId={root.itemId}
+                  rootTitle={root.title}
+                  bodyRef={bodyRef}
+                  enabled
+                  open
+                  onOpenChange={() => {}}
+                />
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         /* No hole selected: hero + (on smaller screens) the hole list itself */
