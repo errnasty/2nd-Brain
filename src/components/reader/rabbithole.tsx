@@ -1,55 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronRight, CornerDownRight, Loader2, Rabbit, Send, Trash2, X } from "lucide-react";
-import { toast } from "sonner";
+import { ChevronRight, CornerDownRight, Loader2, Rabbit, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/app-dialogs";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { RABBITHOLE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
-import {
-  RABBITHOLE_LENSES,
-  collectSubtreeIds,
-  type RabbitholeLens,
-} from "@/lib/rabbithole/lenses";
+import { collectSubtreeIds, type RabbitholeLens } from "@/lib/rabbithole/lenses";
+import { useRabbithole, type RhNode } from "@/lib/rabbithole/use-rabbithole";
+import { DigPopover, type DigTarget } from "@/components/rabbithole/canvas/dig-popover";
 
-const MODEL_STORAGE_KEY = "ask.model.v1"; // shared with the Ask tab / DocQueryPanel
-
-function getModel(): string {
-  if (typeof window === "undefined") return DEFAULT_CHAT_MODEL;
-  return window.localStorage.getItem(MODEL_STORAGE_KEY) || DEFAULT_CHAT_MODEL;
-}
-
-export type RhNode = {
-  id: string;
-  parentId: string | null;
-  anchorText: string;
-  question: string;
-  lens: string | null;
-  title: string;
-  content: string;
-  depth: number;
-  createdAt: string;
-};
-
-type Popover = {
-  x: number;
-  y: number;
-  text: string;
-  /** null = selection was in the root document; else the node id it was in. */
-  parentId: string | null;
-};
-
-type Draft = {
-  parentId: string | null;
-  anchorText: string;
-  question: string;
-  lens: RabbitholeLens | null;
-  content: string;
-};
+export type { RhNode };
 
 /**
  * Rabbithole — select text in the document (or in any answer), ask a question
@@ -69,64 +31,33 @@ export function Rabbithole({
 }: {
   itemId: string;
   rootTitle: string;
-  /** The reading body — selections inside it branch from the root document. */
   bodyRef: React.RefObject<HTMLElement | null>;
-  /** Gate for ROOT-document selections (e.g. off while the item is loading). */
   enabled: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** drawer = overlay (reader); inline = static fill-height column (Rabbithole tab). */
   variant?: "drawer" | "inline";
 }) {
   const confirm = useConfirm();
-  const [nodes, setNodes] = useState<RhNode[]>([]);
-  const [path, setPath] = useState<string[]>([]); // root → current node ids
-  const [draft, setDraft] = useState<Draft | null>(null);
-  const [streaming, setStreaming] = useState(false);
-  const [popover, setPopover] = useState<Popover | null>(null);
-  const [question, setQuestion] = useState("");
+  const rh = useRabbithole(itemId);
+  const { nodes, draft, streaming, byId, childrenOf, pathTo, dig, deleteBranch } = rh;
 
-  const popoverRef = useRef<HTMLDivElement>(null);
+  const [path, setPath] = useState<string[]>([]);
+  const [popover, setPopover] = useState<DigTarget | null>(null);
+
   const panelBodyRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
-  const byId = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const currentId = path.length ? path[path.length - 1] : null;
   const current = currentId ? byId.get(currentId) ?? null : null;
-  const childrenOf = useCallback(
-    (parentId: string | null) => nodes.filter((n) => n.parentId === parentId),
-    [nodes],
-  );
 
-  // Refs so the document-level mouseup listener stays stable across renders.
+  // Reset navigation when the item changes.
+  useEffect(() => {
+    setPath([]);
+    setPopover(null);
+  }, [itemId]);
+
   const stateRef = useRef({ enabled, currentId, streaming, open });
   stateRef.current = { enabled, currentId, streaming, open };
 
-  // Load the item's existing hole; reset view state when the item changes.
-  useEffect(() => {
-    setNodes([]);
-    setPath([]);
-    setDraft(null);
-    setPopover(null);
-    abortRef.current?.abort();
-    setStreaming(false);
-    if (!itemId) return;
-    let aborted = false;
-    fetch(`/api/rabbithole?itemId=${itemId}`, { cache: "no-store" })
-      .then(async (r) => (r.ok ? ((await r.json()) as { nodes: RhNode[] }) : null))
-      .then((data) => {
-        if (!aborted && data) setNodes(data.nodes);
-      })
-      .catch(() => {});
-    return () => {
-      aborted = true;
-    };
-  }, [itemId]);
-
-  // Drop any in-flight generation on unmount.
-  useEffect(() => () => abortRef.current?.abort(), []);
-
-  // Esc: close the popover first, then the drawer.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -137,11 +68,9 @@ export function Rabbithole({
     return () => window.removeEventListener("keydown", onKey);
   }, [popover, onOpenChange]);
 
-  // Text-selection → popover. One document-level listener; the selection's
-  // container decides the branch parent (root body vs the open answer).
   useEffect(() => {
     function onMouseUp(e: MouseEvent) {
-      if (popoverRef.current?.contains(e.target as Node)) return;
+      if ((e.target as Element)?.closest?.("[data-dig-popover]")) return;
       window.setTimeout(() => {
         const sel = window.getSelection();
         if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
@@ -156,13 +85,12 @@ export function Rabbithole({
         const range = sel.getRangeAt(0);
         const node = range.commonAncestorContainer;
         const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
-        // Textarea/input selections (edit mode) are not dig targets.
         if (el?.closest("textarea, input")) return;
 
         const s = stateRef.current;
         let parentId: string | null;
         if (panelBodyRef.current?.contains(node)) {
-          if (!s.currentId || s.streaming) return; // can't branch off an unsaved draft
+          if (!s.currentId || s.streaming) return;
           parentId = s.currentId;
         } else if (bodyRef.current?.contains(node)) {
           if (!s.enabled || s.streaming) return;
@@ -179,143 +107,47 @@ export function Rabbithole({
           x: Math.min(Math.max(rect.left + rect.width / 2, 180), window.innerWidth - 180),
           y: Math.min(rect.bottom + 8, window.innerHeight - 140),
         });
-        setQuestion("");
       }, 0);
     }
     document.addEventListener("mouseup", onMouseUp);
     return () => document.removeEventListener("mouseup", onMouseUp);
   }, [bodyRef]);
 
-  /** Breadcrumb path for a node: walk parents up to the root document. */
-  const pathTo = useCallback(
-    (id: string | null): string[] => {
-      const out: string[] = [];
-      let cur = id ? byId.get(id) : null;
-      let safety = 0;
-      while (cur && safety < 32) {
-        out.unshift(cur.id);
-        cur = cur.parentId ? byId.get(cur.parentId) : null;
-        safety += 1;
-      }
-      return out;
+  const onDig = useCallback(
+    async (target: DigTarget, lens: RabbitholeLens | null, q: string) => {
+      setPopover(null);
+      window.getSelection()?.removeAllRanges();
+      onOpenChange(true);
+      const id = await dig(target.parentId, target.text, lens, q);
+      if (id) setPath([...pathTo(target.parentId), id]);
     },
-    [byId],
+    [dig, pathTo, onOpenChange],
   );
 
-  async function dig(parentId: string | null, anchorText: string, lens: RabbitholeLens | null, q: string) {
-    setPopover(null);
-    window.getSelection()?.removeAllRanges();
-    onOpenChange(true);
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStreaming(true);
-    setDraft({ parentId, anchorText, question: q, lens, content: "" });
-
-    try {
-      const res = await fetch("/api/rabbithole", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          itemId,
-          parentId,
-          anchorText,
-          question: q || undefined,
-          lens: lens ?? undefined,
-          model: getModel(),
-        }),
-        signal: controller.signal,
+  const onDelete = useCallback(
+    async (id: string) => {
+      const doomed = collectSubtreeIds(nodes, id);
+      const ok = await confirm({
+        title: "Delete this branch?",
+        body:
+          doomed.length > 1
+            ? `This also removes the ${doomed.length - 1} deeper branch${doomed.length === 2 ? "" : "es"} dug from it.`
+            : "This cannot be undone.",
+        destructive: true,
+        confirmLabel: "Delete",
       });
-      if (!res.ok || !res.body) {
-        const msg = await res.text().catch(() => "");
-        toast.error(msg || `Request failed (${res.status})`);
-        setDraft(null);
-        return;
+      if (!ok) return;
+      const gone = await deleteBranch(id);
+      if (gone) {
+        const set = new Set(gone);
+        setPath((p) => {
+          const cut = p.findIndex((pid) => set.has(pid));
+          return cut >= 0 ? p.slice(0, cut) : p;
+        });
       }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let acc = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        acc += decoder.decode(value, { stream: true });
-        const display = displayText(acc);
-        setDraft((d) => (d ? { ...d, content: display } : d));
-      }
-
-      // Trailing sentinel carries the saved node — no refetch needed.
-      const idx = acc.indexOf(RABBITHOLE_SENTINEL);
-      if (idx >= 0) {
-        try {
-          const payload = JSON.parse(acc.slice(idx + RABBITHOLE_SENTINEL.length)) as {
-            id: string;
-            parentId: string | null;
-            title: string;
-            depth: number;
-          };
-          const saved: RhNode = {
-            id: payload.id,
-            parentId: payload.parentId,
-            anchorText,
-            question: q,
-            lens,
-            title: payload.title,
-            content: displayText(acc),
-            depth: payload.depth,
-            createdAt: new Date().toISOString(),
-          };
-          setNodes((ns) => [...ns, saved]);
-          setPath([...pathTo(parentId), payload.id]);
-          setDraft(null);
-        } catch {
-          /* keep the draft visible; it just won't be branchable */
-        }
-      }
-    } catch (err) {
-      if ((err as Error)?.name !== "AbortError") {
-        toast.error(err instanceof Error ? err.message : "Request failed");
-      }
-      setDraft(null);
-    } finally {
-      setStreaming(false);
-    }
-  }
-
-  async function deleteBranch(id: string) {
-    const doomed = collectSubtreeIds(nodes, id);
-    const ok = await confirm({
-      title: "Delete this branch?",
-      body:
-        doomed.length > 1
-          ? `This also removes the ${doomed.length - 1} deeper branch${doomed.length === 2 ? "" : "es"} dug from it.`
-          : "This cannot be undone.",
-      destructive: true,
-      confirmLabel: "Delete",
-    });
-    if (!ok) return;
-    try {
-      const res = await fetch(`/api/rabbithole/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await res.text().catch(() => `Request failed (${res.status})`));
-      const gone = new Set(doomed);
-      setNodes((ns) => ns.filter((n) => !gone.has(n.id)));
-      setPath((p) => {
-        const cut = p.findIndex((pid) => gone.has(pid));
-        return cut >= 0 ? p.slice(0, cut) : p;
-      });
-      toast.success("Branch deleted");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Delete failed");
-    }
-  }
-
-  function submitPopover(lens: RabbitholeLens | null) {
-    if (!popover) return;
-    const q = question.trim();
-    if (!lens && !q) return;
-    void dig(popover.parentId, popover.text, lens, q);
-  }
+    },
+    [nodes, confirm, deleteBranch],
+  );
 
   const branchList = (parentId: string | null, indent: number): React.ReactNode => {
     const kids = childrenOf(parentId);
@@ -332,7 +164,7 @@ export function Rabbithole({
             <span className="truncate">{n.title}</span>
           </button>
           <button
-            onClick={() => void deleteBranch(n.id)}
+            onClick={() => void onDelete(n.id)}
             className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
             title="Delete branch (and everything below it)"
           >
@@ -349,57 +181,14 @@ export function Rabbithole({
 
   return (
     <>
-      {/* Selection popover */}
       {popover && (
-        <div
-          ref={popoverRef}
-          className="fixed z-[60] w-[340px] -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-lg"
-          style={{ left: popover.x, top: popover.y }}
-        >
-          <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] uppercase tracking-wide text-muted-foreground">
-            <Rabbit className="h-3.5 w-3.5" />
-            Dig into &ldquo;{popover.text.length > 40 ? `${popover.text.slice(0, 40)}…` : popover.text}&rdquo;
-          </div>
-          <div className="mb-1.5 flex flex-wrap gap-1">
-            {RABBITHOLE_LENSES.map((l) => (
-              <button
-                key={l.key}
-                onClick={() => submitPopover(l.key)}
-                className="rounded-full border border-border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
-                title={l.prompt}
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-1.5">
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  submitPopover(null);
-                }
-              }}
-              placeholder="Or ask your own question…"
-              className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              autoFocus
-            />
-            <button
-              onClick={() => submitPopover(null)}
-              disabled={!question.trim()}
-              className="rounded-md border border-border p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-              title="Ask"
-            >
-              <Send className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
+        <DigPopover
+          target={popover}
+          onSubmit={onDig}
+          style={{ position: "fixed", left: popover.x, top: popover.y }}
+        />
       )}
 
-      {/* Panel — drawer mirrors DocQueryPanel (mobile scrim, right overlay,
-          inert when closed); inline is a static column for the Rabbithole tab. */}
       {variant === "drawer" && (
         <div
           className={cn(
@@ -443,14 +232,10 @@ export function Rabbithole({
           )}
         </div>
 
-        {/* Breadcrumbs: root document → node path */}
         <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
           <button
             onClick={() => {
-              if (!streaming) {
-                setDraft(null);
-                setPath([]);
-              }
+              if (!streaming) setPath([]);
             }}
             className={cn("max-w-[16ch] truncate hover:text-foreground", path.length === 0 && !draft && "text-foreground")}
             title={rootTitle}
@@ -483,13 +268,10 @@ export function Rabbithole({
         <div className="flex-1 overflow-y-auto p-3">
           {view ? (
             <div>
-              {/* The passage this branch was dug from */}
               <blockquote className="mb-3 border-l-2 border-primary/40 pl-3 text-sm italic text-muted-foreground">
                 {view.anchorText.length > 280 ? `${view.anchorText.slice(0, 280)}…` : view.anchorText}
               </blockquote>
-              {view.question && (
-                <div className="mb-3 text-sm font-medium">{view.question}</div>
-              )}
+              {view.question && <div className="mb-3 text-sm font-medium">{view.question}</div>}
               <div ref={panelBodyRef} className="prose-reader prose-sm max-w-none text-sm">
                 {view.content ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{view.content}</ReactMarkdown>
@@ -505,7 +287,7 @@ export function Rabbithole({
                   <div className="mb-1 flex items-center text-[10px] uppercase tracking-wider text-muted-foreground">
                     {viewChildren.length > 0 ? "Deeper digs from here" : "Select text above to dig deeper"}
                     <button
-                      onClick={() => void deleteBranch(current.id)}
+                      onClick={() => void onDelete(current.id)}
                       className="ml-auto inline-flex items-center gap-1 rounded p-1 normal-case text-muted-foreground hover:text-destructive"
                       title="Delete this branch (and everything below it)"
                     >
