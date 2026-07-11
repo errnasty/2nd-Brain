@@ -3,8 +3,6 @@
 import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { clearOfflineMirror } from "@/lib/offline/db";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,6 +32,12 @@ function SignupForm() {
     }
     setSubmitting(true);
     try {
+      // Loaded at submit time: supabase-js + dexie are ~half this page's JS
+      // and are needed only once the form is actually posted.
+      const [{ createSupabaseBrowserClient }, { clearOfflineMirror }] = await Promise.all([
+        import("@/lib/supabase/client"),
+        import("@/lib/offline/db"),
+      ]);
       const supabase = createSupabaseBrowserClient();
       const { data, error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;

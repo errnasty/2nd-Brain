@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +21,8 @@ export default function ForgotPasswordPage() {
     }
     setSubmitting(true);
     try {
+      // supabase-js loads at submit time — it's most of this page's JS.
+      const { createSupabaseBrowserClient } = await import("@/lib/supabase/client");
       const supabase = createSupabaseBrowserClient();
       const appUrl =
         process.env.NEXT_PUBLIC_APP_URL ??

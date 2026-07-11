@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,6 +31,8 @@ export default function ResetPasswordPage() {
     }
     setSubmitting(true);
     try {
+      // supabase-js loads at submit time — it's most of this page's JS.
+      const { createSupabaseBrowserClient } = await import("@/lib/supabase/client");
       const supabase = createSupabaseBrowserClient();
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
