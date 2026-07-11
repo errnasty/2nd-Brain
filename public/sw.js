@@ -11,7 +11,14 @@
  * network untouched (and fails offline, where the UI has its own fallbacks).
  */
 
-const STATIC_CACHE = "sb-static-v1";
+// Bump STATIC_CACHE on each deploy to purge the previous build's stale hashed
+// chunks: the activate handler below deletes any cache name NOT in its keep-set,
+// so an old "sb-static-vN" is dropped wholesale. (Hashed _next/static assets are
+// immutable and never expire, so without this bump old builds' chunks accumulate
+// in the user's storage forever — a storage leak, not a speed issue.)
+// TODO(per-deploy automation): inject NEXT_BUILD_ID into the SW so this bumps
+// itself on every build instead of by hand.
+const STATIC_CACHE = "sb-static-v2";
 const PAGE_CACHE = "sb-pages-v1";
 
 self.addEventListener("install", (event) => {
