@@ -4,8 +4,7 @@ import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, Library, Lightbulb, Loader2, Pencil, Rabbit, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -553,9 +552,9 @@ export function ItemViewer({
           {isNote && mode === "preview" && (
             <div className="prose-reader">
               {content.trim() ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                <Markdown components={mdComponents}>
                   {linkifyWikilinks(content, outgoing)}
-                </ReactMarkdown>
+                </Markdown>
               ) : (
                 <p className="text-muted-foreground italic">Empty note. Switch to Edit to write.</p>
               )}
@@ -590,9 +589,9 @@ export function ItemViewer({
           {isDoc && mode === "preview" && !fullLoading && (
             <div className="prose-reader">
               {isMarkdownDoc && (content || docBody) ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+                <Markdown components={mdComponents}>
                   {linkifyWikilinks(content || docBody, outgoing)}
-                </ReactMarkdown>
+                </Markdown>
               ) : content || docBody ? (
                 <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
                   {content || docBody}

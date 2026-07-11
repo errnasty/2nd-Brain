@@ -2,8 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/components/ui/markdown";
 import {
   ArrowUp,
   BookmarkPlus,
@@ -1141,7 +1140,7 @@ const MessageBubble = memo(function MessageBubble({
       </div>
       <div className="prose-reader max-w-[70ch] text-[15px] leading-[1.7]">
         {message.content ? (
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <Markdown>{message.content}</Markdown>
         ) : (
           <span className="text-muted-foreground italic">…</span>
         )}

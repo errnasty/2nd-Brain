@@ -2,8 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/components/ui/markdown";
 import { ChevronRight, CornerDownRight, Loader2, Rabbit, Send, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -492,7 +491,7 @@ export function Rabbithole({
               )}
               <div ref={panelBodyRef} className="prose-reader prose-sm max-w-none text-sm">
                 {view.content ? (
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{view.content}</ReactMarkdown>
+                  <Markdown>{view.content}</Markdown>
                 ) : (
                   <span className="inline-flex items-center gap-2 text-muted-foreground">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" /> Digging…

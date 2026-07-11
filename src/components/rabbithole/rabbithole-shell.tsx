@@ -2,8 +2,7 @@
 
 import { useRef } from "react";
 import { useRouter } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/components/ui/markdown";
 import { ExternalLink, Library, Rabbit } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -127,7 +126,7 @@ export function RabbitholeShell({
                 {root.text.trim() ? (
                   root.markdown ? (
                     <div className="prose-reader">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{root.text}</ReactMarkdown>
+                      <Markdown>{root.text}</Markdown>
                     </div>
                   ) : (
                     <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">

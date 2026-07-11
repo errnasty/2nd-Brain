@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/components/ui/markdown";
 import { GraduationCap, Globe, Plus, Send, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -386,7 +385,7 @@ export function DocQueryPanel({
                 {t.role === "assistant" ? (
                   <div className="prose-reader prose-sm max-w-none">
                     {t.content ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{t.content}</ReactMarkdown>
+                      <Markdown>{t.content}</Markdown>
                     ) : (
                       <span className="text-muted-foreground">Thinking…</span>
                     )}
@@ -428,7 +427,7 @@ export function DocQueryPanel({
           <div className="rounded-md border border-border bg-background p-3">
             <div className="prose-reader prose-sm max-w-none text-sm">
               {answer ? (
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown>
+                <Markdown>{answer}</Markdown>
               ) : (
                 <span className="text-muted-foreground">Thinking…</span>
               )}

@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Markdown } from "@/components/ui/markdown";
 import {
   Bookmark,
   Check,
@@ -651,7 +650,7 @@ export function DailyBrief({ name }: { name?: string }) {
       {/* ── Brief body ───────────────────────────────────────────── */}
       {content && (
         <div className="prose-brief max-w-[68ch] text-[1.05rem] leading-[1.65]">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <Markdown>{content}</Markdown>
           {loading && (
             <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
           )}
