@@ -1,5 +1,15 @@
 # Handover — Open Optimization Items (2nd Brain)
 
+> **STATUS UPDATE — 2026-07-12, second pass (Claude Code):**
+> - Item 0: was already done (all four commits landed before this pass).
+> - Item 2 ✅ ArticleReader is now `next/dynamic`, mounted only when an article is selected; empty-state pane moved to `FeedsShell`. NOTE: the doc's claim that j/k works with nothing selected was wrong — `useShortcuts(..., !!article)` gates shortcuts on a loaded article, so no re-homing was needed. /feeds 196→177 kB.
+> - Item 3 ✅ `scripts/inject-sw-buildid.mjs` stamps both cache names with the Next build id via npm `postbuild` and inside `electron/build.js` (which bypasses npm hooks). Verified: two consecutive builds produced two distinct stamped ids.
+> - Item 4 ✅ (was smaller than written): the lockfile had ALREADY resolved the RC caret to react 19.2.6 stable + next 15.5.18 — runtime was never on the RC. Fixed package.json pins to `^19.2.6` and bumped `@types/react(-dom)` to ^19. 128/128 tests green.
+> - Item 5 ✅ `experimental.reactCompiler: true` + `babel-plugin-react-compiler@1.0.0`. Build clean (`✓ reactCompiler`). Route sizes +1–4 kB (inserted memoization) in exchange for cheaper re-renders.
+> - Item 1 ◐ HTTP-level smoke done against `npm start`: `/` 307→login, `/login` 200 + security headers, `/manifest.webmanifest` 200 (middleware fix verified), `/sw.js` 200, `/api/cron` 401 JSON. **Still manual:** authenticated visual check of markdown rendering (/today, /directory note wikilinks, /ask streaming) and /feeds reader + j/k with an article open.
+> - Item 6 ✖ blocked: direct prod-DB reads (pg_stat_statements) were denied by the session's permission policy. Run yourself: `select query, calls, mean_exec_time from pg_stat_statements order by total_exec_time desc limit 15;` in the Supabase SQL editor.
+> - Extra (not in this doc): security headers added in `next.config.ts` (nosniff, X-Frame-Options DENY, Referrer-Policy, Permissions-Policy with `microphone=(self)` for Ask voice input) + `poweredByHeader: false`.
+
 Written 2026-07-12 by the agent that picked up the `OPTIMIZATION_PLAN.md` handoff.
 This doc covers ONLY what was **left open** from that plan plus one follow-up. The
 prior session's P1/P2/auth/middleware work and this session's vitest fix + service-worker
