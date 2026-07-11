@@ -1,6 +1,9 @@
 import { cache } from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { VERIFIED_USER_HEADER } from "@/lib/supabase/middleware";
 
 const isDesktop = process.env.APP_RUNTIME === "desktop";
 
@@ -25,6 +28,20 @@ const getAuthOnce = cache(async () => {
       await ensureLocalProfile(user.id, user.email ?? null);
     }
     return { user, supabase };
+  }
+  // The middleware verified this request's JWT via getUser() moments ago and
+  // forwarded the result (spoof-proof: it strips any incoming copy of the
+  // header). Reusing it skips a second Auth-server round-trip per render —
+  // previously every navigation paid the auth latency twice.
+  try {
+    const verified = (await headers()).get(VERIFIED_USER_HEADER);
+    if (verified) {
+      const user = JSON.parse(decodeURIComponent(verified)) as User;
+      if (user?.id) return { user, supabase };
+    }
+  } catch {
+    // headers() unavailable (unexpected caller) or malformed value — fall
+    // through to a direct verification.
   }
   const {
     data: { user },

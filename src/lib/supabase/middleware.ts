@@ -1,6 +1,14 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+/**
+ * Request header carrying the middleware-verified Supabase user to server
+ * components, so requireUser() doesn't pay a SECOND Auth-server round-trip on
+ * the same request. Only this middleware may set it: the incoming value is
+ * always stripped below, so an external client cannot spoof it.
+ */
+export const VERIFIED_USER_HEADER = "x-sb-verified-user";
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
@@ -60,5 +68,21 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return supabaseResponse;
+  // Forward the verified user to the server render (and strip any spoofed
+  // incoming copy). Headers are snapshotted AFTER the auth call so the cookie
+  // mutations from a token refresh are included; the cookies already written
+  // to supabaseResponse (Set-Cookie for the browser) are re-applied onto the
+  // rebuilt response.
+  const forwardedHeaders = new Headers(request.headers);
+  forwardedHeaders.delete(VERIFIED_USER_HEADER);
+  if (user && process.env.APP_RUNTIME !== "desktop") {
+    // encodeURIComponent keeps the value ASCII-safe (user_metadata may hold
+    // unicode names). Verified via getUser() above, so downstream can trust it.
+    forwardedHeaders.set(VERIFIED_USER_HEADER, encodeURIComponent(JSON.stringify(user)));
+  }
+  const finalResponse = NextResponse.next({ request: { headers: forwardedHeaders } });
+  for (const cookie of supabaseResponse.cookies.getAll()) {
+    finalResponse.cookies.set(cookie);
+  }
+  return finalResponse;
 }

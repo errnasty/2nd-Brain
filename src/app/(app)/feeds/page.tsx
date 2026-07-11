@@ -65,32 +65,61 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
   let rows: Row[] = [];
   let articleTagsById: Record<string, string[]> = {};
   try {
-    rows = await db
-      .select({
-        id: articles.id,
-        title: articles.title,
-        excerpt: articles.excerpt,
-        author: articles.author,
-        url: articles.url,
-        publishDate: articles.publishDate,
-        readStatus: articles.readStatus,
-        starred: articles.starred,
-        readLater: articles.readLater,
-        wordCount: articles.wordCount,
-        imageUrl: articles.imageUrl,
-        feedTitle: feeds.title,
-        feedIconUrl: feeds.iconUrl,
-      })
+    // The tag lookup targets exactly the page's article ids. Instead of
+    // waiting for the article rows and issuing a second round-trip, both
+    // queries run in parallel: the tag query scopes itself with a subquery
+    // that repeats the same filter/order/limit. The filter is cheap and
+    // indexed, so re-evaluating it costs far less than a serial round-trip.
+    const pickedIds = db
+      .select({ id: articles.id })
       .from(articles)
-      .innerJoin(feeds, eq(feeds.id, articles.feedId))
       .where(and(...where))
-      // id tiebreaker → total order; MUST match loadMoreArticlesAction so the
-      // infinite-scroll offsets line up (publishDate alone is nullable/non-unique).
       .orderBy(orderBy, desc(articles.id))
       .limit(ARTICLE_LIMIT);
 
+    const [articleRows, tagRows] = await Promise.all([
+      db
+        .select({
+          id: articles.id,
+          title: articles.title,
+          excerpt: articles.excerpt,
+          author: articles.author,
+          url: articles.url,
+          publishDate: articles.publishDate,
+          readStatus: articles.readStatus,
+          starred: articles.starred,
+          readLater: articles.readLater,
+          wordCount: articles.wordCount,
+          imageUrl: articles.imageUrl,
+          feedTitle: feeds.title,
+          feedIconUrl: feeds.iconUrl,
+        })
+        .from(articles)
+        .innerJoin(feeds, eq(feeds.id, articles.feedId))
+        .where(and(...where))
+        // id tiebreaker → total order; MUST match loadMoreArticlesAction so the
+        // infinite-scroll offsets line up (publishDate alone is nullable/non-unique).
+        .orderBy(orderBy, desc(articles.id))
+        .limit(ARTICLE_LIMIT),
+      // Tags per visible article. Usually empty (articles aren't auto-tagged),
+      // but render legacy/manual tags conditionally if present.
+      db
+        .select({ itemId: itemTags.itemId, name: tags.name })
+        .from(itemTags)
+        .innerJoin(tags, eq(tags.id, itemTags.tagId))
+        .where(
+          and(
+            eq(itemTags.userId, user.id),
+            eq(itemTags.itemKind, "article"),
+            inArray(itemTags.itemId, pickedIds),
+          ),
+        ),
+    ]);
+    rows = articleRows;
+
     // Collapse cross-feed duplicates (same story syndicated to multiple feeds)
     // by normalized title, keeping the first (already sort-ordered) copy.
+    // (Tags were fetched for pre-dedupe ids; extra entries are simply unused.)
     if (dedupe) {
       const seen = new Set<string>();
       rows = rows.filter((r) => {
@@ -101,26 +130,10 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
       });
     }
 
-    // Fetch tags per visible article. Usually empty (articles aren't
-    // auto-tagged), but render legacy/manual tags conditionally if present.
-    if (rows.length > 0) {
-      const ids = rows.map((r) => r.id);
-      const tagRows = await db
-        .select({ itemId: itemTags.itemId, name: tags.name })
-        .from(itemTags)
-        .innerJoin(tags, eq(tags.id, itemTags.tagId))
-        .where(
-          and(
-            eq(itemTags.userId, user.id),
-            eq(itemTags.itemKind, "article"),
-            inArray(itemTags.itemId, ids),
-          ),
-        );
-      articleTagsById = tagRows.reduce((acc, r) => {
-        (acc[r.itemId] ??= []).push(r.name);
-        return acc;
-      }, {} as Record<string, string[]>);
-    }
+    articleTagsById = tagRows.reduce((acc, r) => {
+      (acc[r.itemId] ??= []).push(r.name);
+      return acc;
+    }, {} as Record<string, string[]>);
   } catch (err) {
     console.error("FeedsPage data fetch failed:", err instanceof Error ? err.message : err);
   }

@@ -50,7 +50,15 @@ import {
   syncFeedAction,
 } from "@/app/(app)/feeds/actions";
 import { toast } from "sonner";
-import type { Feed, Folder } from "@/lib/db/schema";
+import type { Feed as DbFeed, Folder } from "@/lib/db/schema";
+
+/**
+ * Slim projection of a feed row — everything the nav renders. The layout
+ * selects only these columns so the RSC payload doesn't ship etag/description/
+ * fetch-bookkeeping fields for every feed on every navigation.
+ */
+export type NavFeed = Pick<DbFeed, "id" | "folderId" | "title" | "url" | "siteUrl" | "iconUrl" | "lastError">;
+type Feed = NavFeed;
 
 type UnreadCounts = {
   perFeed: Record<string, number>;
