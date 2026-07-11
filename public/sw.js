@@ -11,15 +11,13 @@
  * network untouched (and fails offline, where the UI has its own fallbacks).
  */
 
-// Bump STATIC_CACHE on each deploy to purge the previous build's stale hashed
-// chunks: the activate handler below deletes any cache name NOT in its keep-set,
-// so an old "sb-static-vN" is dropped wholesale. (Hashed _next/static assets are
-// immutable and never expire, so without this bump old builds' chunks accumulate
-// in the user's storage forever — a storage leak, not a speed issue.)
-// TODO(per-deploy automation): inject NEXT_BUILD_ID into the SW so this bumps
-// itself on every build instead of by hand.
-const STATIC_CACHE = "sb-static-v2";
-const PAGE_CACHE = "sb-pages-v1";
+// Cache names carry the Next build id, stamped by scripts/inject-sw-buildid.mjs
+// (npm postbuild + electron/build.js). Every deploy therefore gets fresh cache
+// names and the activate handler below drops the previous build's caches —
+// hashed _next/static assets are immutable and would otherwise accumulate in
+// the user's storage forever. Do not hand-edit the version suffixes.
+const STATIC_CACHE = "sb-static-zXNyCrajawnIDRJUbL-4s";
+const PAGE_CACHE = "sb-pages-zXNyCrajawnIDRJUbL-4s";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();

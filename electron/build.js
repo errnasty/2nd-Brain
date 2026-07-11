@@ -18,6 +18,9 @@ const env = {
 
 console.log("▶ next build (standalone)…");
 execSync("npx next build", { cwd: root, stdio: "inherit", env });
+// Direct `next build` bypasses npm's postbuild hook — stamp the service
+// worker cache names here too so desktop builds also purge stale caches.
+execSync("node scripts/inject-sw-buildid.mjs", { cwd: root, stdio: "inherit", env });
 
 // PGlite is externalized (serverExternalPackages), so ensure it's present in the
 // standalone server's node_modules for the runtime `require`.
