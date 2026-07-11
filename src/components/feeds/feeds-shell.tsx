@@ -2,8 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { ArticleList, type ArticleListItem } from "./article-list";
-import { ArticleReader } from "./article-reader";
+
+// The reader (712 lines: panels, TTS, takeaways, next/image…) loads only once
+// an article is actually opened — it's the bulk of /feeds' initial JS. Its
+// keyboard shortcuts are enabled only while an article is loaded, so nothing
+// is lost while the chunk is deferred.
+const ArticleReader = dynamic(
+  () => import("./article-reader").then((m) => m.ArticleReader),
+  {
+    ssr: false,
+    loading: () => <section className="hidden flex-1 lg:flex" aria-busy="true" />,
+  },
+);
 
 /**
  * Owns the `selectedId` (which article is open) in client state and updates the
@@ -29,13 +41,14 @@ export function FeedsShell({
   folderId: string | null;
   orderedIds: string[];
 }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
   // Sync the open article from the URL's ?article= param. useSearchParams updates
   // on mount, back/forward, AND same-route router.push/replace — so a "related"
   // item (router.replace("/feeds?article=X")) or a Daily-Brief deep link opens
   // the reader. The old popstate-only listener missed router.replace entirely.
   const urlArticle = useSearchParams().get("article");
+  // Seed from the URL so a deep link mounts the reader on first render instead
+  // of flashing the empty pane for one paint.
+  const [selectedId, setSelectedId] = useState<string | null>(urlArticle);
   useEffect(() => {
     setSelectedId(urlArticle);
   }, [urlArticle]);
@@ -81,11 +94,24 @@ export function FeedsShell({
         folderId={folderId}
         onSelect={onSelect}
       />
-      <ArticleReader
-        selectedId={selectedId}
-        orderedIds={orderedIds}
-        onSelect={onSelect}
-      />
+      {selectedId ? (
+        <ArticleReader
+          selectedId={selectedId}
+          orderedIds={orderedIds}
+          onSelect={onSelect}
+        />
+      ) : (
+        <section className="hidden flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground lg:flex">
+          <div>Select an article to read.</div>
+          <div className="text-xs">
+            <kbd className="rounded border border-border px-1.5 py-0.5">j</kbd> next ·
+            <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">k</kbd> previous ·
+            <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">m</kbd> mark read ·
+            <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">s</kbd> star ·
+            <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">v</kbd> open original
+          </div>
+        </section>
+      )}
     </>
   );
 }

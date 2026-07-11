@@ -404,20 +404,8 @@ export function ArticleReader({
   // job. Save the article to your Directory (bookmark icon) to get tags +
   // routing. This makes article-open instant.
 
-  if (!selectedId) {
-    return (
-      <section className="hidden flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground lg:flex">
-        <div>Select an article to read.</div>
-        <div className="text-xs">
-          <kbd className="rounded border border-border px-1.5 py-0.5">j</kbd> next ·
-          <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">k</kbd> previous ·
-          <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">m</kbd> mark read ·
-          <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">s</kbd> star ·
-          <kbd className="ml-1 rounded border border-border px-1.5 py-0.5">v</kbd> open original
-        </div>
-      </section>
-    );
-  }
+  // Empty state (no selection) is rendered by FeedsShell — this component is
+  // now dynamically imported and only mounted once an article is selected.
 
   const readingMinutes = content
     ? Math.max(1, Math.ceil(content.replace(/<[^>]+>/g, " ").split(/\s+/).length / 250))
