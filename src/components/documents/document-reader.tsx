@@ -34,7 +34,7 @@ export function DocumentReader({ document }: { document: Document | null }) {
   return (
     <section className="flex flex-1 flex-col overflow-hidden" data-reader-theme={prefs.theme}>
       <div className="flex items-center gap-2 border-b border-border px-4 py-2">
-        <Button size="icon" variant="ghost" onClick={close} className="lg:hidden">
+        <Button size="icon" variant="ghost" onClick={close} className="lg:hidden" title="Close reader">
           <X className="h-4 w-4" />
         </Button>
         <div className="flex-1 text-xs text-muted-foreground">

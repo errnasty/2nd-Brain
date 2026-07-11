@@ -417,7 +417,7 @@ export function DocQueryPanel({
             className="min-h-[2.5rem] flex-1 resize-none text-sm"
             rows={2}
           />
-          <Button size="icon" onClick={send} disabled={streaming || !question.trim()}>
+          <Button size="icon" onClick={send} disabled={streaming || !question.trim()} title="Send question">
             <Send className="h-4 w-4" />
           </Button>
         </div>

@@ -100,6 +100,7 @@ export function ReaderControls() {
                   variant="outline"
                   className="h-7 w-7"
                   onClick={() => setPrefs({ fontSize: Math.max(12, prefs.fontSize - 1) })}
+                  title="Smaller text"
                 >
                   <Minus className="h-3 w-3" />
                 </Button>
@@ -116,6 +117,7 @@ export function ReaderControls() {
                   variant="outline"
                   className="h-7 w-7"
                   onClick={() => setPrefs({ fontSize: Math.min(28, prefs.fontSize + 1) })}
+                  title="Larger text"
                 >
                   <Plus className="h-3 w-3" />
                 </Button>

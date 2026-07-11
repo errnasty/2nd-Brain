@@ -88,6 +88,7 @@ export function DocumentsPanel({
                       // Visible on touch (no hover); hover-hide only where hover exists.
                       className="h-7 w-7 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100"
                       disabled={pending}
+                      title="Delete document"
                       onClick={() => {
                         if (!confirm(`Delete "${doc.title}"?`)) return;
                         startTransition(async () => {

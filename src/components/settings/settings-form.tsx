@@ -139,11 +139,11 @@ export function SettingsForm() {
 
         <Row title="Font size" desc="Scales the whole app. Default 100%.">
           <div className="flex items-center gap-2">
-            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => bumpFont(-5)} disabled={fontScale <= FONT_SCALE_MIN}>
+            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => bumpFont(-5)} disabled={fontScale <= FONT_SCALE_MIN} title="Decrease font size">
               <Minus className="h-3.5 w-3.5" />
             </Button>
             <span className="w-12 text-center text-sm tabular-nums">{fontScale}%</span>
-            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => bumpFont(5)} disabled={fontScale >= FONT_SCALE_MAX}>
+            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => bumpFont(5)} disabled={fontScale >= FONT_SCALE_MAX} title="Increase font size">
               <Plus className="h-3.5 w-3.5" />
             </Button>
           </div>
