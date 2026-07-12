@@ -14,6 +14,7 @@ import { getChatModel, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { openrouterClient, openrouterKey } from "@/lib/ai/provider";
 import { streamWebAnswer } from "@/lib/ai/web-answer";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
 import { validateAskBody, withTimeout, TimeoutError } from "./validate";
 
 export const runtime = "nodejs";
@@ -91,6 +92,10 @@ export async function POST(req: Request) {
     return new Response("Rate limit reached — please wait a moment before asking again.", {
       status: 429,
     });
+  }
+  const budget = await checkAiBudget(userId);
+  if (!budget.allowed) {
+    return new Response(budgetExceededMessage(budget), { status: 429 });
   }
 
   let body: { question?: string; history?: Message[]; model?: string; web?: boolean; contextIds?: string[] };
@@ -317,6 +322,7 @@ export async function POST(req: Request) {
           completionTokens: usage?.completionTokens ?? 0,
           totalTokens: usage?.totalTokens ?? 0,
         };
+        void recordAiUsage(userId, payload.totalTokens);
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
       } catch (err) {
         // On a client disconnect the stream is already gone — don't enqueue.

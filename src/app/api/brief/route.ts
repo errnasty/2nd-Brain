@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
 import { getCachedBrief, setCachedBrief } from "@/lib/brief-cache";
 
 export const runtime = "nodejs";
@@ -135,6 +136,10 @@ export async function POST(req: Request) {
     return new Response("Rate limit reached — wait a moment before regenerating the brief.", {
       status: 429,
     });
+  }
+  const budget = await checkAiBudget(user.id);
+  if (!budget.allowed) {
+    return new Response(budgetExceededMessage(budget), { status: 429 });
   }
 
   if (!aiAvailable()) {
@@ -279,6 +284,7 @@ export async function POST(req: Request) {
           completionTokens: usage?.completionTokens ?? 0,
           totalTokens: usage?.totalTokens ?? 0,
         };
+        void recordAiUsage(user.id, payload.totalTokens);
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
         // Cache the finished brief for reuse on reload / other devices.
         if (acc.trim()) setCachedBrief(cacheKey, { content: acc, sourceMap, usage: payload });
