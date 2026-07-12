@@ -1,5 +1,38 @@
 import type { NextConfig } from "next";
 
+// Content-Security-Policy. Notes on the loose spots:
+// - script-src 'unsafe-inline': Next's hydration bootstrap is inline without a
+//   nonce setup (nonces need per-request middleware work — see the handover).
+//   'unsafe-eval' is added in dev only (react-refresh needs it).
+// - img-src https: — article bodies + feed favicons legitimately load images
+//   from arbitrary feed domains (mirrors images.remotePatterns below).
+// - connect-src: browser-side fetches go to our own API and the Supabase
+//   project (auth/refresh). The origin comes from env so self-hosted Supabase
+//   domains work; falls back to *.supabase.co when unset (e.g. lint in CI).
+const supabaseOrigin = (() => {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").origin;
+  } catch {
+    return "https://*.supabase.co";
+  }
+})();
+
+const csp = [
+  "default-src 'self'",
+  `script-src 'self' 'unsafe-inline'${process.env.NODE_ENV === "development" ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' https: data: blob:",
+  "font-src 'self' data:",
+  `connect-src 'self' ${supabaseOrigin} ${supabaseOrigin.replace(/^https:/, "wss:")}`,
+  "worker-src 'self' blob:",
+  "media-src 'self' https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "manifest-src 'self'",
+].join("; ");
+
 const nextConfig: NextConfig = {
   // `output: "standalone"` is only needed for the Electron desktop build, which
   // bundles and runs the Next server locally. The Netlify build leaves this
@@ -40,6 +73,7 @@ const nextConfig: NextConfig = {
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           // microphone stays self-allowed: Ask's voice input uses SpeechRecognition.
           { key: "Permissions-Policy", value: "camera=(), microphone=(self), geolocation=()" },
+          { key: "Content-Security-Policy", value: csp },
         ],
       },
     ];
