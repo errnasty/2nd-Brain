@@ -60,6 +60,39 @@ Starting point for you: tree is green (`npx tsc --noEmit` clean, `npm test`
     Command palette: new "Search library" nav entry + "See all results for …"
     row (`/search?q=`). Route: 106 kB first load (server-rendered).
 
+## Shipped — pass 3 (commits `bde0315`, `d357f4c`)
+
+11. **Playwright e2e smoke suite** (roadmap item 1 → done for the
+    unauthenticated surface). `e2e/smoke.spec.ts` + `playwright.config.ts` +
+    `npm run test:e2e`; boots the prod build with placeholder Supabase env.
+    Covers: / redirect, /login + /signup **hydration in a real Chromium with
+    console-error assertions** (catches CSP refusals + hydration crashes),
+    PWA assets, security headers, cron 401. 6/6 green; wired into ci.yml as
+    an `e2e` job. Authenticated flows still need real env + a seeded user —
+    gate future specs on `process.env.E2E_AUTH`.
+12. **Invite brute-force limiter** (roadmap item 2 → done).
+    `src/lib/ip-rate-limit.ts` (in-memory fixed window, capped map) keyed by
+    IP in `inviteSignupAction`: 10 attempts / 10 min. In-memory = per
+    serverless instance; acceptable friction, documented in the module.
+13. **Enforcing CSP** (roadmap item 3 → done). See `next.config.ts` — csp
+    const with comments. `script-src 'unsafe-inline'` stays until someone
+    does the middleware nonce work; `connect-src` derives the Supabase origin
+    from `NEXT_PUBLIC_SUPABASE_URL`. Verified by the e2e hydration specs.
+    **Desktop (Electron) build not yet exercised under CSP** — verify before
+    a desktop release.
+14. **AI usage meter** (roadmap item 4 → done) —
+    `src/components/settings/ai-usage-card.tsx`, server-rendered, only shows
+    when `AI_DAILY_TOKEN_BUDGET` is set.
+15. **Semantic search over unsaved feed articles** (roadmap item 5 → done) —
+    `unsavedArticleSemantic` in `src/lib/search.ts` queries
+    `article_embeddings` for articles with no directory_items row (saved
+    ones excluded to avoid dupes), merged by similarity with directory hits.
+    Costs one extra query-embedding call per search (directory + article
+    passes embed independently).
+16. **Password change card** (roadmap item 6 → done) — web-only settings
+    card via `auth.updateUser({ password })`. Email change NOT done (needs
+    confirmation-URL config decisions).
+
 ## Owner action checklist (not automatable from CI)
 
 - [ ] Run `supabase/policies.sql` in Supabase SQL Editor (critical — closes
@@ -75,55 +108,35 @@ Starting point for you: tree is green (`npx tsc --noEmit` clean, `npm test`
 
 ---
 
-## Roadmap — remaining + NEWLY IDENTIFIED gaps, in priority order
+## Roadmap — what's still open, in priority order
 
-### 1. E2E smoke tests (Playwright) — kills a recurring gap
-Two handovers in a row have carried "manual browser smoke" as un-executable
-inside the agent sandbox. A Playwright suite (login via a seeded test user →
-/feeds j/k → open article → /search → /today brief renders) run in CI against
-`npm start` + a disposable Supabase (or PGlite) would close it permanently.
-The repo has no e2e harness at all today; Chromium is preinstalled in agent
-sandboxes at `/opt/pw-browsers/chromium` (`PLAYWRIGHT_BROWSERS_PATH` is set).
+### 1. Authenticated e2e specs
+The smoke suite covers the unauthenticated surface. The valuable half —
+/feeds j/k with an article open, /search results, /today brief streaming,
+/directory wikilinks — needs real Supabase env + a seeded test user. Add
+specs gated on `process.env.E2E_AUTH`; in CI, run them only when repo
+secrets exist (`if: secrets…` guard on a separate job). This finally
+retires the "manual browser smoke" carried across three handovers.
 
-### 2. Rate-limit the unauthenticated auth surface — small, real
-`inviteSignupAction` can be brute-forced (the timing-safe compare protects
-against timing, not volume — invite codes are low-entropy). `checkRateLimit`
-needs a userId, so key it by IP (`headers().get("x-forwarded-for")`) in a new
-bucket, or add a tiny in-memory limiter for the action. Same consideration
-for login attempt flooding (Supabase has its own limits — verify they're on).
+### 2. CSP hardening round 2
+- Verify the Electron desktop build under the new CSP before any desktop
+  release (`DESKTOP_BUILD=1` + `APP_RUNTIME=desktop`; watch the console).
+- Optional: middleware-generated nonces to drop `script-src 'unsafe-inline'`
+  (Next docs "Content Security Policy"); touch `src/middleware.ts`, pass the
+  nonce through headers. Medium effort, real XSS-hardening payoff.
 
-### 3. Content-Security-Policy header — defense in depth
-`next.config.ts` sets nosniff/frame/referrer/permissions headers but no CSP.
-With sanitized article HTML + remote images from arbitrary feed domains,
-a workable start: `default-src 'self'; img-src https: data:; media-src
-https:; connect-src 'self' https://*.supabase.co; script-src 'self'
-'unsafe-inline'` — Next inline runtime scripts need nonces to drop
-`'unsafe-inline'`; see Next docs on middleware-generated nonces. Test the
-service worker + Electron desktop build before shipping.
+### 3. Email change in settings
+`auth.updateUser({ email })` + Supabase's double-confirmation emails. Needs
+the redirect URL configured in Supabase Auth settings — document it in
+DEPLOY.md alongside the change.
 
-### 4. AI usage meter in settings — cheap UX win on top of item 7
-The data now exists (`rate_limits` bucket `ai-tokens-<day>`). A small card in
-/settings showing "today's AI usage: N / budget" (read via a server
-component) makes the budget legible instead of a surprise 429.
-
-### 5. Semantic search over UNSAVED feed articles
-`/search`'s semantic pass covers the Directory only (that's what
-`retrieveFromDirectory` indexes). `article_embeddings` also exist for feed
-articles not saved to the Directory — extend `src/lib/search.ts`'s
-`semanticSearch` with a second vector query over `article_embeddings`
-joined to `articles` (no directory_items join), merged + deduped by URL/id.
-
-### 6. Password & email change in settings
-Only the forgot-password flow exists. `supabase.auth.updateUser({ password })`
-/ `{ email }` (email triggers a confirmation mail) in a small settings card.
-
-### 7. Error monitoring
+### 4. Error monitoring
 Failures currently vanish into console.warn / route 500s. Sentry's Next.js
-SDK (or a self-hosted GlitchTip) with source maps uploaded in CI; scrub PII
+SDK (or self-hosted GlitchTip) with source maps uploaded in CI; scrub PII
 (article/note content) from breadcrumbs. Gate the DSN behind env so
 self-hosters aren't forced into it.
 
-### 8. Carried features (do when the user asks)
+### 5. Carried features (do when the user asks)
 - **Public share links** for notes (`share_slug` + `/share/[slug]` public
   route + a scoped RLS select policy). Changes security posture — confirm
   with the user first.
@@ -131,6 +144,9 @@ self-hosters aren't forced into it.
   per-user opt-in in `user_settings.settings`).
 - **/feeds tag-query fold** — still low value, skip without TTFB complaints.
 - **Feed favicon `unoptimized`** — only investigate on the real deploy target.
+- **Search polish**: one shared query-embedding for the directory + article
+  semantic passes (currently embeds twice); `ts_headline`-style highlighted
+  snippets; pagination beyond 25+25.
 
 ## Constraints / gotchas (inherited + new)
 
@@ -151,6 +167,10 @@ self-hosters aren't forced into it.
   work without sharp binaries. GitHub Actions CI has open network and is fine.
 - `supabase/policies.sql` must be re-run after ANY new table — it's the only
   thing standing between PostgREST and cross-user reads.
+- e2e: `npm run build` first, then `npm run test:e2e`; the config auto-uses
+  `/opt/pw-browsers/chromium` in agent sandboxes and boots `npm start` on
+  :3123 with placeholder env. Vitest's include is `src/**` so the suites
+  never collide.
 - The AI budget module fails OPEN and is a no-op without
   `AI_DAILY_TOKEN_BUDGET`; `recordAiUsage` reuses `rate_limits.count` as a
   token accumulator — don't "fix" that column back to a request counter.
