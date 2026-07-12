@@ -4,6 +4,7 @@ import { DesktopSettings } from "@/components/settings/desktop-settings";
 import { OpenInDesktop } from "@/components/settings/open-in-desktop";
 import { SettingsShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { ReplayTutorial } from "@/components/settings/replay-tutorial";
+import { DangerZone } from "@/components/settings/danger-zone";
 
 export default async function SettingsPage() {
   const { user } = await requireUser();
@@ -30,6 +31,11 @@ export default async function SettingsPage() {
           <SettingsShortcuts />
           <ReplayTutorial />
         </div>
+        {!isDesktop && (
+          <div className="mt-8">
+            <DangerZone />
+          </div>
+        )}
       </div>
     </div>
   );
