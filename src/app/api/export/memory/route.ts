@@ -76,7 +76,6 @@ export async function GET() {
   const articleById = new Map(articleRows.map((a) => [a.id, a]));
   const documentById = new Map(documentRows.map((d) => [d.id, d]));
   const tagNameById = new Map(allTags.map((t) => [t.id, t.name]));
-  const folderNameById = new Map(folders.map((f) => [f.id, f.name]));
 
   // item id -> [tag names]
   const tagsByItem = new Map<string, string[]>();

@@ -236,8 +236,6 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
     if (player.lastActiveDateKey !== today) {
       streakDays = player.lastActiveDateKey === yesterdayKey(today) ? streakDays + 1 : 1;
     }
-    const dailyBaseline = player.dailyDateKey === today ? player.dailyXp : 0;
-
     const amount = withStreak(base, streakDays);
 
     // Resolve + apply skill.

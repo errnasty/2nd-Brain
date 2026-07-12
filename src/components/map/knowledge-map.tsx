@@ -581,7 +581,7 @@ export function KnowledgeMap() {
       camRef.current.x += dx; camRef.current.y += dy;
     }
   }, [hitTest, screenToWorld]);
-  const onPointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+  const onPointerUp = useCallback(() => {
     const p = pointer.current;
     pointer.current = null; draggingRef.current = null;
     if (canvasRef.current) canvasRef.current.style.cursor = "grab";

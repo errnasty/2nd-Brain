@@ -1,7 +1,7 @@
 // Read model for the gamified Study dashboard. Pulls the player aggregate,
 // skills, recent XP feed, and achievement state in a few cheap queries.
 
-import { and, desc, eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { playerProfile, skills, xpEvents } from "@/lib/db/schema";
 import { playerLevelFromXp, skillLevelFromXp, tierForLevel, rankTitle } from "./levels";

@@ -300,7 +300,7 @@ export function DailyBrief({ name }: { name?: string }) {
     } finally {
       setLoading(false);
     }
-  }, [savedPrompt]);
+  }, []);
 
   // Only auto-stream on mount if we don't already have a (same-day) cached brief.
   // The ref check catches the same-commit case where `hydratedFromCache` state

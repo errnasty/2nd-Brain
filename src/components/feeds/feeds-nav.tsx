@@ -78,7 +78,7 @@ export function FeedsNav({
 }) {
   const params = useSearchParams();
   const router = useRouter();
-  const [pending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   // Dedicated transition for feed/folder/view navigation. Using a transition for
   // the router.push keeps the CURRENT article list on screen (instead of flashing
   // the loading.tsx skeleton) while the next page streams in — the switch feels

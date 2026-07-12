@@ -398,6 +398,7 @@ export function ArticleReader({
       });
     }, 500);
     return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- auto-mark-read fires once per opened article (by ID); depending on `article` would re-arm on every status flip
   }, [article?.id]);
 
   // Note: RSS articles are NOT auto-tagged anymore — tagging is the Directory's
