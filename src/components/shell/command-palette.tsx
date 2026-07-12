@@ -52,6 +52,7 @@ const NAV: NavCommand[] = [
   { label: "Review", href: "/study?tab=review", icon: <Brain className="h-4 w-4" />, keywords: "flashcards spaced repetition srs" },
   { label: "Calendar", href: "/study?tab=calendar", icon: <GraduationCap className="h-4 w-4" />, keywords: "study plan schedule due" },
   { label: "Ask", href: "/ask", icon: <Search className="h-4 w-4" />, keywords: "chat question rag" },
+  { label: "Search library", href: "/search", icon: <Search className="h-4 w-4" />, keywords: "find full search everything" },
   { label: "Map", href: "/map", icon: <Network className="h-4 w-4" />, keywords: "graph knowledge" },
   { label: "Tags", href: "/tags", icon: <Hash className="h-4 w-4" />, keywords: "labels taxonomy" },
   { label: "Settings", href: "/settings", icon: <Settings className="h-4 w-4" />, keywords: "preferences account" },
@@ -148,13 +149,17 @@ export function CommandPalette() {
   }, [query]);
 
   // Flattened option list for keyboard nav: actions, then nav commands, then hits.
+  const searchAllHref =
+    query.trim().length >= 2 ? `/search?q=${encodeURIComponent(query.trim())}` : null;
+
   const options = useMemo(
     () => [
       ...actionMatches.map((a) => ({ kind: "action" as const, node: a })),
       ...navMatches.map((n) => ({ kind: "nav" as const, href: n.href, node: n })),
       ...hits.map((h) => ({ kind: "hit" as const, href: h.href, node: h })),
+      ...(searchAllHref ? [{ kind: "search-all" as const, href: searchAllHref, node: null }] : []),
     ],
-    [actionMatches, navMatches, hits],
+    [actionMatches, navMatches, hits, searchAllHref],
   );
 
   useEffect(() => {
@@ -278,6 +283,15 @@ export function CommandPalette() {
                       );
                     })}
                   </Section>
+                )}
+                {searchAllHref && (
+                  <Row
+                    icon={<Search className="h-4 w-4 text-muted-foreground" />}
+                    title={`See all results for “${query.trim()}”`}
+                    activeRow={active === actionMatches.length + navMatches.length + hits.length}
+                    onHover={() => setActive(actionMatches.length + navMatches.length + hits.length)}
+                    onClick={() => go(searchAllHref)}
+                  />
                 )}
               </>
             )}
