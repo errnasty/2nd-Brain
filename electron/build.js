@@ -6,6 +6,7 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { assertActionManifestsConsistent } = require("../scripts/action-manifest-guard.mjs");
 
 const root = path.join(__dirname, "..");
 const env = {
@@ -21,6 +22,32 @@ execSync("npx next build", { cwd: root, stdio: "inherit", env });
 // Direct `next build` bypasses npm's postbuild hook — stamp the service
 // worker cache names here too so desktop builds also purge stale caches.
 execSync("node scripts/inject-sw-buildid.mjs", { cwd: root, stdio: "inherit", env });
+
+// Guard: the bundled standalone server MUST carry the same Server Action
+// manifest as the just-built app server. A mismatch means electron-builder
+// would ship a stale server and every Server Action call fails at runtime
+// with "Server Action '<hash>' was not found on the server". Fail the build
+// loudly here instead of letting that ship.
+const serverManifestPath = path.join(root, ".next", "server", "server-reference-manifest.json");
+const standaloneManifestPath = path.join(
+  root,
+  ".next",
+  "standalone",
+  ".next",
+  "server",
+  "server-reference-manifest.json",
+);
+if (fs.existsSync(serverManifestPath) && fs.existsSync(standaloneManifestPath)) {
+  const serverManifest = JSON.parse(fs.readFileSync(serverManifestPath, "utf8"));
+  const standaloneManifest = JSON.parse(fs.readFileSync(standaloneManifestPath, "utf8"));
+  assertActionManifestsConsistent(serverManifest, standaloneManifest);
+  console.log("✓ Server Action manifests consistent (server ↔ standalone)");
+} else {
+  console.warn(
+    "⚠ Could not verify Server Action manifest consistency — one of the manifests " +
+      "is missing. If DESKTOP_BUILD produced a standalone output, this is unexpected.",
+  );
+}
 
 // PGlite is externalized (serverExternalPackages), so ensure it's present in the
 // standalone server's node_modules for the runtime `require`.

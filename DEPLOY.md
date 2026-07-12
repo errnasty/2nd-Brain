@@ -253,7 +253,7 @@ Phase 5 adds a service worker for offline reading.
 
 ## Troubleshooting
 
-- **`DATABASE_URL is required`** during `npm run db:push` → check `.env.local` exists in the repo root and the var is filled in. Restart your shell so `dotenv` re-reads it.
+- **`DATABASE_URL is required`** during `supabase db push` → the db:push path is gone (see step 3); use `supabase db push` from the generated migrations instead. If you still see this, check `.env.local` exists in the repo root and the var is filled in. Restart your shell so `dotenv` re-reads it.
 - **`Cannot find module 'dotenv/config'`** → run `npm install dotenv`.
 - **`vector type does not exist`** when pushing → enable the `pgvector` extension in Supabase first.
 - **`database "postgre" does not exist`** → typo: should be `/postgres` (with an `s`) at the end of the DATABASE_URL.
@@ -264,3 +264,4 @@ Phase 5 adds a service worker for offline reading.
 - **Feed adds but no articles appear** → check `feeds.last_error` in Supabase (Table Editor) — common causes: blocked user agents, non-XML responses.
 - **Readability returns nothing for some sites** → some pages need JS to render; Readability needs static HTML. We fall back to the RSS excerpt.
 - **PDF upload "Internal Server Error" on Netlify** → file is too big for the function payload limit. Local dev allows up to 20MB.
+- **`Server Action '<hash>' was not found on the server`** (desktop) → the bundled standalone server's Server Action manifest is stale relative to the client. **Fix: rebuild the desktop app** (`npm run desktop:build`) so the client and the bundled `.next/standalone` server come from one `next build`. A partial build or an electron-builder package from an older `.next/standalone` causes this; the build now fails loudly if the two manifests disagree.
