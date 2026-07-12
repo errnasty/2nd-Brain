@@ -37,7 +37,7 @@ export type NormalizedItem = {
 // parseURL do it, so we control the timeout (AbortController), send a
 // browser-like User-Agent (many origins 403 a bot UA), and retry transient
 // blocks. The parser is used only to PARSE the fetched XML.
-const parser: Parser<{}, CustomItem> = new Parser({
+const parser: Parser<Record<string, never>, CustomItem> = new Parser({
   customFields: {
     item: [
       ["content:encoded", "contentEncoded"],

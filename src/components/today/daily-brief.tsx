@@ -472,7 +472,7 @@ export function DailyBrief({ name }: { name?: string }) {
         <div className="not-prose mt-3.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />
           {loading ? (
-            <span>Generating today's brief…</span>
+            <span>Generating today&apos;s brief…</span>
           ) : generatedAt ? (
             <>
               <span>
@@ -565,7 +565,7 @@ export function DailyBrief({ name }: { name?: string }) {
         <section className="not-prose mb-8">
           <div className="editorial-section-row mb-3">
             <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
-              <GraduationCap className="h-3 w-3" />§ Today's plan
+              <GraduationCap className="h-3 w-3" />§ Today&apos;s plan
             </span>
             <span className="editorial-section-rule" />
             <span className="text-[11px] italic text-muted-foreground">{studyTasks.length} due</span>
