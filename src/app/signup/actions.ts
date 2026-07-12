@@ -1,6 +1,8 @@
 "use server";
 
 import { timingSafeEqual } from "node:crypto";
+import { headers } from "next/headers";
+import { checkIpRateLimit, requestIp } from "@/lib/ip-rate-limit";
 
 export type InviteSignupResult =
   | { ok: true }
@@ -31,6 +33,12 @@ export async function inviteSignupAction(
   const expected = process.env.SIGNUP_INVITE_CODE;
   if (!expected) {
     return { ok: false, error: "Invite signup is not enabled on this server." };
+  }
+  // Brute-force friction: invite codes are low-entropy, so cap attempts per
+  // IP (10 per 10 minutes) before even comparing.
+  const ip = requestIp(await headers());
+  if (!checkIpRateLimit(`invite-signup:${ip}`, 10, 600).allowed) {
+    return { ok: false, error: "Too many attempts — try again in a few minutes." };
   }
   if (!codeMatches(inviteCode.trim(), expected)) {
     return { ok: false, error: "Invalid invite code." };
