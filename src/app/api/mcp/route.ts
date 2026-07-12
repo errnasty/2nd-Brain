@@ -1,4 +1,5 @@
 import { and, eq, ilike, or, sql } from "drizzle-orm";
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { directoryItems, profiles } from "@/lib/db/schema";
@@ -121,7 +122,10 @@ export async function POST(req: Request) {
   if (!process.env.MCP_TOKEN) {
     return NextResponse.json({ error: "MCP not configured" }, { status: 503 });
   }
-  if (req.headers.get("x-mcp-token") !== process.env.MCP_TOKEN) {
+  const supplied = Buffer.from(req.headers.get("x-mcp-token") ?? "");
+  const expected = Buffer.from(process.env.MCP_TOKEN);
+  // Constant-time compare (length check leaks only length, which is fine).
+  if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
