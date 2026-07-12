@@ -22,7 +22,7 @@ jobs:
           if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
             echo "Missing APP_URL or CRON_SECRET secret"; exit 1
           fi
-          response=$(curl -sS -o /tmp/sync.json -w "%{http_code}" \
+          response=$(curl -sSL -o /tmp/sync.json -w "%{http_code}" \
             -H "Authorization: Bearer $CRON_SECRET" \
             --max-time 290 \
             "$APP_URL/api/cron/sync-feeds")
