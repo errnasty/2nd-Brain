@@ -52,7 +52,7 @@ The Supabase UI moved this — easiest path now:
 2. Top of the page → click **Connect** (top center).
 3. In the panel, switch the format tab to **URI**.
 4. You'll see three connection types:
-   - **Direct connection** (port 5432) — use during `npm run db:push`.
+   - **Direct connection** (port 5432) — use during `supabase db push`.
    - **Transaction pooler** (port 6543, PgBouncer) — use at runtime in production.
    - **Session pooler** — IPv4 fallback if your network doesn't speak IPv6.
 5. The password is shown as `[YOUR-PASSWORD]` — replace it with the DB password you set. If you forgot it, **Project Settings → Database → Reset database password**. URL-encode special characters (`@` → `%40`, etc.).
@@ -64,23 +64,35 @@ Dashboard → **Project Settings → API**:
 
 ---
 
-## 3. Push the schema + RLS
+## 3. Apply the database schema + RLS
 
-Fill in `.env.local` with the values from step 2 (use the **direct** `DATABASE_URL`), then:
+The schema lives as versioned, idempotent migrations in `supabase/migrations/`
+(0001–0019: tables, `updated_at` + sync triggers, tsvector search, FSRS,
+gamification, user settings, rabbitholes). Apply them with the Supabase CLI:
 
 ```powershell
-npm run db:push
+supabase db push
 ```
 
-Drizzle creates every table, index, and enum.
+(or, in the Supabase **SQL Editor**, paste each `supabase/migrations/00NN_*.sql`
+file in order and run them). This is the ONLY path that creates the sync
+support / FSRS / tsvector triggers the app needs.
+
+> ⚠️ **Do NOT use `npm run db:push` (`drizzle-kit push`) for a real deploy.** It
+> generates a schema from `drizzle/`, which is the **desktop PGlite bundle
+> source only** — it omits every `supabase/migrations/` trigger (sync support,
+> FSRS, tsvector, gamification). A cloud DB built that way would silently lack
+> sync support and break desktop sync. `drizzle/` is used solely to bundle the
+> embedded desktop database, not as the deploy schema.
 
 Now apply RLS policies and the auto-create-profile trigger. Open Supabase **SQL Editor**, paste the contents of `supabase/policies.sql`, hit Run.
 
-> If you ever wipe the DB, re-run `drizzle/0000_enable_pgvector.sql` first, then `npm run db:push`, then `supabase/policies.sql`.
+> If you ever wipe the DB, re-run `supabase db push` (after enabling the
+> `vector` extension), then re-run `supabase/policies.sql`.
 
 > **Re-run `supabase/policies.sql` after every schema change that adds a table.** The file is idempotent (safe to run repeatedly). This matters because Supabase exposes every `public` table through its REST API using the anon key that ships in the browser bundle — a table without RLS enabled is readable and writable by anyone holding that key. If you deployed before July 2026, re-run it now: earlier versions only covered 9 of the 21 tables (directory items/tasks/flashcards, rabbithole nodes, gamification, and settings tables were unprotected).
 
-Also apply the search-index migration (trigram indexes that keep global search fast as your library grows): paste `drizzle/0001_search_trgm.sql` into the SQL Editor and run it.
+Also apply the search-index migration (trigram indexes that keep global search fast as your library grows): paste `supabase/migrations/0008_search_and_index_perf.sql` into the SQL Editor and run it.
 
 For production, you'll later switch `DATABASE_URL` (in Netlify env vars) to the **pooled** connection string — see step 7.
 
