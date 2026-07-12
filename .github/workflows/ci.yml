@@ -26,6 +26,25 @@ jobs:
       - name: Unit tests
         run: npm test
 
+  audit:
+    runs-on: ubuntu-latest
+    # continue-on-error: the 4 remaining HIGH advisories after the safe
+    # `npm audit fix` are ALL in the deferred-major set (drizzle-orm <0.45.2,
+    # @ai-sdk/provider-utils via ai 4->7, @mozilla/readability <0.6.0). They
+    # only clear via `npm audit fix --force` (breaking) and are tracked as
+    # separate PRs. We still run the audit every push so a NEW high/critical
+    # surfaces immediately; flip this to a hard gate once those majors land.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci --legacy-peer-deps
+      - name: Audit (fail on high/critical)
+        run: npm audit --audit-level=high
+
   e2e:
     runs-on: ubuntu-latest
     steps:
