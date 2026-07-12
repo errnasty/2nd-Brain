@@ -110,6 +110,20 @@ Starting point for you: tree is green (`npx tsc --noEmit` clean, `npm test`
 
 ## Roadmap — what's still open, in priority order
 
+> A full-surface backlog (every aspect: deps, DB, PWA, a11y, docs, ops,
+> feeds, testing, UX, multi-user, misc security) follows after this list —
+> these numbered items are just the "do next" cut.
+
+### 0. Two urgent finds from the full-surface audit (details in backlog)
+- **Dependency vulnerabilities**: 24 total — 1 critical (protobufjs RCE
+  advisory), 7 high incl. drizzle-orm SQL-identifier injection. Run
+  `npm audit fix` for the safe subset now; plan the drizzle-orm 0.45 major
+  bump as its own PR. (Backlog §A.)
+- **Migration drift**: cloud migrations 0008/0013/0018 are referenced by
+  code but absent from `drizzle/` — a fresh deploy can't fully rebuild the
+  DB and desktop sync hard-errors without 0013. Recover + commit them.
+  (Backlog §B.)
+
 ### 1. Authenticated e2e specs
 The smoke suite covers the unauthenticated surface. The valuable half —
 /feeds j/k with an article open, /search results, /today brief streaming,
@@ -147,6 +161,157 @@ self-hosters aren't forced into it.
 - **Search polish**: one shared query-embedding for the directory + article
   semantic passes (currently embeds twice); `ts_headline`-style highlighted
   snippets; pagination beyond 25+25.
+
+## Full-surface improvement backlog (all aspects, audited 2026-07-12)
+
+Grounded in this repo's actual state (file references given), not generic
+advice. The prioritized roadmap above is the "do next" list; this is the
+complete map. Impact/effort tags: 🔴 high-impact, 🟡 medium, ⚪ polish.
+
+### A. Dependencies & supply chain
+- 🔴 **`npm audit`: 24 vulnerabilities — 1 critical (protobufjs, arbitrary
+  code execution), 7 high (drizzle-orm <0.45.2 SQL-identifier injection,
+  undici TLS-bypass/header-injection, form-data CRLF, vite/launch-editor).**
+  `npm audit fix` clears several without breakage; drizzle-orm 0.36 → 0.45.2
+  is a MAJOR bump — do it as its own PR with the full test+e2e suite, and
+  check every raw `db.execute(sql\`…\`)` call site against the 0.4x
+  changelog. Find where protobufjs comes from (`npm ls protobufjs` — likely
+  transitive via @xenova/transformers) and decide exposure.
+- 🟡 No automated dependency updates: add Dependabot/Renovate (weekly,
+  grouped), plus a scheduled `npm audit --audit-level=high` CI job so new
+  CVEs surface without waiting for a human to run audit.
+
+### B. Database & migrations
+- 🔴 **Migration drift — the repo cannot rebuild the production DB.** Code
+  references cloud migrations that are NOT in `drizzle/`: tsvector + GIN
+  (0008, `src/lib/ai/rag.ts:266` fail-softs to ILIKE), updated_at sync
+  triggers (0013, `src/lib/sync/engine.ts:172` HARD-ERRORS without it),
+  FSRS columns (0018, `src/lib/db/schema.ts:420`). `drizzle/` holds only
+  0000 + 0001. A fresh deploy via `db:push` + policies.sql silently lacks
+  the tsvector index and breaks desktop sync. Fix: recover the missing SQL
+  from the live DB (`pg_dump --schema-only` diff against `db:push` output),
+  commit as numbered files, and switch the workflow from `db:push` to
+  `drizzle-kit generate` + committed migrations from here on.
+- 🟡 Backup/restore is undocumented: DEPLOY.md should cover Supabase PITR /
+  scheduled `pg_dump`, and a restore drill. All user data incl. uploaded
+  document full-text lives in this one DB.
+- ⚪ Orphan hygiene: embeddings/chunks for deleted content rely on FK
+  cascades (fine), but re-embedding after an EMBEDDINGS_PROVIDER switch is
+  manual (backfill route) — a startup dimension-mismatch check would catch
+  the "switched provider, forgot to re-embed" foot-gun explicitly.
+
+### C. PWA & mobile
+- 🔴 **No `share_target` in `public/manifest.webmanifest`** — the highest-value
+  missing mobile feature for a read-later app: Android/iOS share-sheet →
+  save URL into the Directory. Needs a `/share-save` route that accepts the
+  POST, saves, and redirects. Pairs with the existing readability extractor.
+- 🟡 Manifest has no `shortcuts` (long-press → Today's Brief / Search /
+  Quick capture) and no `screenshots` (install-prompt quality on Android).
+- 🟡 Web Push for the Daily Brief ("your brief is ready" each morning) —
+  service worker exists; needs push subscription storage + a cron sender.
+  Complements (or replaces) the email-digest roadmap item.
+- ⚪ App Badging API: unread count on the installed-app icon; cheap win in
+  `sw-register.tsx` territory.
+
+### D. Accessibility
+- 🟡 **No skip-to-content link** (verified: no match in `src/`): keyboard/AT
+  users tab through the whole sidebar on every page. One link in
+  `(app)/layout.tsx` + an `id` on the main pane.
+- 🟡 Streaming AI answers (/ask, /today) have no `aria-live` region — screen
+  readers get silence while text streams in. `aria-live="polite"` on the
+  answer container, throttled.
+- 🟡 No automated a11y checks: axe-core in the new Playwright suite
+  (`@axe-core/playwright`) on /login, /feeds, /settings catches regressions
+  for free once wired.
+- ⚪ Reduced motion is respected in `page-transition.tsx` only — audit the
+  confetti (`confetti.tsx`) and card/board animations under
+  `prefers-reduced-motion`.
+- ⚪ Contrast audit of the "editorial" theme's muted grays (mono 10-11px
+  labels) against WCAG AA.
+
+### E. Documentation & repo hygiene
+- 🟡 **README.md is two product-generations stale**: says "Phases 4–5 are
+  next" while Daily Brief, embeddings, study hub, SRS, gamification, map,
+  rabbitholes, desktop app, MCP server are all shipped. Rewrite the feature
+  list + env table (SIGNUP_INVITE_CODE, AI_DAILY_TOKEN_BUDGET, e2e).
+- 🟡 CLAUDE.md mandates `graphify query` but `graphify-out/` doesn't exist in
+  the repo — either commit the graph artifacts or drop the section (agents
+  waste a turn discovering this every session).
+- ⚪ Three overlapping handoff docs now exist (OPTIMIZATION_PLAN.md,
+  OPTIMIZATION_HANDOVER.md, this file). Fold the two older ones into a
+  docs/history/ folder or delete after extracting the still-true constraints.
+
+### F. Observability & operations
+- 🟡 Error monitoring (already roadmap #4) — still the biggest ops gap.
+- 🟡 Cron visibility: sync + backfill run via GitHub Actions; a failure just
+  reddens a workflow badge nobody watches. Enable workflow failure
+  notifications (or a shields badge in README, or a `last_sync_at` staleness
+  banner in the feeds UI — `feeds.last_error` exists per-feed, but there's
+  no "the WHOLE sync hasn't run for 2 days" signal for the user).
+- ⚪ Structured logs: API routes `console.warn` strings; a tiny logger with
+  route + userId(hash) + duration would make Netlify logs greppable.
+
+### G. Feeds & content pipeline
+- 🟡 **Dead-feed auto-pause**: `feeds.lastError` is stored and surfaced, but
+  a feed 404ing for months is still fetched every cron run. Add
+  `error_count` + skip-after-N-consecutive-failures with a "paused, tap to
+  retry" state in feeds-nav.
+- 🟡 Cross-feed dedupe: the same story from two feeds appears twice
+  (unique index is per-feed URL). A normalized-URL (or title-simhash) check
+  at insert could mark duplicates and collapse them in the reader.
+- ⚪ Import beyond OPML: Pocket/Instapaper/browser-bookmarks HTML into the
+  Directory — the parsers + chunker already exist, it's mostly a mapping UI.
+- ⚪ Favicon caching: feed favicons hotlink origin servers on every render
+  (`next/image` optimizes but still origin-fetches); cache them as data URIs
+  at feed-add time.
+
+### H. Testing depth
+- 🟡 The 128 unit tests are pure-logic only (chunker, SRS, markers, models);
+  ZERO component/DOM tests. Rather than adding a jsdom layer, extend the new
+  Playwright suite: authenticated specs (roadmap #1) give more coverage per
+  line of test code than component tests would.
+- ⚪ Bundle-size regression guard: CI has no budget check — a
+  `next build` route-size diff against main (or size-limit on the shared
+  chunk) stops the 250 kB-era regressions from creeping back.
+
+### I. Product & UX polish
+- 🟡 **No undo / soft-delete anywhere**: deleting a note, feed, folder, or
+  rabbithole is immediate and permanent (context menus → server action).
+  Cheapest fix: `deleted_at` column on directory_items + a 30-day Trash view;
+  alternatively a 5-second "Undo" toast that defers the server action.
+- 🟡 Session management: no "sign out everywhere" (Supabase
+  `auth.signOut({ scope: 'global' })`) — matters once invite-mode makes
+  accounts shared-device-plausible. One button next to Change password.
+- ⚪ Quick capture exists (`quick-capture.tsx`) but isn't in the command
+  palette ACTIONS list — "New note" / "New task" as palette actions.
+- ⚪ /search: query terms aren't highlighted in snippets; `<mark>` wrap is
+  ~20 lines in `HitRow`.
+- ⚪ Login/signup pages render nothing without JS (fully client-rendered
+  behind Suspense — verified in e2e work). Server-render the static shell so
+  first paint isn't blank on slow connections.
+
+### J. Multi-user hardening (beyond what shipped)
+- 🟡 Per-user BYO API keys: `profiles.encryptedApiKeys` exists in the schema
+  but NOTHING reads or writes it (verified: schema.ts is the only
+  reference). Either build it (each user pays for their own AI; the clean
+  multi-tenant cost model, better than shared-budget 429s) or drop the
+  column. Needs a real crypto story (libsodium sealed box with a server
+  KEY_ENCRYPTION_SECRET, never the service key).
+- 🟡 Per-user resource quotas: uploads have a size cap per file, but there is
+  no per-user total-storage or feed-count cap; one user can bloat the shared
+  DB. Cheap: count-based caps in the upload/add-feed actions.
+- ⚪ Postgres pool: `max: 3` in `src/lib/db/index.ts` was tuned for
+  single-user; under real multi-user load on Supabase's pooler, revisit
+  (measure first — see the pg_stat_statements item).
+
+### K. Minor security polish
+- ⚪ `public/robots.txt` doesn't exist: add a disallow-all (private app;
+  keeps the login page out of indexes) + `X-Robots-Tag: noindex` header.
+- ⚪ Login lacks its own rate limit (Supabase throttles server-side; the new
+  `checkIpRateLimit` makes a client-visible layer a 5-line addition to the
+  login action if wanted).
+- ⚪ Session cookie hygiene: rely on @supabase/ssr defaults today; verify
+  `Secure`/`SameSite` flags on the deploy target once, document in DEPLOY.md.
 
 ## Constraints / gotchas (inherited + new)
 
