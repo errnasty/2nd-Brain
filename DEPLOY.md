@@ -78,6 +78,10 @@ Now apply RLS policies and the auto-create-profile trigger. Open Supabase **SQL 
 
 > If you ever wipe the DB, re-run `drizzle/0000_enable_pgvector.sql` first, then `npm run db:push`, then `supabase/policies.sql`.
 
+> **Re-run `supabase/policies.sql` after every schema change that adds a table.** The file is idempotent (safe to run repeatedly). This matters because Supabase exposes every `public` table through its REST API using the anon key that ships in the browser bundle — a table without RLS enabled is readable and writable by anyone holding that key. If you deployed before July 2026, re-run it now: earlier versions only covered 9 of the 21 tables (directory items/tasks/flashcards, rabbithole nodes, gamification, and settings tables were unprotected).
+
+Also apply the search-index migration (trigram indexes that keep global search fast as your library grows): paste `drizzle/0001_search_trgm.sql` into the SQL Editor and run it.
+
 For production, you'll later switch `DATABASE_URL` (in Netlify env vars) to the **pooled** connection string — see step 7.
 
 ---

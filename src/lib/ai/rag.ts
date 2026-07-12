@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";

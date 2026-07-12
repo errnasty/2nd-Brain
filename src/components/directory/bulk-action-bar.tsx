@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useTransition } from "react";
 import { FolderInput, Inbox, Loader2, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {

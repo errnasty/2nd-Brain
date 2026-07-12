@@ -18,7 +18,7 @@ function asArray<T>(v: T | T[] | undefined): T[] {
   return Array.isArray(v) ? v : [v];
 }
 
-function readFeed(node: any): OpmlFeed | null {
+function readFeed(node: Record<string, string | undefined>): OpmlFeed | null {
   const url = node["@_xmlUrl"];
   if (!url) return null;
   const title = node["@_title"] || node["@_text"] || url;

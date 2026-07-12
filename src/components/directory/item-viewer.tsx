@@ -155,6 +155,7 @@ export function ItemViewer({
       // the pending edit — flush it now.
       flushSave();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the item ID only; the `item` object identity churns on every parent render
   }, [item?.id, flushSave]);
 
   // Flush a pending edit if the tab/window is closing.
@@ -189,6 +190,7 @@ export function ItemViewer({
     return () => {
       aborted = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refetch only when the resolved item identity changes, not on every `full` object recreation
   }, [full?.id, full?.kind, full?.articleId]);
 
   // Debounced autosave for editable items (notes + uploaded documents).
@@ -214,6 +216,7 @@ export function ItemViewer({
       });
     }, 800);
     return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- autosave debounce re-arms on edited fields + item identity; adding `item` would reset the timer on unrelated renders
   }, [title, content, dirty, item?.id, item?.kind]);
 
   async function handleDelete() {

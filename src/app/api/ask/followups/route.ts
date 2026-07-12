@@ -2,6 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { checkAiBudget, recordAiUsage } from "@/lib/ai/budget";
 import { aiAvailable, fastModel } from "@/lib/ai/provider";
 
 export const runtime = "nodejs";
@@ -23,6 +24,9 @@ export async function POST(req: Request) {
 
   const rl = await checkRateLimit(auth.user.id, "ask-followups", 60, 60);
   if (!rl.allowed) return Response.json({ followups: [] });
+  // Follow-up suggestions are decorative — over budget they just vanish.
+  const budget = await checkAiBudget(auth.user.id);
+  if (!budget.allowed) return Response.json({ followups: [] });
   if (!aiAvailable()) return Response.json({ followups: [] });
 
   let body: { question?: string; answer?: string };
@@ -36,7 +40,7 @@ export async function POST(req: Request) {
   if (!question || !answer) return Response.json({ followups: [] });
 
   try {
-    const { object } = await generateObject({
+    const { object, usage } = await generateObject({
       model: fastModel(),
       schema: Schema,
       system:
@@ -45,6 +49,7 @@ export async function POST(req: Request) {
         "No numbering, no preamble.",
       prompt: `QUESTION:\n${question}\n\nANSWER:\n${answer}`,
     });
+    void recordAiUsage(auth.user.id, usage?.totalTokens ?? 0);
     return Response.json({ followups: object.followups.slice(0, 3) });
   } catch {
     return Response.json({ followups: [] });

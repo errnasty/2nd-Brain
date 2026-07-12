@@ -15,7 +15,6 @@ import {
 } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
-import { routeToFolder } from "@/lib/ai/routing";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";

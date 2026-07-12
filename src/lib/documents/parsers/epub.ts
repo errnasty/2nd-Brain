@@ -46,14 +46,14 @@ export async function extractEpub(buffer: Buffer): Promise<{ text: string; pageC
   const opf = xml.parse(opfXml);
 
   // 2) Build manifest id -> href
-  const manifestItems = ([] as any[]).concat(opf?.package?.manifest?.item ?? []);
+  const manifestItems = ([] as Record<string, string>[]).concat(opf?.package?.manifest?.item ?? []);
   const idToHref = new Map<string, string>();
   for (const item of manifestItems) {
     idToHref.set(item["@_id"], item["@_href"]);
   }
 
   // 3) Read spine order
-  const spineItems = ([] as any[]).concat(opf?.package?.spine?.itemref ?? []);
+  const spineItems = ([] as Record<string, string>[]).concat(opf?.package?.spine?.itemref ?? []);
   const opfDir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/") + 1) : "";
 
   const chapters: string[] = [];

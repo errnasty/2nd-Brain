@@ -9,6 +9,7 @@ import { getApiUser } from "@/lib/auth";
 import { getChatModel } from "@/lib/ai/models";
 import { openrouterClient, openrouterKey } from "@/lib/ai/provider";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { getLens, extractNodeTitle } from "@/lib/rabbithole/lenses";
 
@@ -108,6 +109,10 @@ export async function POST(req: Request) {
       status: 429,
     });
   }
+  const budget = await checkAiBudget(userId);
+  if (!budget.allowed) {
+    return new Response(budgetExceededMessage(budget), { status: 429 });
+  }
 
   let body: Body;
   try {
@@ -205,6 +210,8 @@ export async function POST(req: Request) {
     temperature: 0.4,
     abortSignal: req.signal,
   });
+  // Fire-and-forget: the usage promise resolves when the stream finishes.
+  void result.usage.then((u) => recordAiUsage(userId, u?.totalTokens ?? 0)).catch(() => {});
 
   const modelId = getChatModel(body.model).id;
   const parentId = parent?.id ?? null;

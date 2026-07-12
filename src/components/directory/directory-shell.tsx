@@ -139,9 +139,10 @@ export function DirectoryShell({
     if (view === "board" && pageHasMore && !loadingMore) loadMore();
   }, [view, pageHasMore, loadingMore, loadMore]);
 
+  const activeTagsKey = activeTagIds.join(",");
   useEffect(() => {
     setCheckedIds(new Set());
-  }, [activeFolder, activeTagIds.join(",")]);
+  }, [activeFolder, activeTagsKey]);
 
   const toggleChecked = useCallback((id: string) => {
     setCheckedIds((prev) => {
