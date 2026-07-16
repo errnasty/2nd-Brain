@@ -34,6 +34,7 @@ import type { DirectoryListItem } from "./directory-shell";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 import { ConnectionsPanel } from "@/components/reader/connections-panel";
 import { Rabbithole } from "@/components/reader/rabbithole";
+import { PaneToggles } from "@/components/shell/pane-toggles";
 
 type ResolvedLink = { title: string; id: string | null };
 type Backlink = { id: string; title: string; kind: string };
@@ -78,9 +79,15 @@ function linkifyWikilinks(md: string, links: ResolvedLink[]): string {
 export function ItemViewer({
   item,
   onClose,
+  listCollapsed = false,
+  onToggleList,
 }: {
   item: DirectoryListItem | null;
   onClose: () => void;
+  /** Whether the Directory list (third bar) is collapsed. */
+  listCollapsed?: boolean;
+  /** Toggle the Directory list open/closed (desktop). */
+  onToggleList?: () => void;
 }) {
   const router = useRouter();
   const confirm = useConfirm();
@@ -370,6 +377,7 @@ export function ItemViewer({
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>
+        <PaneToggles listCollapsed={listCollapsed} onToggleList={onToggleList} className="-ml-1 mr-0.5" />
         <div className="flex flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
           <span>{item.kind.replace("_", " ")}</span>
           <span>·</span>

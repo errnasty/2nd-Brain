@@ -20,17 +20,31 @@ import {
   FONT_SCALE_DEFAULT,
   FONT_SCALE_MAX,
   FONT_SCALE_MIN,
+  PALETTE_DEFAULT,
+  PALETTE_OPTIONS,
   getFontFamily,
   getFontScale,
+  getPalette,
   getReduceMotion,
   setFontFamily,
   setFontScale,
+  setPalette,
   setReduceMotion,
   type FontId,
+  type PaletteId,
 } from "@/lib/settings";
 import { toast } from "sonner";
 
 const MODEL_STORAGE_KEY = "ask.model.v1";
+
+// Representative swatch per palette (the CSS vars are scoped to :root/.dark, so
+// a swatch can't read them here — these mirror each palette's --brand accent).
+const PALETTE_SWATCH: Record<PaletteId, string> = {
+  parchment: "hsl(30 72% 45%)",
+  mono: "linear-gradient(135deg, #f4f4f4 0 50%, #111 50% 100%)",
+  ocean: "hsl(214 90% 48%)",
+  forest: "hsl(148 55% 38%)",
+};
 
 export function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
@@ -49,6 +63,7 @@ export function SettingsForm() {
   const [mounted, setMounted] = useState(false);
   const [fontScale, setFontScaleState] = useState(FONT_SCALE_DEFAULT);
   const [fontFamily, setFontFamilyState] = useState<FontId>(FONT_FAMILY_DEFAULT);
+  const [palette, setPaletteState] = useState<PaletteId>(PALETTE_DEFAULT);
   const [reduceMotion, setReduceMotionState] = useState(false);
   const [model, setModel] = useState(DEFAULT_CHAT_MODEL);
 
@@ -56,6 +71,7 @@ export function SettingsForm() {
     setMounted(true);
     setFontScaleState(getFontScale());
     setFontFamilyState(getFontFamily());
+    setPaletteState(getPalette());
     setReduceMotionState(getReduceMotion());
     try {
       const m = localStorage.getItem(MODEL_STORAGE_KEY);
@@ -76,6 +92,11 @@ export function SettingsForm() {
     setFontFamily(id);
   }
 
+  function choosePalette(id: PaletteId) {
+    setPaletteState(id);
+    setPalette(id);
+  }
+
   function chooseModel(id: string) {
     setModel(id);
     try {
@@ -90,6 +111,7 @@ export function SettingsForm() {
     setFontScaleState(FONT_SCALE_DEFAULT);
     setFontScale(FONT_SCALE_DEFAULT);
     chooseFont(FONT_FAMILY_DEFAULT);
+    choosePalette(PALETTE_DEFAULT);
     setReduceMotionState(false);
     setReduceMotion(false);
     chooseModel(DEFAULT_CHAT_MODEL);
@@ -129,6 +151,33 @@ export function SettingsForm() {
                 >
                   <Icon className="h-3.5 w-3.5" />
                   {t.label}
+                </button>
+              );
+            })}
+          </div>
+        </Row>
+
+        <Separator />
+
+        <Row title="Colour theme" desc="Applies in both light and dark mode.">
+          <div className="flex flex-wrap items-center justify-end gap-1 rounded-md border border-border p-0.5">
+            {PALETTE_OPTIONS.map((p) => {
+              const active = palette === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => choosePalette(p.id)}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors",
+                    active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <span
+                    className="inline-block h-3 w-3 shrink-0 rounded-full border border-border"
+                    style={{ background: PALETTE_SWATCH[p.id] }}
+                    aria-hidden
+                  />
+                  {p.label}
                 </button>
               );
             })}

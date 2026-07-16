@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { ArticleList, type ArticleListItem } from "./article-list";
+import { useListCollapse } from "@/components/shell/use-list-collapse";
 
 // The reader (712 lines: panels, TTS, takeaways, next/image…) loads only once
 // an article is actually opened — it's the bulk of /feeds' initial JS. Its
@@ -83,6 +84,8 @@ export function FeedsShell({
     window.history.replaceState(null, "", url.toString());
   }, []);
 
+  const [listCollapsed, toggleListCollapsed] = useListCollapse("feeds.listCollapsed.v1");
+
   return (
     <>
       <ArticleList
@@ -93,12 +96,15 @@ export function FeedsShell({
         feedId={feedId}
         folderId={folderId}
         onSelect={onSelect}
+        collapsed={listCollapsed}
       />
       {selectedId ? (
         <ArticleReader
           selectedId={selectedId}
           orderedIds={orderedIds}
           onSelect={onSelect}
+          listCollapsed={listCollapsed}
+          onToggleList={toggleListCollapsed}
         />
       ) : (
         <section className="hidden flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground lg:flex">
