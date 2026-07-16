@@ -1,7 +1,8 @@
 "use client";
 
-import { useTransition } from "react";
-import { FolderInput, Inbox, Loader2, Trash2, X } from "lucide-react";
+import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
+import { FolderInput, HelpCircle, Inbox, Loader2, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -15,6 +16,7 @@ import {
   bulkDeleteDirectoryItemsAction,
   bulkMoveDirectoryItemsAction,
 } from "@/app/(app)/directory/actions";
+import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
 import type { DirectoryFolder } from "@/lib/db/schema";
@@ -28,10 +30,29 @@ export function BulkActionBar({
   folders: DirectoryFolder[];
   onClear: () => void;
 }) {
+  const router = useRouter();
   const confirm = useConfirm();
   const [pending, startTransition] = useTransition();
+  const [makingQuiz, setMakingQuiz] = useState(false);
   const count = selectedIds.length;
   if (count === 0) return null;
+
+  function handleMakeQuiz() {
+    if (makingQuiz) return;
+    setMakingQuiz(true);
+    generateQuizAction(selectedIds)
+      .then((r) => {
+        if (r.ok) {
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          onClear();
+          router.push(`/study?tab=quiz&quiz=${r.id}`);
+        } else {
+          toast.error(r.error);
+        }
+      })
+      .catch((e) => toast.error(`Quiz failed: ${e instanceof Error ? e.message : "error"}`))
+      .finally(() => setMakingQuiz(false));
+  }
 
   async function handleMassDelete() {
     const ok = await confirm({
@@ -104,6 +125,15 @@ export function BulkActionBar({
             ))}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <Button size="sm" variant="ghost" onClick={handleMakeQuiz} disabled={makingQuiz}>
+        {makingQuiz ? (
+          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <HelpCircle className="mr-1.5 h-3.5 w-3.5" />
+        )}
+        Quiz
+      </Button>
 
       <Button
         size="sm"

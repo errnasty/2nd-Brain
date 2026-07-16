@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, Library, Lightbulb, Loader2, Pencil, Rabbit, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, Loader2, MoreVertical, Pencil, Rabbit, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,13 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   deleteDirectoryItemAction,
@@ -19,6 +26,7 @@ import {
   type ItemSummary,
 } from "@/app/(app)/directory/actions";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
 import { celebrate } from "@/lib/gamify/celebrate";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
@@ -90,6 +98,7 @@ export function ItemViewer({
   const [saving, setSaving] = useState(false);
   const [distilling, setDistilling] = useState(false);
   const [makingCards, setMakingCards] = useState(false);
+  const [makingQuiz, setMakingQuiz] = useState(false);
   const [essenceOpen, setEssenceOpen] = useState(true);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
   // Mirrors the live editable buffer so we can flush a pending edit immediately
@@ -284,6 +293,27 @@ export function ItemViewer({
     });
   }
 
+  function runMakeQuiz() {
+    if (!item || makingQuiz) return;
+    setMakingQuiz(true);
+    startTransition(async () => {
+      try {
+        const r = await generateQuizAction([item.id]);
+        if (r.ok) {
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          celebrate(r.xp);
+          router.push(`/study?tab=quiz&quiz=${r.id}`);
+        } else {
+          toast.error(r.error);
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't generate a quiz");
+      } finally {
+        setMakingQuiz(false);
+      }
+    });
+  }
+
   if (!item) {
     return (
       <section className="hidden flex-1 items-center justify-center text-sm text-muted-foreground lg:flex">
@@ -398,48 +428,50 @@ export function ItemViewer({
           <Sparkles className="h-4 w-4" />
         </Button>
 
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => setRabbitholeOpen((v) => !v)}
-          title="Rabbithole — select text to dig deeper"
-          className={rabbitholeOpen ? "text-primary" : ""}
-        >
-          <Rabbit className="h-4 w-4" />
-        </Button>
-
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={runDistill}
-          disabled={distilling}
-          title={full?.summary ? "Re-distill the essence" : "Distill the essence (TL;DR + key points)"}
-        >
-          {distilling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-        </Button>
-
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={runMakeFlashcards}
-          disabled={makingCards}
-          title="Make flashcards"
-        >
-          {makingCards ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
-        </Button>
-
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={() => router.push(`/study?tab=review&item=${item.id}`)}
-          title="Study this note (review its flashcards)"
-        >
-          <GraduationCap className="h-4 w-4" />
-        </Button>
-
-        <Button size="icon" variant="ghost" onClick={handleDelete} title="Delete">
-          <Trash2 className="h-4 w-4" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" variant="ghost" title="More actions">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setRabbitholeOpen((v) => !v)}>
+              <Rabbit className="mr-2 h-3.5 w-3.5" /> Rabbithole
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={runDistill} disabled={distilling}>
+              {distilling ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="mr-2 h-3.5 w-3.5" />
+              )}
+              {full?.summary ? "Re-distill the essence" : "Distill the essence"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={runMakeFlashcards} disabled={makingCards}>
+              {makingCards ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Brain className="mr-2 h-3.5 w-3.5" />
+              )}
+              Make flashcards
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={runMakeQuiz} disabled={makingQuiz}>
+              {makingQuiz ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <HelpCircle className="mr-2 h-3.5 w-3.5" />
+              )}
+              Make quiz
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => router.push(`/study?tab=review&item=${item.id}`)}>
+              <GraduationCap className="mr-2 h-3.5 w-3.5" /> Study this note
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleDelete} className="text-destructive focus:text-destructive">
+              <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       <ScrollArea className="flex-1">
