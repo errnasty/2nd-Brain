@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { StudyGenerationSettings } from "@/components/settings/study-generation-settings";
 import { DesktopSettings } from "@/components/settings/desktop-settings";
 import { OpenInDesktop } from "@/components/settings/open-in-desktop";
 import { SettingsShortcuts } from "@/components/shell/keyboard-shortcuts";
@@ -7,10 +8,12 @@ import { ReplayTutorial } from "@/components/settings/replay-tutorial";
 import { DangerZone } from "@/components/settings/danger-zone";
 import { AiUsageCard } from "@/components/settings/ai-usage-card";
 import { ChangePassword } from "@/components/settings/change-password";
+import { getUserSettings } from "@/lib/settings/store";
 
 export default async function SettingsPage() {
   const { user } = await requireUser();
   const isDesktop = process.env.APP_RUNTIME === "desktop";
+  const settings = await getUserSettings(user.id);
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10">
@@ -29,6 +32,14 @@ export default async function SettingsPage() {
           <OpenInDesktop />
         )}
         <SettingsForm />
+        <StudyGenerationSettings
+          initial={{
+            flashcardDifficulty: settings.flashcardDifficulty,
+            flashcardCount: settings.flashcardCount,
+            quizDifficulty: settings.quizDifficulty,
+            quizCount: settings.quizCount,
+          }}
+        />
         <div className="mt-8 space-y-3">
           <AiUsageCard userId={user.id} />
           <SettingsShortcuts />

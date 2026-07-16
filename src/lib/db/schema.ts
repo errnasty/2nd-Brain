@@ -491,7 +491,9 @@ export const rabbitholeNodes = pgTable(
 // quiz_attempts row rather than overwriting — that history is the whole point
 // of "save history, retake later".
 export type QuizQuestion =
-  | { id: string; type: "mc"; question: string; options: string[]; correctIndex: number }
+  // explanation is optional: quizzes generated before this field existed have
+  // no such key in their stored jsonb — never assume it's present.
+  | { id: string; type: "mc"; question: string; options: string[]; correctIndex: number; explanation?: string }
   | { id: string; type: "open"; question: string; answer: string };
 
 export type QuizAnswer =
@@ -637,6 +639,12 @@ export type UserSettingsData = {
   wipLimits?: Record<string, number>;
   // #1 Auto-summarize an article when it's opened in the reader.
   autoSummarizeOnOpen?: boolean;
+  // Flashcard/quiz generation preferences (Settings → Flashcards & Quiz).
+  // Unset = the DEFAULT_* constants in src/lib/ai/study-options.ts.
+  flashcardDifficulty?: "easy" | "medium" | "hard";
+  flashcardCount?: number;
+  quizDifficulty?: "easy" | "medium" | "hard";
+  quizCount?: number;
 };
 
 export const userSettings = pgTable(

@@ -1,11 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronRight, Loader2, RotateCcw, X } from "lucide-react";
+import { Brain, Check, ChevronRight, Loader2, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { submitQuizAttemptAction, type QuizForTaking } from "@/app/(app)/study/quiz-actions";
+import {
+  addMissedToFlashcardsAction,
+  submitQuizAttemptAction,
+  type QuizForTaking,
+} from "@/app/(app)/study/quiz-actions";
 import type { QuizAnswer } from "@/lib/db/schema";
 import { celebrate } from "@/lib/gamify/celebrate";
 
@@ -28,9 +32,24 @@ export function QuizRunner({
   const [openRevealed, setOpenRevealed] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<"idle" | "submitting" | "error">("idle");
   const [result, setResult] = useState<{ score: number; total: number } | null>(null);
+  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const [addMissedState, setAddMissedState] = useState<"idle" | "loading" | "done">("idle");
 
   const total = quiz.questions.length;
   const q = index < total ? quiz.questions[index] : null;
+
+  // Missed questions, derived from the answers already collected — the count
+  // shown on the score screen's "add to flashcards" button.
+  const missedCount = (() => {
+    const byId = new Map(quiz.questions.map((qq) => [qq.id, qq]));
+    return answers.filter((a) => {
+      const qq = byId.get(a.questionId);
+      if (!qq) return false;
+      if (qq.type === "mc" && a.type === "mc") return a.selectedIndex !== qq.correctIndex;
+      if (qq.type === "open" && a.type === "open") return !a.selfCorrect;
+      return false;
+    }).length;
+  })();
 
   function submit(finalAnswers: QuizAnswer[]) {
     setSubmitPhase("submitting");
@@ -38,6 +57,7 @@ export function QuizRunner({
       .then((r) => {
         if (r.ok) {
           setSubmitPhase("idle");
+          setAttemptId(r.attemptId);
           setResult({ score: r.score, total: r.total });
           celebrate(r.xp);
           onDone();
@@ -49,6 +69,26 @@ export function QuizRunner({
       .catch((err) => {
         setSubmitPhase("error");
         toast.error(err instanceof Error ? err.message : "Couldn't save this attempt");
+      });
+  }
+
+  function addMissedToFlashcards() {
+    if (!attemptId || addMissedState !== "idle") return;
+    setAddMissedState("loading");
+    addMissedToFlashcardsAction(quiz.id, attemptId)
+      .then((r) => {
+        if (r.ok) {
+          toast.success(`Added ${r.count} card${r.count === 1 ? "" : "s"} to your flashcard deck`);
+          celebrate(r.xp);
+          setAddMissedState("done");
+        } else {
+          setAddMissedState("idle");
+          toast.error(r.error);
+        }
+      })
+      .catch((err) => {
+        setAddMissedState("idle");
+        toast.error(err instanceof Error ? err.message : "Couldn't add cards");
       });
   }
 
@@ -68,6 +108,8 @@ export function QuizRunner({
     setOpenRevealed(false);
     setSubmitPhase("idle");
     setResult(null);
+    setAttemptId(null);
+    setAddMissedState("idle");
   }
 
   if (result) {
@@ -86,6 +128,23 @@ export function QuizRunner({
           </div>
           <p className="mt-1 text-sm text-muted-foreground">{quiz.title}</p>
         </div>
+        {missedCount > 0 && (
+          <Button
+            variant="outline"
+            className="gap-1.5"
+            disabled={addMissedState !== "idle"}
+            onClick={addMissedToFlashcards}
+          >
+            {addMissedState === "loading" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : addMissedState === "done" ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Brain className="h-3.5 w-3.5" />
+            )}
+            {addMissedState === "done" ? "Added to flashcards" : `Add ${missedCount} missed to flashcards`}
+          </Button>
+        )}
         <div className="flex gap-2">
           <Button variant="outline" onClick={onExit}>
             Back to quizzes
@@ -159,6 +218,11 @@ export function QuizRunner({
                 </button>
               );
             })}
+            {mcSelected !== null && q.explanation && (
+              <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs leading-relaxed text-muted-foreground">
+                {q.explanation}
+              </div>
+            )}
             {mcSelected !== null && (
               <Button
                 onClick={() => advance({ questionId: q.id, type: "mc", selectedIndex: mcSelected })}

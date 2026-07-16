@@ -8,10 +8,12 @@ import { directoryFlashcards, directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { generateFlashcards, rewriteFlashcard } from "@/lib/ai/flashcards";
 import { aiAvailable } from "@/lib/ai/provider";
+import { DEFAULT_FLASHCARD_COUNT, DEFAULT_STUDY_DIFFICULTY } from "@/lib/ai/study-options";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { scheduleFsrs, qualityToRating, seedFromSm2, LEECH_LAPSES } from "@/lib/srs/fsrs";
 import { awardXp } from "@/lib/gamify/award";
 import { dbErrorMessage } from "@/lib/db/errors";
+import { getUserSettings } from "@/lib/settings/store";
 
 export type DueCard = {
   id: string;
@@ -87,7 +89,11 @@ export async function generateFlashcardsAction(itemId: string) {
     const resolved = await getDirectoryItemStudyText(user.id, itemId);
     if (!resolved) return { ok: false as const, error: "Item not found" };
 
-    const cards = await generateFlashcards(resolved.title, resolved.text);
+    const settings = await getUserSettings(user.id);
+    const cards = await generateFlashcards(resolved.title, resolved.text, {
+      count: settings.flashcardCount ?? DEFAULT_FLASHCARD_COUNT,
+      difficulty: settings.flashcardDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+    });
     if (cards.length === 0) {
       // Distinguish the (very different) reasons generation can come back
       // empty — a single "no text or AI unavailable" message left the user
@@ -263,7 +269,11 @@ export async function createCardsFromTextAction(input: { title: string; text: st
   const { user } = await requireUser();
 
   try {
-    const cards = await generateFlashcards(title, text.slice(0, 6000));
+    const settings = await getUserSettings(user.id);
+    const cards = await generateFlashcards(title, text.slice(0, 6000), {
+      count: settings.flashcardCount ?? DEFAULT_FLASHCARD_COUNT,
+      difficulty: settings.flashcardDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+    });
     if (cards.length === 0) {
       return {
         ok: false as const,
