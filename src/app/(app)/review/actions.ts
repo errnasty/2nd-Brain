@@ -12,6 +12,22 @@ import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { scheduleFsrs, qualityToRating, seedFromSm2, LEECH_LAPSES } from "@/lib/srs/fsrs";
 import { awardXp } from "@/lib/gamify/award";
 
+/**
+ * A failed db.* call throws Drizzle's DrizzleQueryError, whose OWN .message
+ * is just "Failed query: <sql>\nparams: <values>" — a dump of the statement
+ * and every row's raw content, not the actual reason. The real driver/Postgres
+ * error (e.g. "column \"stability\" of relation ... does not exist") lives on
+ * .cause. Prefer that; fall back to .message for any other error shape.
+ */
+function dbErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error) {
+    const cause = (err as { cause?: unknown }).cause;
+    if (cause instanceof Error && cause.message) return cause.message;
+    return err.message || fallback;
+  }
+  return fallback;
+}
+
 export type DueCard = {
   id: string;
   question: string;
@@ -117,8 +133,9 @@ export async function generateFlashcardsAction(itemId: string) {
     revalidatePath("/review");
     return { ok: true as const, count: cards.length, xp };
   } catch (err) {
-    console.error("generateFlashcardsAction failed:", err instanceof Error ? err.message : err);
-    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't generate flashcards" };
+    const msg = dbErrorMessage(err, "Couldn't generate flashcards");
+    console.error("generateFlashcardsAction failed:", msg);
+    return { ok: false as const, error: msg };
   }
 }
 
@@ -202,8 +219,9 @@ export async function gradeCardAction(input: { id: string; quality: number }) {
     revalidatePath("/study");
     return { ok: true as const, xp };
   } catch (err) {
-    console.error("gradeCardAction failed:", err instanceof Error ? err.message : err);
-    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't save this review" };
+    const msg = dbErrorMessage(err, "Couldn't save this review");
+    console.error("gradeCardAction failed:", msg);
+    return { ok: false as const, error: msg };
   }
 }
 
@@ -244,8 +262,9 @@ export async function createFlashcardAction(input: {
     revalidatePath("/study");
     return { ok: true as const, id: row.id, xp };
   } catch (err) {
-    console.error("createFlashcardAction failed:", err instanceof Error ? err.message : err);
-    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't create the card" };
+    const msg = dbErrorMessage(err, "Couldn't create the card");
+    console.error("createFlashcardAction failed:", msg);
+    return { ok: false as const, error: msg };
   }
 }
 
@@ -274,8 +293,9 @@ export async function createCardsFromTextAction(input: { title: string; text: st
     revalidatePath("/study");
     return { ok: true as const, count: cards.length, xp };
   } catch (err) {
-    console.error("createCardsFromTextAction failed:", err instanceof Error ? err.message : err);
-    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't generate flashcards" };
+    const msg = dbErrorMessage(err, "Couldn't generate flashcards");
+    console.error("createCardsFromTextAction failed:", msg);
+    return { ok: false as const, error: msg };
   }
 }
 
@@ -342,7 +362,8 @@ export async function rewriteLeechAction(cardId: string) {
     revalidatePath("/study");
     return { ok: true as const, card: rewritten };
   } catch (err) {
-    console.error("rewriteLeechAction failed:", err instanceof Error ? err.message : err);
-    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't rewrite this card" };
+    const msg = dbErrorMessage(err, "Couldn't rewrite this card");
+    console.error("rewriteLeechAction failed:", msg);
+    return { ok: false as const, error: msg };
   }
 }
