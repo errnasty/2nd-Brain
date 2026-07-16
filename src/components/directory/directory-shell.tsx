@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, Newspaper, NotebookPen, Pencil, Plus, Upload, X } from "lucide-react";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -13,14 +13,28 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
+  bulkDeleteDirectoryItemsAction,
+  bulkMoveDirectoryItemsAction,
   createNoteAction,
   fetchDirectoryItemByIdAction,
   loadMoreDirectoryItemsAction,
   renameDirectoryFolderAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
+import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
+import {
+  CONTEXT_MENU_PRIMITIVES,
+  DROPDOWN_MENU_PRIMITIVES,
+  ItemRowMenuItems,
+} from "./item-row-menu";
 import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
 import { toast } from "sonner";
@@ -88,6 +102,25 @@ export function DirectoryShell({
   const [offset, setOffset] = useState(items.length);
   const [loadingMore, setLoadingMore] = useState(false);
 
+  // Items hidden optimistically by an in-flight "delete with undo" — the delete
+  // isn't sent to the server until the undo window closes, so the row can
+  // reappear instantly if the user hits Undo.
+  const [pendingRemovedIds, setPendingRemovedIds] = useState<Set<string>>(new Set());
+  const pendingDeletes = useRef<Map<string, { ids: string[]; timer: number }>>(new Map());
+  // If the user navigates away mid-undo-window, commit the pending deletes so
+  // they aren't silently dropped (the safe direction: the row was removed on
+  // screen, so honour that rather than resurrect it on next load).
+  useEffect(
+    () => () => {
+      pendingDeletes.current.forEach(({ ids, timer }) => {
+        clearTimeout(timer);
+        void bulkDeleteDirectoryItemsAction(ids);
+      });
+      pendingDeletes.current.clear();
+    },
+    [],
+  );
+
   const seedSig = `${activeFolder ?? ""}|${activeTagIds.join(",")}|${activeSort}|${items.length}|${items[0]?.id ?? ""}|${items[0]?.updatedAt ?? ""}`;
   useEffect(() => {
     setExtraItems([]);
@@ -109,11 +142,12 @@ export function DirectoryShell({
     const maxAgeMs =
       ageFilter === "7d" ? 7 * DAY : ageFilter === "30d" ? 30 * DAY : ageFilter === "90d" ? 90 * DAY : Infinity;
     return allItems.filter((i) => {
+      if (pendingRemovedIds.has(i.id)) return false;
       if (typeFilter !== "all" && i.kind !== typeFilter) return false;
       if (maxAgeMs !== Infinity && now - new Date(i.createdAt).getTime() > maxAgeMs) return false;
       return true;
     });
-  }, [allItems, typeFilter, ageFilter]);
+  }, [allItems, typeFilter, ageFilter, pendingRemovedIds]);
 
   const loadMore = useCallback(() => {
     if (loadingMore || !pageHasMore) return;
@@ -219,6 +253,115 @@ export function DirectoryShell({
       arrowup: () => moveSelection(-1),
     },
     !selectedId,
+  );
+
+  // Delete with a 6s undo window instead of a confirm dialog: hide the rows
+  // immediately, defer the actual server delete, and let Undo cancel it.
+  const deleteItemsWithUndo = useCallback(
+    (ids: string[]) => {
+      if (ids.length === 0) return;
+      setPendingRemovedIds((prev) => new Set([...prev, ...ids]));
+      if (selectedId && ids.includes(selectedId)) selectItem(null);
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+
+      const key =
+        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+      const clearPending = () => {
+        setPendingRemovedIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+      };
+      const commit = () => {
+        pendingDeletes.current.delete(key);
+        void bulkDeleteDirectoryItemsAction(ids).then(() => {
+          router.refresh();
+          clearPending();
+        });
+      };
+      const undo = () => {
+        const p = pendingDeletes.current.get(key);
+        if (p) clearTimeout(p.timer);
+        pendingDeletes.current.delete(key);
+        clearPending();
+      };
+      const timer = window.setTimeout(commit, 6000);
+      pendingDeletes.current.set(key, { ids, timer });
+      toast(`Deleted ${ids.length} item${ids.length === 1 ? "" : "s"}`, {
+        action: { label: "Undo", onClick: undo },
+        duration: 6000,
+      });
+    },
+    [router, selectedId, selectItem],
+  );
+
+  // Move is instantly reversible (put them back), so it commits immediately and
+  // Undo just moves each item to the folder it came from.
+  const moveItemsWithUndo = useCallback(
+    (ids: string[], folderId: string | null, folderName: string) => {
+      if (ids.length === 0) return;
+      const originals = new Map<string, string | null>();
+      ids.forEach((id) => {
+        const it = allItems.find((i) => i.id === id);
+        if (it) originals.set(id, it.folderId);
+      });
+      setCheckedIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+      void bulkMoveDirectoryItemsAction(ids, folderId).then(() => router.refresh());
+      const undo = () => {
+        const byFolder = new Map<string | null, string[]>();
+        originals.forEach((f, id) => {
+          const arr = byFolder.get(f) ?? [];
+          arr.push(id);
+          byFolder.set(f, arr);
+        });
+        Promise.all([...byFolder].map(([f, fids]) => bulkMoveDirectoryItemsAction(fids, f))).then(() =>
+          router.refresh(),
+        );
+      };
+      toast(`Moved ${ids.length} item${ids.length === 1 ? "" : "s"} to ${folderName}`, {
+        action: { label: "Undo", onClick: undo },
+        duration: 6000,
+      });
+    },
+    [allItems, router],
+  );
+
+  // Row-level "Make flashcards" / "Make quiz" — run straight from the list
+  // without opening the item first.
+  const rowMakeCards = useCallback((id: string) => {
+    const t = toast.loading("Making flashcards…");
+    generateFlashcardsAction(id)
+      .then((r) => {
+        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`, { id: t });
+        else toast.error(r.error, { id: t });
+      })
+      .catch(() => toast.error("Couldn't make flashcards", { id: t }));
+  }, []);
+
+  const rowMakeQuiz = useCallback(
+    (id: string) => {
+      const t = toast.loading("Building quiz…");
+      generateQuizAction([id])
+        .then((r) => {
+          if (r.ok) {
+            toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
+            router.push(`/study?tab=quiz&quiz=${r.id}`);
+          } else {
+            toast.error(r.error, { id: t });
+          }
+        })
+        .catch(() => toast.error("Couldn't build quiz", { id: t }));
+    },
+    [router],
   );
 
   const targetFolderId = activeFolder && activeFolder !== "unsorted" ? activeFolder : null;
@@ -495,8 +638,13 @@ export function DirectoryShell({
                 itemTagsById={allTags}
                 selectedId={selectedId}
                 checkedIds={checkedIds}
+                folders={folders}
                 onCheck={toggleChecked}
                 onOpen={selectItem}
+                onMakeCards={rowMakeCards}
+                onMakeQuiz={rowMakeQuiz}
+                onMove={(id, folderId, name) => moveItemsWithUndo([id], folderId, name)}
+                onDelete={(id) => deleteItemsWithUndo([id])}
                 onReachEnd={loadMore}
                 loadingMore={loadingMore}
                 hasMore={pageHasMore}
@@ -509,6 +657,7 @@ export function DirectoryShell({
       <ItemViewer
         item={selectedItem}
         onClose={() => selectItem(null)}
+        onRequestDelete={(id) => deleteItemsWithUndo([id])}
         listCollapsed={listCollapsed}
         onToggleList={toggleListCollapsed}
       />
@@ -517,6 +666,8 @@ export function DirectoryShell({
         selectedIds={Array.from(checkedIds)}
         folders={folders}
         onClear={clearSelection}
+        onDelete={deleteItemsWithUndo}
+        onMove={moveItemsWithUndo}
       />
 
       <GapsDialog
@@ -615,8 +766,13 @@ function VirtualizedDirectoryList({
   itemTagsById,
   selectedId,
   checkedIds,
+  folders,
   onCheck,
   onOpen,
+  onMakeCards,
+  onMakeQuiz,
+  onMove,
+  onDelete,
   onReachEnd,
   loadingMore,
   hasMore,
@@ -625,8 +781,13 @@ function VirtualizedDirectoryList({
   itemTagsById: Record<string, string[]>;
   selectedId: string | null;
   checkedIds: Set<string>;
+  folders: DirectoryFolder[];
   onCheck: (id: string) => void;
   onOpen: (id: string | null) => void;
+  onMakeCards: (id: string) => void;
+  onMakeQuiz: (id: string) => void;
+  onMove: (id: string, folderId: string | null, folderName: string) => void;
+  onDelete: (id: string) => void;
   onReachEnd: () => void;
   loadingMore: boolean;
   hasMore: boolean;
@@ -670,8 +831,13 @@ function VirtualizedDirectoryList({
                 isSelected={selectedId === item.id}
                 isChecked={checkedIds.has(item.id)}
                 showCheckbox={checkedIds.size > 0}
+                folders={folders}
                 onCheck={() => onCheck(item.id)}
                 onOpen={() => onOpen(item.id)}
+                onMakeCards={() => onMakeCards(item.id)}
+                onMakeQuiz={() => onMakeQuiz(item.id)}
+                onMove={(folderId, name) => onMove(item.id, folderId, name)}
+                onDelete={() => onDelete(item.id)}
               />
             </div>
           );
@@ -690,87 +856,130 @@ function DraggableItemRow({
   isSelected,
   isChecked,
   showCheckbox,
+  folders,
   onCheck,
   onOpen,
+  onMakeCards,
+  onMakeQuiz,
+  onMove,
+  onDelete,
 }: {
   item: DirectoryListItem;
   tags: string[];
   isSelected: boolean;
   isChecked: boolean;
   showCheckbox: boolean;
+  folders: DirectoryFolder[];
   onCheck: () => void;
   onOpen: () => void;
+  onMakeCards: () => void;
+  onMakeQuiz: () => void;
+  onMove: (folderId: string | null, folderName: string) => void;
+  onDelete: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
 
+  const menuProps = {
+    folders,
+    onOpen,
+    onMakeCards,
+    onMakeQuiz,
+    onMove,
+    onDelete,
+  };
+
   return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "group relative flex items-start gap-2 px-4 py-3 transition-colors",
-        isSelected ? "bg-accent" : "hover:bg-accent/50",
-        isDragging && "opacity-40",
-      )}
-    >
-      {isSelected && (
-        <span className="absolute inset-y-3 left-0 w-[2px] rounded-full bg-brand" />
-      )}
-      <button
-        {...attributes}
-        {...listeners}
-        aria-label="Drag to move"
-        className="mt-1 cursor-grab text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 active:cursor-grabbing"
-        onClick={(e) => e.preventDefault()}
-      >
-        <GripVertical className="h-3.5 w-3.5" />
-      </button>
-
-      <div
-        className={cn(
-          "mt-1 transition-opacity",
-          isChecked || showCheckbox ? "opacity-100" : "opacity-0 group-hover:opacity-100",
-        )}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Checkbox
-          checked={isChecked}
-          onCheckedChange={onCheck}
-          aria-label={`Select ${item.title}`}
-        />
-      </div>
-
-      <button onClick={onOpen} className="min-w-0 flex-1 text-left">
-        <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-          {KIND_META[item.kind].icon}
-          <span>{KIND_META[item.kind].label}</span>
-          <span className="opacity-50">·</span>
-          <span className="normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.updatedAt)}</span>
-        </div>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
         <div
-          className="text-[0.95rem] font-medium leading-snug tracking-[-0.008em]"
-          style={{ fontFamily: "var(--app-font-display)" }}
+          ref={setNodeRef}
+          className={cn(
+            "group relative flex items-start gap-2 px-4 py-3 transition-colors",
+            isSelected ? "bg-accent" : "hover:bg-accent/50",
+            isDragging && "opacity-40",
+          )}
         >
-          {item.title}
-        </div>
-        {item.preview && (
-          <div className="mt-1 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
-            {item.preview}
+          {isSelected && (
+            <span className="absolute inset-y-3 left-0 w-[2px] rounded-full bg-brand" />
+          )}
+          <button
+            {...attributes}
+            {...listeners}
+            aria-label="Drag to move"
+            className="mt-1 cursor-grab text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100 active:cursor-grabbing"
+            onClick={(e) => e.preventDefault()}
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </button>
+
+          <div
+            className={cn(
+              "mt-1 transition-opacity",
+              isChecked || showCheckbox ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+            )}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Checkbox
+              checked={isChecked}
+              onCheckedChange={onCheck}
+              aria-label={`Select ${item.title}`}
+            />
           </div>
-        )}
-        {tags.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {tags.slice(0, 5).map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground"
+
+          <button onClick={onOpen} className="min-w-0 flex-1 text-left">
+            <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
+              {KIND_META[item.kind].icon}
+              <span>{KIND_META[item.kind].label}</span>
+              <span className="opacity-50">·</span>
+              <span className="normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.updatedAt)}</span>
+            </div>
+            <div
+              className="pr-6 text-[0.95rem] font-medium leading-snug tracking-[-0.008em]"
+              style={{ fontFamily: "var(--app-font-display)" }}
+            >
+              {item.title}
+            </div>
+            {item.preview && (
+              <div className="mt-1 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
+                {item.preview}
+              </div>
+            )}
+            {tags.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {tags.slice(0, 5).map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center rounded-full bg-muted px-1.5 py-0 font-mono text-[10px] text-muted-foreground"
+                  >
+                    #{tag}
+                  </span>
+                ))}
+              </div>
+            )}
+          </button>
+
+          {/* Hover kebab — the same actions as right-click, for people who don't
+              think to right-click (and for touch). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                onClick={(e) => e.stopPropagation()}
+                aria-label="Item actions"
+                className="absolute right-1.5 top-2.5 rounded p-1 text-muted-foreground opacity-0 backdrop-blur transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
               >
-                #{tag}
-              </span>
-            ))}
-          </div>
-        )}
-      </button>
-    </div>
+                <MoreVertical className="h-3.5 w-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+              <ItemRowMenuItems prims={DROPDOWN_MENU_PRIMITIVES} {...menuProps} />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ItemRowMenuItems prims={CONTEXT_MENU_PRIMITIVES} {...menuProps} />
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
