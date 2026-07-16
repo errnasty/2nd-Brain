@@ -78,6 +78,7 @@ export function ArticleList({
   feedId,
   folderId,
   onSelect,
+  collapsed = false,
 }: {
   items: ArticleListItem[];
   itemTagsById: Record<string, string[]>;
@@ -86,6 +87,8 @@ export function ArticleList({
   feedId: string | null;
   folderId: string | null;
   onSelect: (id: string | null) => void;
+  /** Hide the list on desktop (an article is open and the reader is widened). */
+  collapsed?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -374,8 +377,10 @@ export function ArticleList({
   return (
     <section
       className={cn(
-        "w-full flex-col border-r border-border md:max-w-sm md:shrink-0 md:flex",
+        "w-full flex-col border-r border-border md:max-w-sm md:shrink-0",
         selectedId ? "hidden" : "flex",
+        // Collapse on desktop too when an article is open and the reader is widened.
+        collapsed && selectedId ? "md:hidden" : "md:flex",
       )}
     >
       {/* Mobile back */}

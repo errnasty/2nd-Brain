@@ -35,6 +35,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" suppressHydrationWarning className={`${crimson.variable} ${lora.variable} ${dmSans.variable}`}>
       <body>
+        {/* Set the colour palette before first paint so switching away from the
+            default (parchment) doesn't flash. Mirrors next-themes' own anti-FOUC
+            script; safe under suppressHydrationWarning since React doesn't own
+            the data-palette attribute. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{var p=localStorage.getItem('app.palette.v1');if(p)document.documentElement.setAttribute('data-palette',p);}catch(e){}",
+          }}
+        />
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
           <SettingsEffects />
           <SwRegister />

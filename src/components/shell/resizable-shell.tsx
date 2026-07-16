@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Panel,
   PanelGroup,
@@ -10,6 +10,7 @@ import {
 import { PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MobileShell } from "./mobile-shell";
+import { PaneChromeProvider } from "./pane-context";
 
 /**
  * Two-pane horizontal split with a draggable handle. Panel widths persist via
@@ -44,6 +45,15 @@ export function ResizableShell({
   const [collapsed, setCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
+  // Exposed via context so a nested reader/viewer header can collapse the nav
+  // to widen the document — the same panel the divider drag controls.
+  const toggleNav = useCallback(() => {
+    const p = panelRef.current;
+    if (!p) return;
+    if (p.isCollapsed()) p.expand();
+    else p.collapse();
+  }, []);
+
   // Mobile (<768px): skip the resizable panel layout entirely — the bottom
   // MobileNav covers navigation, and the panel would otherwise squish content.
   // Default to desktop on first render to avoid hydration flicker; flip after
@@ -57,17 +67,26 @@ export function ResizableShell({
   }, []);
 
   if (isMobile) {
+    // No controllable desktop panels on mobile — the drill-down covers nav.
+    const mobileChrome = { navCollapsed: false, toggleNav: () => {}, navControllable: false };
     if (mobileRoute) {
       return (
-        <MobileShell route={mobileRoute} nav={nav}>
-          {children}
-        </MobileShell>
+        <PaneChromeProvider value={mobileChrome}>
+          <MobileShell route={mobileRoute} nav={nav}>
+            {children}
+          </MobileShell>
+        </PaneChromeProvider>
       );
     }
-    return <div className="h-full w-full overflow-hidden">{children}</div>;
+    return (
+      <PaneChromeProvider value={mobileChrome}>
+        <div className="h-full w-full overflow-hidden">{children}</div>
+      </PaneChromeProvider>
+    );
   }
 
   return (
+    <PaneChromeProvider value={{ navCollapsed: collapsed, toggleNav, navControllable: true }}>
     <div className="relative flex h-full w-full overflow-hidden">
       <PanelGroup direction="horizontal" autoSaveId={storageId} className="h-full w-full">
         <Panel
@@ -106,5 +125,6 @@ export function ResizableShell({
         </Button>
       )}
     </div>
+    </PaneChromeProvider>
   );
 }

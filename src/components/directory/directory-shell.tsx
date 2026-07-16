@@ -30,6 +30,7 @@ import { DirectoryBoard } from "./directory-board";
 import { GapsDialog } from "./gaps-dialog";
 import { CurriculumDialog } from "./curriculum-dialog";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
+import { useListCollapse } from "@/components/shell/use-list-collapse";
 import type { DirectoryFolder } from "@/lib/db/schema";
 import type { ReadingStatus, DirectorySort } from "@/lib/directory/query";
 
@@ -76,6 +77,7 @@ export function DirectoryShell({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"list" | "board">("list");
+  const [listCollapsed, toggleListCollapsed] = useListCollapse("directory.listCollapsed.v1");
   const [gapsOpen, setGapsOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
   const [, startTransition] = useTransition();
@@ -311,9 +313,12 @@ export function DirectoryShell({
     <>
       <section
         className={cn(
-          "w-full flex-col border-r border-border md:flex",
+          "w-full flex-col border-r border-border",
           view === "board" ? "flex-1" : "md:max-w-sm md:shrink-0",
           selectedId ? "hidden" : "flex",
+          // Collapse the list on desktop too (only in list view, only with a
+          // doc open) so the viewer fills the width. Otherwise re-show at md+.
+          view === "list" && selectedId && listCollapsed ? "md:hidden" : "md:flex",
         )}
       >
         {/* ── Editorial header ───────────────────────────────────── */}
@@ -504,6 +509,8 @@ export function DirectoryShell({
       <ItemViewer
         item={selectedItem}
         onClose={() => selectItem(null)}
+        listCollapsed={listCollapsed}
+        onToggleList={toggleListCollapsed}
       />
 
       <BulkActionBar

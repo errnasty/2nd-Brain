@@ -44,6 +44,7 @@ import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 import { SelectionToCard } from "@/components/review/selection-card";
+import { PaneToggles } from "@/components/shell/pane-toggles";
 import { createCardsFromTextAction } from "@/app/(app)/review/actions";
 
 type ArticleData = {
@@ -68,10 +69,16 @@ export function ArticleReader({
   selectedId,
   orderedIds,
   onSelect,
+  listCollapsed = false,
+  onToggleList,
 }: {
   selectedId: string | null;
   orderedIds: string[];
   onSelect: (id: string | null) => void;
+  /** Whether the article list (third bar) is collapsed. */
+  listCollapsed?: boolean;
+  /** Toggle the article list open/closed (desktop). */
+  onToggleList?: () => void;
 }) {
   const router = useRouter();
   const prefs = useReaderPrefs();
@@ -429,6 +436,7 @@ export function ArticleReader({
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>
+        <PaneToggles listCollapsed={listCollapsed} onToggleList={onToggleList} className="mr-0.5" />
         <Button
           size="icon"
           variant="ghost"

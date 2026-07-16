@@ -68,6 +68,149 @@
     --brand: 36 65% 60%;
     --brand-foreground: 24 8% 8%;
   }
+
+  /* ── Colour palettes ──────────────────────────────────────────────────
+     Orthogonal to light/dark: each palette re-defines the neutral + brand
+     tokens for BOTH modes, so every palette works light and dark. Selected
+     via a `data-palette` attribute on <html> (see src/lib/settings.ts).
+     `parchment` is the default and lives in :root/.dark above — no override.
+     Specificity: [data-palette] (0,2,0) beats :root (0,1,0); the dark blocks
+     come after the light blocks so, when both match in dark mode, dark wins. */
+
+  /* Mono — black & white (light) */
+  :root[data-palette="mono"] {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 10%;
+    --primary: 0 0% 10%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 95%;
+    --secondary-foreground: 0 0% 10%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 0 0% 93%;
+    --accent-foreground: 0 0% 10%;
+    --border: 0 0% 88%;
+    --input: 0 0% 88%;
+    --ring: 0 0% 10%;
+    --brand: 0 0% 12%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Mono (dark) */
+  .dark[data-palette="mono"] {
+    --background: 0 0% 7%;
+    --foreground: 0 0% 92%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 92%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 92%;
+    --primary: 0 0% 92%;
+    --primary-foreground: 0 0% 7%;
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 92%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 58%;
+    --accent: 0 0% 17%;
+    --accent-foreground: 0 0% 92%;
+    --border: 0 0% 18%;
+    --input: 0 0% 18%;
+    --ring: 0 0% 80%;
+    --brand: 0 0% 90%;
+    --brand-foreground: 0 0% 7%;
+  }
+
+  /* Ocean — cool slate neutrals, blue accent (light) */
+  :root[data-palette="ocean"] {
+    --background: 210 20% 98%;
+    --foreground: 215 25% 12%;
+    --card: 210 20% 98%;
+    --card-foreground: 215 25% 12%;
+    --popover: 210 20% 98%;
+    --popover-foreground: 215 25% 12%;
+    --primary: 215 25% 12%;
+    --primary-foreground: 210 20% 98%;
+    --secondary: 210 16% 93%;
+    --secondary-foreground: 215 25% 12%;
+    --muted: 210 16% 93%;
+    --muted-foreground: 215 12% 45%;
+    --accent: 210 16% 92%;
+    --accent-foreground: 215 25% 12%;
+    --border: 214 15% 87%;
+    --input: 214 15% 87%;
+    --ring: 214 90% 42%;
+    --brand: 214 90% 42%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Ocean (dark) */
+  .dark[data-palette="ocean"] {
+    --background: 215 28% 9%;
+    --foreground: 210 16% 90%;
+    --card: 215 28% 9%;
+    --card-foreground: 210 16% 90%;
+    --popover: 215 28% 11%;
+    --popover-foreground: 210 16% 90%;
+    --primary: 210 16% 90%;
+    --primary-foreground: 215 28% 9%;
+    --secondary: 215 20% 15%;
+    --secondary-foreground: 210 16% 90%;
+    --muted: 215 20% 15%;
+    --muted-foreground: 214 12% 60%;
+    --accent: 215 20% 18%;
+    --accent-foreground: 210 16% 90%;
+    --border: 215 18% 19%;
+    --input: 215 18% 19%;
+    --ring: 210 90% 66%;
+    --brand: 210 90% 66%;
+    --brand-foreground: 215 28% 9%;
+  }
+
+  /* Forest — green accent (light) */
+  :root[data-palette="forest"] {
+    --background: 100 14% 98%;
+    --foreground: 140 20% 11%;
+    --card: 100 14% 98%;
+    --card-foreground: 140 20% 11%;
+    --popover: 100 14% 98%;
+    --popover-foreground: 140 20% 11%;
+    --primary: 140 20% 11%;
+    --primary-foreground: 100 14% 98%;
+    --secondary: 120 12% 92%;
+    --secondary-foreground: 140 20% 11%;
+    --muted: 120 12% 92%;
+    --muted-foreground: 140 8% 42%;
+    --accent: 120 12% 91%;
+    --accent-foreground: 140 20% 11%;
+    --border: 120 12% 86%;
+    --input: 120 12% 86%;
+    --ring: 148 55% 32%;
+    --brand: 148 55% 32%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Forest (dark) */
+  .dark[data-palette="forest"] {
+    --background: 150 14% 8%;
+    --foreground: 120 12% 90%;
+    --card: 150 14% 8%;
+    --card-foreground: 120 12% 90%;
+    --popover: 150 14% 10%;
+    --popover-foreground: 120 12% 90%;
+    --primary: 120 12% 90%;
+    --primary-foreground: 150 14% 8%;
+    --secondary: 150 10% 14%;
+    --secondary-foreground: 120 12% 90%;
+    --muted: 150 10% 14%;
+    --muted-foreground: 140 8% 58%;
+    --accent: 150 10% 17%;
+    --accent-foreground: 120 12% 90%;
+    --border: 150 10% 18%;
+    --input: 150 10% 18%;
+    --ring: 145 50% 58%;
+    --brand: 145 50% 58%;
+    --brand-foreground: 150 14% 8%;
+  }
 }
 
 @layer base {
