@@ -89,6 +89,7 @@ export function ItemViewer({
   const bodyRef = useRef<HTMLDivElement>(null);
   const [saving, setSaving] = useState(false);
   const [distilling, setDistilling] = useState(false);
+  const [makingCards, setMakingCards] = useState(false);
   const [essenceOpen, setEssenceOpen] = useState(true);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
   // Mirrors the live editable buffer so we can flush a pending edit immediately
@@ -263,6 +264,26 @@ export function ItemViewer({
     });
   }
 
+  function runMakeFlashcards() {
+    if (!item || makingCards) return;
+    setMakingCards(true);
+    startTransition(async () => {
+      try {
+        const r = await generateFlashcardsAction(item.id);
+        if (r.ok) {
+          toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
+          celebrate(r.xp);
+        } else {
+          toast.error(r.error);
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't generate flashcards");
+      } finally {
+        setMakingCards(false);
+      }
+    });
+  }
+
   if (!item) {
     return (
       <section className="hidden flex-1 items-center justify-center text-sm text-muted-foreground lg:flex">
@@ -400,18 +421,11 @@ export function ItemViewer({
         <Button
           size="icon"
           variant="ghost"
-          onClick={() =>
-            startTransition(async () => {
-              const r = await generateFlashcardsAction(item.id);
-              if (r.ok) {
-                toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
-                celebrate(r.xp);
-              } else toast.error(r.error);
-            })
-          }
+          onClick={runMakeFlashcards}
+          disabled={makingCards}
           title="Make flashcards"
         >
-          <Brain className="h-4 w-4" />
+          {makingCards ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
         </Button>
 
         <Button
@@ -496,16 +510,16 @@ export function ItemViewer({
                     </ul>
                   )}
                   <button
-                    onClick={() =>
-                      startTransition(async () => {
-                        const r = await generateFlashcardsAction(item.id);
-                        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
-                        else toast.error(r.error);
-                      })
-                    }
-                    className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    onClick={runMakeFlashcards}
+                    disabled={makingCards}
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-60"
                   >
-                    <Brain className="h-3.5 w-3.5" /> Make flashcards
+                    {makingCards ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Brain className="h-3.5 w-3.5" />
+                    )}
+                    Make flashcards
                   </button>
                 </div>
               )}
