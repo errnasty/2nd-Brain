@@ -22,6 +22,7 @@ export function ReviewView({
   due,
   scopeLabel,
   leeches = [],
+  onComplete,
 }: {
   cards: DueCard[];
   total: number;
@@ -31,12 +32,26 @@ export function ReviewView({
   scopeLabel?: string | null;
   /** Repeatedly-failed cards surfaced for rewriting. */
   leeches?: LeechCard[];
+  /** Embedded (Today's Session) mode: called with the count reviewed when the
+   *  queue empties, instead of showing the standalone "load next batch" state. */
+  onComplete?: (reviewedCount: number) => void;
 }) {
   const router = useRouter();
   const [queue, setQueue] = useState<DueCard[]>(cards);
   const [showAnswer, setShowAnswer] = useState(false);
   const [reviewed, setReviewed] = useState(0);
   const [, startTransition] = useTransition();
+
+  // In embedded mode, hand control back to the session runner once the queue is
+  // empty rather than rendering the standalone empty state. Effect (not during
+  // render) so we never setState-in-render on the parent.
+  const current0 = queue[0];
+  useEffect(() => {
+    if (onComplete && !current0) onComplete(reviewed);
+    // reviewed intentionally omitted: fire once when the queue empties, not on
+    // every counter tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onComplete, current0]);
 
   // "Load next batch"/"Check again" call router.refresh(), which feeds a new
   // `cards` prop — but useState seeded once would ignore it, leaving an empty
@@ -153,6 +168,9 @@ export function ReviewView({
   }
 
   if (!current) {
+    // Embedded in Today's Session: the runner advances via onComplete; render
+    // nothing here so the standalone empty state doesn't flash.
+    if (onComplete) return null;
     // We only load the first ~50 due cards per session; if more remain due,
     // don't claim "all caught up" — invite loading the next batch.
     const moreDue = remainingDue > 0;

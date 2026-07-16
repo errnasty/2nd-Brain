@@ -10,10 +10,12 @@ import { CalendarView } from "./calendar-view";
 import { TasksView } from "@/components/tasks/tasks-view";
 import { ReviewView } from "@/components/review/review-view";
 import { QuizTab } from "./quiz-tab";
+import { SessionRunner } from "./session-runner";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";
 import type { DueCard, LeechCard } from "@/app/(app)/review/actions";
 import type { QuizListItem } from "@/app/(app)/study/quiz-actions";
+import type { SessionPlan } from "@/app/(app)/study/session-actions";
 import type { GameState } from "@/lib/gamify/state";
 
 export type StudyTab = "overview" | "tasks" | "review" | "calendar" | "quiz";
@@ -39,6 +41,7 @@ export function StudyShell({
   leeches,
   quizzes,
   quizId,
+  sessionPlan,
 }: {
   defaultTab: StudyTab;
   stats: StudyStats;
@@ -53,10 +56,13 @@ export function StudyShell({
   quizzes: QuizListItem[];
   /** Deep-link straight into taking a just-generated quiz. */
   quizId?: string | null;
+  /** Composed "Today's session" plan (due cards + quiz + overdue tasks). */
+  sessionPlan: SessionPlan;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [tab, setTab] = useState<StudyTab>(defaultTab);
+  const [inSession, setInSession] = useState(false);
 
   useEffect(() => {
     setTab(defaultTab);
@@ -78,6 +84,20 @@ export function StudyShell({
     // so newly-added/-completed tasks and graded cards always show (the "tasks
     // don't sync" symptom). Calendar fetches its own range on demand.
     if (next !== "calendar") startTransition(() => router.refresh());
+  }
+
+  // Today's Session takes over the whole hub while it runs — a focused,
+  // full-height flow rather than a tab.
+  if (inSession) {
+    return (
+      <SessionRunner
+        plan={sessionPlan}
+        onExit={() => {
+          setInSession(false);
+          startTransition(() => router.refresh());
+        }}
+      />
+    );
   }
 
   return (
@@ -126,7 +146,21 @@ export function StudyShell({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "overview" && <StatsOverview stats={stats} game={game} />}
+        {tab === "overview" && (
+          <StatsOverview
+            stats={stats}
+            game={game}
+            canStartSession={sessionPlan.cards.length > 0 || sessionPlan.overdueTasks.length > 0}
+            sessionSummary={{
+              cards: sessionPlan.cards.length,
+              dueCount: sessionPlan.dueCount,
+              tasks: sessionPlan.overdueTasks.length,
+              quizTitle: sessionPlan.quiz?.title ?? null,
+              weakestSkill: sessionPlan.weakestSkill?.name ?? null,
+            }}
+            onStartSession={() => setInSession(true)}
+          />
+        )}
         {tab === "tasks" && <TasksView tasks={tasks} />}
         {tab === "review" && (
           <ReviewView

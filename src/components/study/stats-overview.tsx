@@ -1,11 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Brain, CheckSquare, FileText, Layers, NotebookPen, Play, Sliders, TrendingDown } from "lucide-react";
+import { Brain, CheckSquare, FileText, Layers, NotebookPen, Play, TrendingDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StudyStats } from "@/app/(app)/study/actions";
 import type { GameState } from "@/lib/gamify/state";
 import { GamifyDashboard } from "./gamify-dashboard";
+
+export type SessionSummary = {
+  /** Cards in this session (capped). */
+  cards: number;
+  /** Total cards due (may exceed `cards`). */
+  dueCount: number;
+  tasks: number;
+  quizTitle: string | null;
+  weakestSkill: string | null;
+};
 
 /** #25 Minimal inline sparkline (14-day trend). */
 function Sparkline({ data }: { data: number[] }) {
@@ -29,7 +39,19 @@ function Sparkline({ data }: { data: number[] }) {
   );
 }
 
-export function StatsOverview({ stats, game }: { stats: StudyStats; game: GameState | null }) {
+export function StatsOverview({
+  stats,
+  game,
+  canStartSession = false,
+  sessionSummary,
+  onStartSession,
+}: {
+  stats: StudyStats;
+  game: GameState | null;
+  canStartSession?: boolean;
+  sessionSummary?: SessionSummary;
+  onStartSession?: () => void;
+}) {
   const router = useRouter();
   // Secondary weekly numbers, shown under the game HUD as a compact strip.
   const cards = [
@@ -40,19 +62,25 @@ export function StatsOverview({ stats, game }: { stats: StudyStats; game: GameSt
     { label: "Total cards", value: stats.totalCards, icon: <FileText className="h-3.5 w-3.5" />, hint: "in your deck", history: undefined },
   ];
 
-  // #24 Recommended interleaved session.
-  const dueCards = stats.dueToday;
-  const dueTasks = stats.dueTasks;
-  const subjectCount = stats.dueSubjects.length;
-  const hasSession = dueCards + dueTasks > 0;
+  // "Today's session" auto-composer summary — driven by the composed plan.
+  const summary = sessionSummary ?? {
+    cards: stats.dueToday,
+    dueCount: stats.dueToday,
+    tasks: stats.dueTasks,
+    quizTitle: null,
+    weakestSkill: null,
+  };
+  const hasSession = canStartSession || summary.cards + summary.tasks > 0;
+  const heroCount = summary.cards > 0 ? summary.cards : summary.tasks > 0 ? summary.tasks : 0;
+  const heroLabel = summary.cards > 0 ? "cards to review" : summary.tasks > 0 ? "tasks due" : "quiz ready";
   const sessionLine = (() => {
     const parts: string[] = [];
-    if (dueCards > 0) parts.push(`${dueCards} ${dueCards === 1 ? "card" : "cards"}`);
-    if (dueTasks > 0) parts.push(`${dueTasks} ${dueTasks === 1 ? "task" : "tasks"}`);
-    const base = parts.join(" + ");
-    return subjectCount > 1
-      ? `${base} interleaved across ${subjectCount} subjects`
-      : base;
+    if (summary.cards > 0) parts.push(`${summary.cards} ${summary.cards === 1 ? "card" : "cards"}`);
+    if (summary.tasks > 0) parts.push(`${summary.tasks} ${summary.tasks === 1 ? "task" : "tasks"}`);
+    if (summary.quizTitle) {
+      parts.push(summary.weakestSkill ? `a quiz on ${summary.weakestSkill}` : "a quiz");
+    }
+    return parts.join(" · ");
   })();
 
   // #26 Weakest subject = lowest retention (with enough cards to matter).
@@ -95,36 +123,41 @@ export function StatsOverview({ stats, game }: { stats: StudyStats; game: GameSt
         )}
       </header>
 
-      {/* ── #24 Up next · recommended session ──────────────────── */}
+      {/* ── Today's session · one-button auto-composer ─────────── */}
       {hasSession && (
         <div className="mb-7 overflow-hidden rounded-xl border border-border bg-card">
           <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <div className="editorial-eyebrow-brand mb-1.5">§ Up next · recommended session</div>
+              <div className="editorial-eyebrow-brand mb-1.5">§ Today&apos;s session</div>
               <div className="flex items-baseline gap-2">
                 <span
                   className="text-4xl font-semibold tabular-nums"
                   style={{ fontFamily: "var(--app-font-display)", letterSpacing: "-0.02em", lineHeight: 1, color: "hsl(var(--brand))" }}
                 >
-                  {dueCards > 0 ? dueCards : dueTasks}
+                  {heroCount}
                 </span>
-                <span className="text-sm text-muted-foreground">{dueCards > 0 ? "due now" : "tasks due"}</span>
+                <span className="text-sm text-muted-foreground">{heroLabel}</span>
+                {summary.dueCount > summary.cards && (
+                  <span className="text-xs text-muted-foreground">(of {summary.dueCount} due)</span>
+                )}
               </div>
-              <p className="mt-1.5 text-[13px] italic text-muted-foreground">{sessionLine}</p>
+              <p className="mt-1.5 text-[13px] italic text-muted-foreground">
+                {sessionLine || "A quick session to keep your streak."}
+              </p>
             </div>
             <div className="flex shrink-0 gap-2">
               <button
-                onClick={() => router.push("/study?tab=review")}
+                onClick={() => (onStartSession ? onStartSession() : router.push("/study?tab=review"))}
                 className="inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold text-white"
                 style={{ background: "hsl(var(--brand))" }}
               >
-                <Play className="h-3.5 w-3.5 fill-current" /> Start
+                <Play className="h-3.5 w-3.5 fill-current" /> Start session
               </button>
               <button
-                onClick={() => router.push("/study?tab=calendar")}
+                onClick={() => router.push("/study?tab=review")}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm text-foreground hover:bg-accent"
               >
-                <Sliders className="h-3.5 w-3.5" /> Customize
+                <Brain className="h-3.5 w-3.5" /> Review only
               </button>
             </div>
           </div>

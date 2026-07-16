@@ -20,11 +20,15 @@ export function QuizRunner({
   quiz,
   onDone,
   onExit,
+  exitLabel = "Back to quizzes",
 }: {
   quiz: QuizForTaking;
-  /** Called after a completed attempt is saved, so the list can refresh. */
-  onDone: () => void;
+  /** Called after a completed attempt is saved (with its score), so the caller
+   *  can refresh and/or record the result. */
+  onDone: (result?: { score: number; total: number }) => void;
   onExit: () => void;
+  /** Label for the post-quiz exit button (e.g. "Continue" inside a session). */
+  exitLabel?: string;
 }) {
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
@@ -60,7 +64,7 @@ export function QuizRunner({
           setAttemptId(r.attemptId);
           setResult({ score: r.score, total: r.total });
           celebrate(r.xp);
-          onDone();
+          onDone({ score: r.score, total: r.total });
         } else {
           setSubmitPhase("error");
           toast.error(r.error);
@@ -147,7 +151,7 @@ export function QuizRunner({
         )}
         <div className="flex gap-2">
           <Button variant="outline" onClick={onExit}>
-            Back to quizzes
+            {exitLabel}
           </Button>
           <Button onClick={retake} className="gap-1.5">
             <RotateCcw className="h-3.5 w-3.5" /> Retake
