@@ -32,7 +32,7 @@ import { toast } from "sonner";
 
 const MODEL_STORAGE_KEY = "ask.model.v1";
 
-function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
+export function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4 py-4">
       <div className="min-w-0">

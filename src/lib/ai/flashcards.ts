@@ -1,40 +1,57 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable, fastModel } from "./provider";
-
-const FlashSchema = z.object({
-  cards: z
-    .array(
-      z.object({
-        question: z.string().min(3).max(300),
-        answer: z.string().min(1).max(800),
-      }),
-    )
-    .min(1)
-    .max(6),
-});
+import {
+  clamp,
+  DEFAULT_FLASHCARD_COUNT,
+  DEFAULT_STUDY_DIFFICULTY,
+  FLASHCARD_COUNT_RANGE,
+  type StudyDifficulty,
+} from "./study-options";
 
 export type GeneratedCard = { question: string; answer: string };
 
+const DIFFICULTY_GUIDANCE: Record<StudyDifficulty, string> = {
+  easy: "Test direct recall of explicitly stated facts and definitions. Keep wording straightforward and unambiguous.",
+  medium: "Mix direct recall with light inference — connecting two related facts from the text.",
+  hard: "Require inference, application, or synthesis across multiple parts of the text — not just lookup of one stated fact.",
+};
+
 /**
- * Generate 3-5 recall flashcards from an item's text. One fast-model call;
+ * Generate recall flashcards from an item's text. One fast-model call;
  * returns [] on failure so the caller degrades quietly.
  */
 export async function generateFlashcards(
   title: string,
   content: string,
+  opts?: { count?: number; difficulty?: StudyDifficulty },
 ): Promise<GeneratedCard[]> {
   if (!aiAvailable()) return [];
   if (!content.trim()) return [];
 
+  const count = clamp(opts?.count ?? DEFAULT_FLASHCARD_COUNT, FLASHCARD_COUNT_RANGE.min, FLASHCARD_COUNT_RANGE.max);
+  const difficulty = opts?.difficulty ?? DEFAULT_STUDY_DIFFICULTY;
+  const schema = z.object({
+    cards: z
+      .array(
+        z.object({
+          question: z.string().min(3).max(300),
+          answer: z.string().min(1).max(800),
+        }),
+      )
+      .min(1)
+      .max(count),
+  });
+
   try {
     const { object } = await generateObject({
       model: fastModel(),
-      schema: FlashSchema,
+      schema,
       system: `You create spaced-repetition flashcards that test understanding of a document.
 
 Rules:
-- 3-5 cards covering the most important, durable concepts.
+- Generate EXACTLY ${count} card${count === 1 ? "" : "s"} covering the most important, durable concepts.
+- Difficulty: ${DIFFICULTY_GUIDANCE[difficulty]}
 - Question: one specific, answerable prompt (not "what is this about").
 - Answer: correct and complete but concise.
 - Base cards ONLY on the provided text — do not invent facts.`,

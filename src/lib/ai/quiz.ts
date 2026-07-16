@@ -1,6 +1,13 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable, fastModel, smartModel } from "./provider";
+import {
+  clamp,
+  DEFAULT_QUIZ_COUNT,
+  DEFAULT_STUDY_DIFFICULTY,
+  QUIZ_COUNT_RANGE,
+  type StudyDifficulty,
+} from "./study-options";
 
 // Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
 // bounded output (mirrors study-plan.ts). Desktop runs the server locally with
@@ -23,11 +30,13 @@ const QuizQuestionSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-const QuizSchema = z.object({
-  questions: z.array(QuizQuestionSchema).min(4).max(12),
-});
-
 export type GeneratedQuizQuestion = z.infer<typeof QuizQuestionSchema>;
+
+const DIFFICULTY_GUIDANCE: Record<StudyDifficulty, string> = {
+  easy: "Test direct recall of explicitly stated facts. MC distractors should be clearly wrong to anyone who read the text; open questions ask for one stated fact.",
+  medium: "Mix recall with light inference. MC distractors should be plausible but distinguishable; open questions may require connecting two related facts.",
+  hard: "Require inference, application, or synthesis across the material. MC distractors should be subtle enough to need careful reading to eliminate; open questions should require reasoning, not lookup.",
+};
 
 /**
  * Generate a mixed multiple-choice / open-ended quiz from one or more
@@ -36,6 +45,7 @@ export type GeneratedQuizQuestion = z.infer<typeof QuizQuestionSchema>;
  */
 export async function generateQuiz(
   sources: { title: string; text: string }[],
+  opts?: { count?: number; difficulty?: StudyDifficulty },
 ): Promise<GeneratedQuizQuestion[]> {
   if (!aiAvailable()) return [];
 
@@ -45,15 +55,22 @@ export async function generateQuiz(
     .join("\n\n---\n\n");
   if (!combined.trim()) return [];
 
+  const count = clamp(opts?.count ?? DEFAULT_QUIZ_COUNT, QUIZ_COUNT_RANGE.min, QUIZ_COUNT_RANGE.max);
+  const difficulty = opts?.difficulty ?? DEFAULT_STUDY_DIFFICULTY;
+  const schema = z.object({
+    questions: z.array(QuizQuestionSchema).min(1).max(count),
+  });
+
   try {
     const { object } = await generateObject({
       model: isDesktop ? smartModel() : fastModel(),
-      schema: QuizSchema,
+      schema,
       maxTokens: MAX_OUTPUT_TOKENS,
       system: `You create a quiz that tests understanding of the provided document(s).
 
 Rules:
-- 6-10 questions, mixing multiple-choice ("mc") and open-ended ("open") types.
+- Generate EXACTLY ${count} question${count === 1 ? "" : "s"}, mixing multiple-choice ("mc") and open-ended ("open") types.
+- Difficulty: ${DIFFICULTY_GUIDANCE[difficulty]}
 - Cover the most important, durable concepts across ALL provided documents — not just the first one.
 - Multiple-choice: exactly 4 options, exactly one correct, plausible distractors (never "all/none of the above").
 - Open-ended: one specific, answerable prompt with a concise, correct model answer.

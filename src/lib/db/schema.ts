@@ -637,6 +637,12 @@ export type UserSettingsData = {
   wipLimits?: Record<string, number>;
   // #1 Auto-summarize an article when it's opened in the reader.
   autoSummarizeOnOpen?: boolean;
+  // Flashcard/quiz generation preferences (Settings → Flashcards & Quiz).
+  // Unset = the DEFAULT_* constants in src/lib/ai/study-options.ts.
+  flashcardDifficulty?: "easy" | "medium" | "hard";
+  flashcardCount?: number;
+  quizDifficulty?: "easy" | "medium" | "hard";
+  quizCount?: number;
 };
 
 export const userSettings = pgTable(

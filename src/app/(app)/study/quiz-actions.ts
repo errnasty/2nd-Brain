@@ -9,10 +9,12 @@ import { quizzes, quizAttempts, type QuizQuestion, type QuizAnswer } from "@/lib
 import { requireUser } from "@/lib/auth";
 import { generateQuiz } from "@/lib/ai/quiz";
 import { aiAvailable } from "@/lib/ai/provider";
+import { DEFAULT_QUIZ_COUNT, DEFAULT_STUDY_DIFFICULTY } from "@/lib/ai/study-options";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { awardXp } from "@/lib/gamify/award";
 import { dbErrorMessage } from "@/lib/db/errors";
 import { fetchDirectoryPage } from "@/lib/directory/query";
+import { getUserSettings } from "@/lib/settings/store";
 
 const MAX_ITEMS_PER_QUIZ = 10;
 
@@ -44,7 +46,11 @@ export async function generateQuizAction(itemIds: string[]) {
       .filter((s): s is { title: string; text: string; itemId: string } => s !== null);
     if (sources.length === 0) return { ok: false as const, error: "None of the selected items were found" };
 
-    const questions = await generateQuiz(sources.map(({ title, text }) => ({ title, text })));
+    const settings = await getUserSettings(user.id);
+    const questions = await generateQuiz(sources.map(({ title, text }) => ({ title, text })), {
+      count: settings.quizCount ?? DEFAULT_QUIZ_COUNT,
+      difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+    });
     if (questions.length === 0) {
       // Distinguish WHY generation came back empty, same reasoning as flashcards.
       if (!sources.some((s) => s.text.trim()))
