@@ -79,11 +79,15 @@ function linkifyWikilinks(md: string, links: ResolvedLink[]): string {
 export function ItemViewer({
   item,
   onClose,
+  onRequestDelete,
   listCollapsed = false,
   onToggleList,
 }: {
   item: DirectoryListItem | null;
   onClose: () => void;
+  /** Delete this item via the shell's undo-toast flow (it also closes the
+   *  viewer). When absent, falls back to a confirm-then-delete. */
+  onRequestDelete?: (id: string) => void;
   /** Whether the Directory list (third bar) is collapsed. */
   listCollapsed?: boolean;
   /** Toggle the Directory list open/closed (desktop). */
@@ -238,6 +242,13 @@ export function ItemViewer({
 
   async function handleDelete() {
     if (!item) return;
+    // Preferred path: hand off to the shell's undo-toast delete (no confirm
+    // dialog — the 6s Undo IS the safety net). It closes the viewer for us.
+    if (onRequestDelete) {
+      onRequestDelete(item.id);
+      return;
+    }
+    // Fallback (viewer used without the shell handler): keep the confirm.
     const ok = await confirm({
       title: `Delete "${item.title}"?`,
       body: "This cannot be undone.",
@@ -251,8 +262,6 @@ export function ItemViewer({
         toast.success("Item deleted");
         onClose();
       } catch (err) {
-        // Failed delete must NOT claim success or close the viewer — the item is
-        // still there and would reappear on refresh.
         toast.error(`Delete failed: ${err instanceof Error ? err.message : "unknown error"}`);
       }
     });

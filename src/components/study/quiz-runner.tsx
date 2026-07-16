@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Brain, Check, ChevronRight, Loader2, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -20,11 +20,15 @@ export function QuizRunner({
   quiz,
   onDone,
   onExit,
+  exitLabel = "Back to quizzes",
 }: {
   quiz: QuizForTaking;
-  /** Called after a completed attempt is saved, so the list can refresh. */
-  onDone: () => void;
+  /** Called after a completed attempt is saved (with its score), so the caller
+   *  can refresh and/or record the result. */
+  onDone: (result?: { score: number; total: number }) => void;
   onExit: () => void;
+  /** Label for the post-quiz exit button (e.g. "Continue" inside a session). */
+  exitLabel?: string;
 }) {
   const [index, setIndex] = useState(0);
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
@@ -51,6 +55,49 @@ export function QuizRunner({
     }).length;
   })();
 
+  // Keyboard-first quiz: 1–4 pick a multiple-choice option, Space/Enter reveal
+  // an open answer or advance once answered, and 1/2 self-grade an open card.
+  // Keeps a whole quiz hands-on-keyboard, matching the review flow.
+  useEffect(() => {
+    if (result || submitPhase !== "idle" || !q) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey || !q) return;
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)
+      ) {
+        return;
+      }
+      if (q.type === "mc") {
+        if (mcSelected === null) {
+          const n = Number(e.key);
+          if (n >= 1 && n <= q.options.length) {
+            e.preventDefault();
+            setMcSelected(n - 1);
+          }
+        } else if (e.key === "Enter" || e.key === " " || e.key === "ArrowRight") {
+          e.preventDefault();
+          advance({ questionId: q.id, type: "mc", selectedIndex: mcSelected });
+        }
+      } else if (!openRevealed) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setOpenRevealed(true);
+        }
+      } else if (e.key === "1") {
+        e.preventDefault();
+        advance({ questionId: q.id, type: "open", selfCorrect: false });
+      } else if (e.key === "2" || e.key === "Enter") {
+        e.preventDefault();
+        advance({ questionId: q.id, type: "open", selfCorrect: true });
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, mcSelected, openRevealed, result, submitPhase]);
+
   function submit(finalAnswers: QuizAnswer[]) {
     setSubmitPhase("submitting");
     submitQuizAttemptAction({ quizId: quiz.id, answers: finalAnswers })
@@ -60,7 +107,7 @@ export function QuizRunner({
           setAttemptId(r.attemptId);
           setResult({ score: r.score, total: r.total });
           celebrate(r.xp);
-          onDone();
+          onDone({ score: r.score, total: r.total });
         } else {
           setSubmitPhase("error");
           toast.error(r.error);
@@ -147,7 +194,7 @@ export function QuizRunner({
         )}
         <div className="flex gap-2">
           <Button variant="outline" onClick={onExit}>
-            Back to quizzes
+            {exitLabel}
           </Button>
           <Button onClick={retake} className="gap-1.5">
             <RotateCcw className="h-3.5 w-3.5" /> Retake
@@ -205,14 +252,17 @@ export function QuizRunner({
                   disabled={chosen}
                   onClick={() => setMcSelected(i)}
                   className={cn(
-                    "flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-left text-sm transition-colors",
+                    "flex items-center gap-3 rounded-lg border px-4 py-2.5 text-left text-sm transition-colors",
                     !chosen && "border-border hover:bg-accent",
                     chosen && isCorrect && "border-emerald-500 bg-emerald-500/10",
                     chosen && isPicked && !isCorrect && "border-destructive bg-destructive/10",
                     chosen && !isPicked && !isCorrect && "border-border opacity-60",
                   )}
                 >
-                  <span>{opt}</span>
+                  <kbd className="hidden h-5 w-5 shrink-0 items-center justify-center rounded border border-border bg-muted text-[10px] font-medium text-muted-foreground sm:inline-flex">
+                    {i + 1}
+                  </kbd>
+                  <span className="min-w-0 flex-1">{opt}</span>
                   {chosen && isCorrect && <Check className="h-4 w-4 shrink-0 text-emerald-600" />}
                   {chosen && isPicked && !isCorrect && <X className="h-4 w-4 shrink-0 text-destructive" />}
                 </button>

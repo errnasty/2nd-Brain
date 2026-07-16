@@ -6,6 +6,7 @@ import { fetchStudyStats, fetchCalendar, type StudyStats, type CalendarEntry } f
 import { fetchTasks, type TaskRow } from "../tasks/actions";
 import { fetchDueCards, fetchCardStats, fetchLeeches, type DueCard, type StudyScope, type LeechCard } from "../review/actions";
 import { fetchQuizzesAction, type QuizListItem } from "./quiz-actions";
+import { composeTodaySession, type SessionPlan } from "./session-actions";
 import { fetchGameState, type GameState } from "@/lib/gamify/state";
 import { StudyShell, type StudyTab } from "@/components/study/study-shell";
 
@@ -58,10 +59,11 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   let game: GameState | null = null;
   let leeches: LeechCard[] = [];
   let quizzes: QuizListItem[] = [];
+  let sessionPlan: SessionPlan = { cards: [], dueCount: 0, overdueTasks: [], quiz: null, weakestSkill: null };
 
   // allSettled (not Promise.all): one failing panel query must not blank the
   // whole Study hub. Each panel falls back to its own empty default.
-  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR, leechR, quizzesR] = await Promise.allSettled([
+  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR, leechR, quizzesR, sessionR] = await Promise.allSettled([
     fetchStudyStats(user.id),
     fetchTasks(user.id),
     fetchDueCards(user.id, 50, isScoped ? scope : undefined),
@@ -71,6 +73,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
     scopeLabelPromise,
     fetchLeeches(user.id),
     fetchQuizzesAction(user.id),
+    composeTodaySession(user.id),
   ]);
   const scopeLabel = scopeLabelR.status === "fulfilled" ? scopeLabelR.value : null;
   if (leechR.status === "fulfilled") leeches = leechR.value;
@@ -84,9 +87,10 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   if (calR.status === "fulfilled") calendar = calR.value;
   if (gameR.status === "fulfilled") game = gameR.value;
   if (quizzesR.status === "fulfilled") quizzes = quizzesR.value;
+  if (sessionR.status === "fulfilled") sessionPlan = sessionR.value;
   for (const [name, r] of [
     ["stats", statsR], ["tasks", tasksR], ["due", dueR], ["cardStats", cardStatsR], ["calendar", calR], ["game", gameR],
-    ["quizzes", quizzesR],
+    ["quizzes", quizzesR], ["session", sessionR],
   ] as const) {
     if (r.status === "rejected") {
       console.error(`StudyPage ${name} fetch failed:`, r.reason instanceof Error ? r.reason.message : r.reason);
@@ -107,6 +111,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
       leeches={leeches}
       quizzes={quizzes}
       quizId={sp.quiz ?? null}
+      sessionPlan={sessionPlan}
     />
   );
 }
