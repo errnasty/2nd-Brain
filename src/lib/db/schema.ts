@@ -491,7 +491,9 @@ export const rabbitholeNodes = pgTable(
 // quiz_attempts row rather than overwriting — that history is the whole point
 // of "save history, retake later".
 export type QuizQuestion =
-  | { id: string; type: "mc"; question: string; options: string[]; correctIndex: number }
+  // explanation is optional: quizzes generated before this field existed have
+  // no such key in their stored jsonb — never assume it's present.
+  | { id: string; type: "mc"; question: string; options: string[]; correctIndex: number; explanation?: string }
   | { id: string; type: "open"; question: string; answer: string };
 
 export type QuizAnswer =

@@ -5,7 +5,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { quizzes, quizAttempts, type QuizQuestion, type QuizAnswer } from "@/lib/db/schema";
+import { quizzes, quizAttempts, directoryFlashcards, type QuizQuestion, type QuizAnswer } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { generateQuiz } from "@/lib/ai/quiz";
 import { aiAvailable } from "@/lib/ai/provider";
@@ -162,13 +162,13 @@ export async function fetchQuizzesAction(userId: string): Promise<QuizListItem[]
   });
 }
 
-export type QuizForTaking = { id: string; title: string; questions: QuizQuestion[] };
+export type QuizForTaking = { id: string; title: string; questions: QuizQuestion[]; itemIds: string[] };
 
 /** One quiz's full question set, for taking/retaking it. */
 export async function fetchQuizAction(quizId: string): Promise<QuizForTaking | null> {
   const { user } = await requireUser();
   const [row] = await db
-    .select({ id: quizzes.id, title: quizzes.title, questions: quizzes.questions })
+    .select({ id: quizzes.id, title: quizzes.title, questions: quizzes.questions, itemIds: quizzes.itemIds })
     .from(quizzes)
     .where(and(eq(quizzes.id, quizId), eq(quizzes.userId, user.id)))
     .limit(1);
@@ -231,10 +231,79 @@ export async function submitQuizAttemptAction(input: { quizId: string; answers: 
     });
 
     revalidatePath("/study");
-    return { ok: true as const, score, total, xp };
+    return { ok: true as const, attemptId: row.id, score, total, xp };
   } catch (err) {
     const msg = dbErrorMessage(err, "Couldn't save this attempt");
     console.error("submitQuizAttemptAction failed:", msg);
+    return { ok: false as const, error: msg };
+  }
+}
+
+/** Add the questions missed on one attempt to the flashcard deck, so they get
+ *  spaced-repetition drilling instead of just a one-time score. Re-derives the
+ *  miss set from the stored attempt server-side (not from client-supplied
+ *  text) so the cards always match what was actually graded. */
+export async function addMissedToFlashcardsAction(quizId: string, attemptId: string) {
+  const { user } = await requireUser();
+
+  try {
+    const [quiz] = await db
+      .select({ questions: quizzes.questions, itemIds: quizzes.itemIds })
+      .from(quizzes)
+      .where(and(eq(quizzes.id, quizId), eq(quizzes.userId, user.id)))
+      .limit(1);
+    if (!quiz) return { ok: false as const, error: "Quiz not found" };
+
+    const [attempt] = await db
+      .select({ answers: quizAttempts.answers })
+      .from(quizAttempts)
+      .where(
+        and(
+          eq(quizAttempts.id, attemptId),
+          eq(quizAttempts.quizId, quizId),
+          eq(quizAttempts.userId, user.id),
+        ),
+      )
+      .limit(1);
+    if (!attempt) return { ok: false as const, error: "Attempt not found" };
+
+    const answerById = new Map(attempt.answers.map((a) => [a.questionId, a]));
+    const missed = quiz.questions.filter((q) => {
+      const a = answerById.get(q.id);
+      if (!a) return true; // unanswered counts as missed
+      if (q.type === "mc" && a.type === "mc") return a.selectedIndex !== q.correctIndex;
+      if (q.type === "open" && a.type === "open") return !a.selfCorrect;
+      return true;
+    });
+    if (missed.length === 0) return { ok: false as const, error: "Nothing missed on this attempt" };
+
+    const cards = missed.map((q) => ({
+      userId: user.id,
+      itemId: quiz.itemIds.length === 1 ? quiz.itemIds[0] : null,
+      question: q.question,
+      answer:
+        q.type === "mc"
+          ? q.explanation
+            ? `${q.options[q.correctIndex]} — ${q.explanation}`
+            : q.options[q.correctIndex]
+          : q.answer,
+    }));
+    await db.insert(directoryFlashcards).values(cards);
+
+    // Gamify: same tier as making flashcards any other way. Idempotent per
+    // attempt so re-adding from the same score screen can't double-earn.
+    const xp = await awardXp(user.id, {
+      source: "cards_made",
+      itemId: cards.length === 1 ? cards[0].itemId : null,
+      refKind: "quiz_missed_cards",
+      refId: attemptId,
+    });
+
+    revalidatePath("/study");
+    return { ok: true as const, count: cards.length, xp };
+  } catch (err) {
+    const msg = dbErrorMessage(err, "Couldn't add cards");
+    console.error("addMissedToFlashcardsAction failed:", msg);
     return { ok: false as const, error: msg };
   }
 }
