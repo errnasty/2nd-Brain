@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import { directoryFlashcards, directoryItems } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { generateFlashcards, rewriteFlashcard } from "@/lib/ai/flashcards";
+import { aiAvailable } from "@/lib/ai/provider";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { scheduleFsrs, qualityToRating, seedFromSm2, LEECH_LAPSES } from "@/lib/srs/fsrs";
 import { awardXp } from "@/lib/gamify/award";
@@ -77,35 +78,48 @@ export async function fetchCardStats(
 export async function generateFlashcardsAction(itemId: string) {
   const { user } = await requireUser();
 
-  // Resolve the authoritative source text by kind: notes use content, documents
-  // use documents.full_text, saved articles use the article body. Reading
-  // directory_items.content directly produced ZERO cards for saved articles
-  // (they carry no content) and partial/stale text for documents.
-  const resolved = await getDirectoryItemStudyText(user.id, itemId);
-  if (!resolved) return { ok: false as const, error: "Item not found" };
+  try {
+    // Resolve the authoritative source text by kind: notes use content, documents
+    // use documents.full_text, saved articles use the article body. Reading
+    // directory_items.content directly produced ZERO cards for saved articles
+    // (they carry no content) and partial/stale text for documents.
+    const resolved = await getDirectoryItemStudyText(user.id, itemId);
+    if (!resolved) return { ok: false as const, error: "Item not found" };
 
-  const cards = await generateFlashcards(resolved.title, resolved.text);
-  if (cards.length === 0)
-    return { ok: false as const, error: "Couldn't generate cards (no text or AI unavailable)" };
+    const cards = await generateFlashcards(resolved.title, resolved.text);
+    if (cards.length === 0) {
+      // Distinguish the (very different) reasons generation can come back
+      // empty — a single "no text or AI unavailable" message left the user
+      // unable to tell which one to fix.
+      if (!resolved.text.trim())
+        return { ok: false as const, error: "This item has no text yet to make flashcards from" };
+      if (!aiAvailable())
+        return { ok: false as const, error: "AI isn't configured — add an API key in Settings" };
+      return { ok: false as const, error: "Couldn't generate flashcards from this text — try again" };
+    }
 
-  // Idempotent regenerate: replace this item's existing cards so retries and
-  // study-plan re-seeds never duplicate. Only runs after a successful
-  // generation, so a transient AI failure can't wipe an existing deck. (Resets
-  // SM-2 scheduling for this item's cards — expected for a regenerate.)
-  await db
-    .delete(directoryFlashcards)
-    .where(and(eq(directoryFlashcards.userId, user.id), eq(directoryFlashcards.itemId, itemId)));
-  await db.insert(directoryFlashcards).values(
-    cards.map((c) => ({ userId: user.id, itemId, question: c.question, answer: c.answer })),
-  );
-  // Gamify: making a deck from an item is meaningful work — XP once per item.
-  const xp = await awardXp(user.id, { source: "cards_made", itemId, refKind: "item_cards", refId: itemId });
+    // Idempotent regenerate: replace this item's existing cards so retries and
+    // study-plan re-seeds never duplicate. Only runs after a successful
+    // generation, so a transient AI failure can't wipe an existing deck. (Resets
+    // SM-2 scheduling for this item's cards — expected for a regenerate.)
+    await db
+      .delete(directoryFlashcards)
+      .where(and(eq(directoryFlashcards.userId, user.id), eq(directoryFlashcards.itemId, itemId)));
+    await db.insert(directoryFlashcards).values(
+      cards.map((c) => ({ userId: user.id, itemId, question: c.question, answer: c.answer })),
+    );
+    // Gamify: making a deck from an item is meaningful work — XP once per item.
+    const xp = await awardXp(user.id, { source: "cards_made", itemId, refKind: "item_cards", refId: itemId });
 
-  // /review is a redirect into the Study hub — revalidate the real page so the
-  // Review deck + Overview card counts pick up the new cards.
-  revalidatePath("/study");
-  revalidatePath("/review");
-  return { ok: true as const, count: cards.length, xp };
+    // /review is a redirect into the Study hub — revalidate the real page so the
+    // Review deck + Overview card counts pick up the new cards.
+    revalidatePath("/study");
+    revalidatePath("/review");
+    return { ok: true as const, count: cards.length, xp };
+  } catch (err) {
+    console.error("generateFlashcardsAction failed:", err instanceof Error ? err.message : err);
+    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't generate flashcards" };
+  }
 }
 
 const GradeSchema = z.object({ id: z.string().uuid(), quality: z.number().int().min(0).max(5) });
@@ -118,68 +132,79 @@ export async function gradeCardAction(input: { id: string; quality: number }) {
   if (!parsed.success) return { ok: false as const, error: "Invalid input" };
   const { user } = await requireUser();
 
-  const [card] = await db
-    .select({
-      ease: directoryFlashcards.ease,
-      intervalDays: directoryFlashcards.intervalDays,
-      repetitions: directoryFlashcards.repetitions,
-      stability: directoryFlashcards.stability,
-      difficulty: directoryFlashcards.difficulty,
-      lapses: directoryFlashcards.lapses,
-      lastReviewedAt: directoryFlashcards.lastReviewedAt,
-      dueDate: directoryFlashcards.dueDate,
-      itemId: directoryFlashcards.itemId,
-    })
-    .from(directoryFlashcards)
-    .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)))
-    .limit(1);
-  if (!card) return { ok: false as const, error: "Card not found" };
+  // Everything below is real (non-network) work — DB reads/writes, scheduling
+  // math. Catching it here means a genuine server-side failure comes back as
+  // an ordinary {ok:false}, which the client already knows how to show as an
+  // error. Left unguarded, it would throw across the server-action boundary,
+  // and the client's offline-queue catch block would mislabel it as "offline"
+  // (the queued grade would then retry forever against the same bug).
+  try {
+    const [card] = await db
+      .select({
+        ease: directoryFlashcards.ease,
+        intervalDays: directoryFlashcards.intervalDays,
+        repetitions: directoryFlashcards.repetitions,
+        stability: directoryFlashcards.stability,
+        difficulty: directoryFlashcards.difficulty,
+        lapses: directoryFlashcards.lapses,
+        lastReviewedAt: directoryFlashcards.lastReviewedAt,
+        dueDate: directoryFlashcards.dueDate,
+        itemId: directoryFlashcards.itemId,
+      })
+      .from(directoryFlashcards)
+      .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)))
+      .limit(1);
+    if (!card) return { ok: false as const, error: "Card not found" };
 
-  const now = new Date();
-  const rating = qualityToRating(parsed.data.quality);
-  // Prior FSRS state, or a seed from SM-2 for repeat cards migrating over.
-  // A never-reviewed card (no lastReviewedAt, no repetitions) starts fresh.
-  const reviewedBefore = card.lastReviewedAt != null || card.repetitions > 0;
-  const state =
-    card.stability != null && card.difficulty != null
-      ? { stability: card.stability, difficulty: card.difficulty }
-      : reviewedBefore
-        ? seedFromSm2(card.ease, card.intervalDays)
-        : null;
-  // Days since the last review. Legacy rows have no lastReviewedAt; approximate
-  // it as dueDate - interval (when that review scheduled this due date).
-  const lastReview =
-    card.lastReviewedAt ??
-    (reviewedBefore ? new Date(card.dueDate.getTime() - card.intervalDays * 86_400_000) : now);
-  const elapsedDays = Math.max(0, (now.getTime() - lastReview.getTime()) / 86_400_000);
+    const now = new Date();
+    const rating = qualityToRating(parsed.data.quality);
+    // Prior FSRS state, or a seed from SM-2 for repeat cards migrating over.
+    // A never-reviewed card (no lastReviewedAt, no repetitions) starts fresh.
+    const reviewedBefore = card.lastReviewedAt != null || card.repetitions > 0;
+    const state =
+      card.stability != null && card.difficulty != null
+        ? { stability: card.stability, difficulty: card.difficulty }
+        : reviewedBefore
+          ? seedFromSm2(card.ease, card.intervalDays)
+          : null;
+    // Days since the last review. Legacy rows have no lastReviewedAt; approximate
+    // it as dueDate - interval (when that review scheduled this due date).
+    const lastReview =
+      card.lastReviewedAt ??
+      (reviewedBefore ? new Date(card.dueDate.getTime() - card.intervalDays * 86_400_000) : now);
+    const elapsedDays = Math.max(0, (now.getTime() - lastReview.getTime()) / 86_400_000);
 
-  const next = scheduleFsrs(state, rating, elapsedDays, now);
-  await db
-    .update(directoryFlashcards)
-    .set({
-      stability: next.stability,
-      difficulty: next.difficulty,
-      lapses: card.lapses + (next.lapsed ? 1 : 0),
-      lastReviewedAt: now,
-      // Legacy columns kept current for stats + any un-migrated readers.
-      intervalDays: next.intervalDays,
-      repetitions: next.lapsed ? 0 : card.repetitions + 1,
-      dueDate: next.dueDate,
-      updatedAt: now,
-    })
-    .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)));
-  // Gamify: every review earns XP (scaled by recall quality) for the card's
-  // skill. Intentionally NOT idempotent — spaced reps each earn.
-  const xp = await awardXp(user.id, {
-    source: "card_graded",
-    quality: parsed.data.quality,
-    itemId: card.itemId,
-  });
+    const next = scheduleFsrs(state, rating, elapsedDays, now);
+    await db
+      .update(directoryFlashcards)
+      .set({
+        stability: next.stability,
+        difficulty: next.difficulty,
+        lapses: card.lapses + (next.lapsed ? 1 : 0),
+        lastReviewedAt: now,
+        // Legacy columns kept current for stats + any un-migrated readers.
+        intervalDays: next.intervalDays,
+        repetitions: next.lapsed ? 0 : card.repetitions + 1,
+        dueDate: next.dueDate,
+        updatedAt: now,
+      })
+      .where(and(eq(directoryFlashcards.id, parsed.data.id), eq(directoryFlashcards.userId, user.id)));
+    // Gamify: every review earns XP (scaled by recall quality) for the card's
+    // skill. Intentionally NOT idempotent — spaced reps each earn.
+    const xp = await awardXp(user.id, {
+      source: "card_graded",
+      quality: parsed.data.quality,
+      itemId: card.itemId,
+    });
 
-  // A grade reschedules the card (changes "Due now" + "Reviewed this week" on the
-  // Overview). Without this the dashboard stats stayed frozen at page-load values.
-  revalidatePath("/study");
-  return { ok: true as const, xp };
+    // A grade reschedules the card (changes "Due now" + "Reviewed this week" on the
+    // Overview). Without this the dashboard stats stayed frozen at page-load values.
+    revalidatePath("/study");
+    return { ok: true as const, xp };
+  } catch (err) {
+    console.error("gradeCardAction failed:", err instanceof Error ? err.message : err);
+    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't save this review" };
+  }
 }
 
 const CreateCardSchema = z.object({
@@ -199,24 +224,29 @@ export async function createFlashcardAction(input: {
   if (!parsed.success) return { ok: false as const, error: "Question or answer is too short/long" };
   const { user } = await requireUser();
 
-  const [row] = await db
-    .insert(directoryFlashcards)
-    .values({
-      userId: user.id,
-      itemId: parsed.data.itemId ?? null,
-      question: parsed.data.question,
-      answer: parsed.data.answer,
-    })
-    .returning({ id: directoryFlashcards.id });
+  try {
+    const [row] = await db
+      .insert(directoryFlashcards)
+      .values({
+        userId: user.id,
+        itemId: parsed.data.itemId ?? null,
+        question: parsed.data.question,
+        answer: parsed.data.answer,
+      })
+      .returning({ id: directoryFlashcards.id });
 
-  const xp = await awardXp(user.id, {
-    source: "cards_made",
-    itemId: parsed.data.itemId ?? null,
-    refKind: "manual_card",
-    refId: row.id,
-  });
-  revalidatePath("/study");
-  return { ok: true as const, id: row.id, xp };
+    const xp = await awardXp(user.id, {
+      source: "cards_made",
+      itemId: parsed.data.itemId ?? null,
+      refKind: "manual_card",
+      refId: row.id,
+    });
+    revalidatePath("/study");
+    return { ok: true as const, id: row.id, xp };
+  } catch (err) {
+    console.error("createFlashcardAction failed:", err instanceof Error ? err.message : err);
+    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't create the card" };
+  }
 }
 
 /** AI-generate cards from arbitrary text (e.g. an article's key takeaways) and
@@ -228,16 +258,25 @@ export async function createCardsFromTextAction(input: { title: string; text: st
   if (!text) return { ok: false as const, error: "Nothing to make cards from" };
   const { user } = await requireUser();
 
-  const cards = await generateFlashcards(title, text.slice(0, 6000));
-  if (cards.length === 0)
-    return { ok: false as const, error: "Couldn't generate cards (AI unavailable)" };
+  try {
+    const cards = await generateFlashcards(title, text.slice(0, 6000));
+    if (cards.length === 0) {
+      return {
+        ok: false as const,
+        error: aiAvailable() ? "Couldn't generate cards from this text — try again" : "AI isn't configured — add an API key in Settings",
+      };
+    }
 
-  await db.insert(directoryFlashcards).values(
-    cards.map((c) => ({ userId: user.id, itemId: null, question: c.question, answer: c.answer })),
-  );
-  const xp = await awardXp(user.id, { source: "cards_made" });
-  revalidatePath("/study");
-  return { ok: true as const, count: cards.length, xp };
+    await db.insert(directoryFlashcards).values(
+      cards.map((c) => ({ userId: user.id, itemId: null, question: c.question, answer: c.answer })),
+    );
+    const xp = await awardXp(user.id, { source: "cards_made" });
+    revalidatePath("/study");
+    return { ok: true as const, count: cards.length, xp };
+  } catch (err) {
+    console.error("createCardsFromTextAction failed:", err instanceof Error ? err.message : err);
+    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't generate flashcards" };
+  }
 }
 
 export type LeechCard = {
@@ -269,35 +308,41 @@ export async function fetchLeeches(userId: string, limit = 10): Promise<LeechCar
  *  back in the queue as (effectively) a new card. */
 export async function rewriteLeechAction(cardId: string) {
   const { user } = await requireUser();
-  const [card] = await db
-    .select({
-      question: directoryFlashcards.question,
-      answer: directoryFlashcards.answer,
-    })
-    .from(directoryFlashcards)
-    .where(and(eq(directoryFlashcards.id, cardId), eq(directoryFlashcards.userId, user.id)))
-    .limit(1);
-  if (!card) return { ok: false as const, error: "Card not found" };
 
-  const rewritten = await rewriteFlashcard(card.question, card.answer);
-  if (!rewritten) return { ok: false as const, error: "Couldn't rewrite (AI unavailable)" };
+  try {
+    const [card] = await db
+      .select({
+        question: directoryFlashcards.question,
+        answer: directoryFlashcards.answer,
+      })
+      .from(directoryFlashcards)
+      .where(and(eq(directoryFlashcards.id, cardId), eq(directoryFlashcards.userId, user.id)))
+      .limit(1);
+    if (!card) return { ok: false as const, error: "Card not found" };
 
-  await db
-    .update(directoryFlashcards)
-    .set({
-      question: rewritten.question,
-      answer: rewritten.answer,
-      // New formulation = new memory. Restart scheduling from scratch.
-      stability: null,
-      difficulty: null,
-      lapses: 0,
-      repetitions: 0,
-      intervalDays: 0,
-      lastReviewedAt: null,
-      dueDate: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(and(eq(directoryFlashcards.id, cardId), eq(directoryFlashcards.userId, user.id)));
-  revalidatePath("/study");
-  return { ok: true as const, card: rewritten };
+    const rewritten = await rewriteFlashcard(card.question, card.answer);
+    if (!rewritten) return { ok: false as const, error: "Couldn't rewrite (AI unavailable)" };
+
+    await db
+      .update(directoryFlashcards)
+      .set({
+        question: rewritten.question,
+        answer: rewritten.answer,
+        // New formulation = new memory. Restart scheduling from scratch.
+        stability: null,
+        difficulty: null,
+        lapses: 0,
+        repetitions: 0,
+        intervalDays: 0,
+        lastReviewedAt: null,
+        dueDate: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(and(eq(directoryFlashcards.id, cardId), eq(directoryFlashcards.userId, user.id)));
+    revalidatePath("/study");
+    return { ok: true as const, card: rewritten };
+  } catch (err) {
+    console.error("rewriteLeechAction failed:", err instanceof Error ? err.message : err);
+    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't rewrite this card" };
+  }
 }

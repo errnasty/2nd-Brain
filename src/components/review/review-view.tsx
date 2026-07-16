@@ -80,7 +80,11 @@ export function ReviewView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, showAnswer]);
 
-  // Flush grades queued while offline: on mount and whenever we reconnect.
+  // Flush grades queued while offline: on mount, whenever we reconnect, and on
+  // an interval. The interval matters because a grade can fail to sync for
+  // reasons other than true connectivity (a transient server error) — that
+  // case never fires a browser "online" event, so without polling the queue
+  // would sit stuck until the next full page load.
   useEffect(() => {
     async function flush() {
       if (pendingGradeCount() === 0 || !navigator.onLine) return;
@@ -92,7 +96,11 @@ export function ReviewView({
     }
     void flush();
     window.addEventListener("online", flush);
-    return () => window.removeEventListener("online", flush);
+    const interval = window.setInterval(flush, 45_000);
+    return () => {
+      window.removeEventListener("online", flush);
+      window.clearInterval(interval);
+    };
   }, [router]);
 
   function grade(quality: number) {
@@ -117,11 +125,20 @@ export function ReviewView({
           setShowAnswer(true);
           toast.error(r.error);
         }
-      } catch {
-        // Network down (offline study): keep the optimistic advance and queue
-        // the grade — it syncs on reconnect via the flush effect above.
+      } catch (err) {
+        // Keep the optimistic advance and queue the grade regardless of why the
+        // request failed — it's safer to retry later than to lose the review.
+        // Only claim "offline" when the browser actually reports no
+        // connectivity; a real server-side error gets an honest message
+        // instead, since reconnecting won't fix it and the "offline" label
+        // would leave the user waiting on a sync that isn't coming.
         enqueueGrade(card.id, quality);
-        toast.info("Offline — review saved, will sync when you're back online");
+        if (typeof navigator !== "undefined" && !navigator.onLine) {
+          toast.info("Offline — review saved, will sync when you're back online");
+        } else {
+          console.warn("gradeCardAction failed while online:", err instanceof Error ? err.message : err);
+          toast.error("Couldn't reach the server — review saved locally, will keep retrying");
+        }
       }
     });
   }
