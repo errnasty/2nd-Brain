@@ -11,6 +11,7 @@ import {
   ExternalLink,
   ListChecks,
   Loader2,
+  MoreVertical,
   Pause,
   Play,
   Rss,
@@ -22,6 +23,12 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   setReadLaterAction,
   setReadStatusAction,
@@ -461,40 +468,6 @@ export function ArticleReader({
             </span>
           )}
         </div>
-        {ttsSupported && (
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={toggleListen}
-            title={
-              ttsState === "speaking"
-                ? "Pause (l)"
-                : ttsState === "paused"
-                  ? "Resume (l)"
-                  : "Listen (l)"
-            }
-            disabled={!article || (!ttsText && ttsState === "idle")}
-            className={ttsState !== "idle" ? "text-brand" : ""}
-          >
-            {ttsState === "speaking" ? (
-              <Pause className="h-4 w-4" />
-            ) : ttsState === "paused" ? (
-              <Play className="h-4 w-4" />
-            ) : (
-              <Volume2 className="h-4 w-4" />
-            )}
-          </Button>
-        )}
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={loadTakeaways}
-          title="Key takeaways"
-          disabled={!article || takeawaysLoading}
-          className={takeaways ? "text-brand" : ""}
-        >
-          {takeawaysLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
-        </Button>
         <Button
           size="icon"
           variant="ghost"
@@ -508,15 +481,6 @@ export function ArticleReader({
         <Button
           size="icon"
           variant="ghost"
-          onClick={saveToDirectory}
-          title="Save to Directory"
-          disabled={!article}
-        >
-          <BookmarkPlus className="h-4 w-4" />
-        </Button>
-        <Button
-          size="icon"
-          variant="ghost"
           onClick={toggleReadLater}
           title={article?.readLater ? "Remove from Read Later (b)" : "Read later (b)"}
           disabled={!article}
@@ -526,11 +490,46 @@ export function ArticleReader({
         <Button size="icon" variant="ghost" onClick={toggleStar} title="Star (s)" disabled={!article}>
           <Star className={article?.starred ? "fill-yellow-500 text-yellow-500" : ""} />
         </Button>
-        <Button size="icon" variant="ghost" asChild title="Open original (v)" disabled={!article}>
-          <a href={article?.url ?? "#"} target="_blank" rel="noopener noreferrer">
-            <ExternalLink className="h-4 w-4" />
-          </a>
-        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="icon" variant="ghost" title="More actions" disabled={!article}>
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {ttsSupported && (
+              <DropdownMenuItem onClick={toggleListen} disabled={!ttsText && ttsState === "idle"}>
+                {ttsState === "speaking" ? (
+                  <Pause className="mr-2 h-3.5 w-3.5" />
+                ) : ttsState === "paused" ? (
+                  <Play className="mr-2 h-3.5 w-3.5" />
+                ) : (
+                  <Volume2 className="mr-2 h-3.5 w-3.5" />
+                )}
+                {ttsState === "speaking" ? "Pause" : ttsState === "paused" ? "Resume" : "Listen"}
+                <span className="ml-auto text-[10px] text-muted-foreground">L</span>
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuItem onClick={loadTakeaways} disabled={takeawaysLoading}>
+              {takeawaysLoading ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ListChecks className="mr-2 h-3.5 w-3.5" />
+              )}
+              Key takeaways
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={saveToDirectory}>
+              <BookmarkPlus className="mr-2 h-3.5 w-3.5" /> Save to Directory
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <a href={article?.url ?? "#"} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="mr-2 h-3.5 w-3.5" /> Open original
+                <span className="ml-auto text-[10px] text-muted-foreground">V</span>
+              </a>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <ReaderControls />
       </div>
       {/* #2 Reading-progress strip */}

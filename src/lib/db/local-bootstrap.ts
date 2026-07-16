@@ -77,12 +77,12 @@ declare
   touch_tables text[] := array[
     'profiles','folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','item_tags','directory_flashcards',
-    'skills','player_profile','user_settings','rabbithole_nodes'
+    'skills','player_profile','user_settings','rabbithole_nodes','quizzes','quiz_attempts'
   ];
   tomb_tables text[] := array[
     'folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','directory_flashcards',
-    'skills','player_profile','user_settings','rabbithole_nodes'
+    'skills','player_profile','user_settings','rabbithole_nodes','quizzes','quiz_attempts'
   ];
   t text;
 begin
@@ -187,6 +187,37 @@ create index if not exists rabbithole_nodes_parent_idx on rabbithole_nodes (pare
 create index if not exists rabbithole_nodes_user_updated_idx on rabbithole_nodes (user_id, updated_at);
 `;
 
+// Quizzes — mirrors cloud migration 0020. Always-run + idempotent so existing
+// local DBs gain the tables without a reinstall. SYNCED (triggers installed
+// by SYNC_SUPPORT_SQL via the table arrays above). No RLS locally — the
+// embedded DB is single-user.
+const QUIZ_SQL = `
+create table if not exists quizzes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  title text not null,
+  item_ids jsonb not null default '[]'::jsonb,
+  questions jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists quizzes_user_updated_idx on quizzes (user_id, updated_at);
+
+create table if not exists quiz_attempts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  quiz_id uuid not null references quizzes(id) on delete cascade,
+  answers jsonb not null default '[]'::jsonb,
+  score integer not null,
+  total integer not null,
+  completed_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists quiz_attempts_quiz_idx on quiz_attempts (quiz_id, completed_at);
+create index if not exists quiz_attempts_user_updated_idx on quiz_attempts (user_id, updated_at);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -270,6 +301,14 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(RABBITHOLE_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] rabbithole table failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run BEFORE sync support (same reason): quizzes/quiz_attempts must
+  // exist before SYNC_SUPPORT_SQL installs their triggers. Idempotent.
+  try {
+    await client.exec(QUIZ_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] quiz tables failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

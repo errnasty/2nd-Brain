@@ -28,6 +28,8 @@ alter table public.directory_links       enable row level security;
 alter table public.directory_tasks       enable row level security;
 alter table public.directory_flashcards  enable row level security;
 alter table public.rabbithole_nodes      enable row level security;
+alter table public.quizzes               enable row level security;
+alter table public.quiz_attempts         enable row level security;
 alter table public.player_profile        enable row level security;
 alter table public.skills                enable row level security;
 alter table public.xp_events             enable row level security;
@@ -66,6 +68,8 @@ begin
     'directory_tasks',
     'directory_flashcards',
     'rabbithole_nodes',
+    'quizzes',
+    'quiz_attempts',
     'player_profile',
     'skills',
     'xp_events',

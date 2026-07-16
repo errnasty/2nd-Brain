@@ -5,14 +5,15 @@ import { requireUser } from "@/lib/auth";
 import { fetchStudyStats, fetchCalendar, type StudyStats, type CalendarEntry } from "./actions";
 import { fetchTasks, type TaskRow } from "../tasks/actions";
 import { fetchDueCards, fetchCardStats, fetchLeeches, type DueCard, type StudyScope, type LeechCard } from "../review/actions";
+import { fetchQuizzesAction, type QuizListItem } from "./quiz-actions";
 import { fetchGameState, type GameState } from "@/lib/gamify/state";
 import { StudyShell, type StudyTab } from "@/components/study/study-shell";
 
 export const dynamic = "force-dynamic";
 
-type Search = Promise<{ tab?: string; folder?: string; item?: string }>;
+type Search = Promise<{ tab?: string; folder?: string; item?: string; quiz?: string }>;
 
-const TABS = ["overview", "tasks", "review", "calendar"];
+const TABS = ["overview", "tasks", "review", "quiz", "calendar"];
 
 export default async function StudyPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
@@ -56,10 +57,11 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   let calendar: CalendarEntry[] = [];
   let game: GameState | null = null;
   let leeches: LeechCard[] = [];
+  let quizzes: QuizListItem[] = [];
 
   // allSettled (not Promise.all): one failing panel query must not blank the
   // whole Study hub. Each panel falls back to its own empty default.
-  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR, leechR] = await Promise.allSettled([
+  const [statsR, tasksR, dueR, cardStatsR, calR, gameR, scopeLabelR, leechR, quizzesR] = await Promise.allSettled([
     fetchStudyStats(user.id),
     fetchTasks(user.id),
     fetchDueCards(user.id, 50, isScoped ? scope : undefined),
@@ -68,6 +70,7 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
     fetchGameState(user.id),
     scopeLabelPromise,
     fetchLeeches(user.id),
+    fetchQuizzesAction(user.id),
   ]);
   const scopeLabel = scopeLabelR.status === "fulfilled" ? scopeLabelR.value : null;
   if (leechR.status === "fulfilled") leeches = leechR.value;
@@ -80,8 +83,10 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
   }
   if (calR.status === "fulfilled") calendar = calR.value;
   if (gameR.status === "fulfilled") game = gameR.value;
+  if (quizzesR.status === "fulfilled") quizzes = quizzesR.value;
   for (const [name, r] of [
     ["stats", statsR], ["tasks", tasksR], ["due", dueR], ["cardStats", cardStatsR], ["calendar", calR], ["game", gameR],
+    ["quizzes", quizzesR],
   ] as const) {
     if (r.status === "rejected") {
       console.error(`StudyPage ${name} fetch failed:`, r.reason instanceof Error ? r.reason.message : r.reason);
@@ -100,6 +105,8 @@ export default async function StudyPage({ searchParams }: { searchParams: Search
       game={game}
       reviewScopeLabel={isScoped ? scopeLabel : null}
       leeches={leeches}
+      quizzes={quizzes}
+      quizId={sp.quiz ?? null}
     />
   );
 }

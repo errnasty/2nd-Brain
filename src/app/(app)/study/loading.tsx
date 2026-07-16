@@ -6,7 +6,7 @@ export default function StudyLoading() {
     <div className="flex h-full flex-col">
       {/* Tab bar */}
       <div className="flex items-center gap-1 border-b border-border px-3 py-2">
-        {Array.from({ length: 4 }).map((_, i) => (
+        {Array.from({ length: 5 }).map((_, i) => (
           <Skeleton key={i} className="h-8 w-24 rounded-md" />
         ))}
       </div>

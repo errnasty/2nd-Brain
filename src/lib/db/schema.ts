@@ -484,11 +484,68 @@ export const rabbitholeNodes = pgTable(
   }),
 );
 
+// ── Quiz: mixed multiple-choice / open-ended question sets ─────────────
+// Generated from one or more Directory items (item_ids — a jsonb array, not a
+// join table: there's no need to query "quizzes containing item X", and the
+// list is small/immutable after generation). Retaking a quiz creates another
+// quiz_attempts row rather than overwriting — that history is the whole point
+// of "save history, retake later".
+export type QuizQuestion =
+  | { id: string; type: "mc"; question: string; options: string[]; correctIndex: number }
+  | { id: string; type: "open"; question: string; answer: string };
+
+export type QuizAnswer =
+  | { questionId: string; type: "mc"; selectedIndex: number }
+  | { questionId: string; type: "open"; selfCorrect: boolean };
+
+export const quizzes = pgTable(
+  "quizzes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    itemIds: jsonb("item_ids").$type<string[]>().notNull().default([]),
+    questions: jsonb("questions").$type<QuizQuestion[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userUpdatedIdx: index("quizzes_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
+export const quizAttempts = pgTable(
+  "quiz_attempts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    quizId: uuid("quiz_id")
+      .notNull()
+      .references(() => quizzes.id, { onDelete: "cascade" }),
+    answers: jsonb("answers").$type<QuizAnswer[]>().notNull().default([]),
+    score: integer("score").notNull(),
+    total: integer("total").notNull(),
+    completedAt: timestamp("completed_at", { withTimezone: true }).defaultNow().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    quizIdx: index("quiz_attempts_quiz_idx").on(t.quizId, t.completedAt),
+    userUpdatedIdx: index("quiz_attempts_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
 export type DirectoryFlashcard = typeof directoryFlashcards.$inferSelect;
 export type RabbitholeNode = typeof rabbitholeNodes.$inferSelect;
+export type Quiz = typeof quizzes.$inferSelect;
+export type QuizAttempt = typeof quizAttempts.$inferSelect;
 
 // ── Gamification ────────────────────────────────────────────────────────
 // A generic XP/skill engine. Domain-agnostic ('knowledge' now; 'fitness' etc

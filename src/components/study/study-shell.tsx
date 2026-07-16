@@ -2,24 +2,27 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BarChart3, Brain, CalendarDays, CheckSquare } from "lucide-react";
+import { BarChart3, Brain, CalendarDays, CheckSquare, HelpCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { localKey, utcKey } from "@/lib/study/calendar";
 import { StatsOverview } from "./stats-overview";
 import { CalendarView } from "./calendar-view";
 import { TasksView } from "@/components/tasks/tasks-view";
 import { ReviewView } from "@/components/review/review-view";
+import { QuizTab } from "./quiz-tab";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";
 import type { DueCard, LeechCard } from "@/app/(app)/review/actions";
+import type { QuizListItem } from "@/app/(app)/study/quiz-actions";
 import type { GameState } from "@/lib/gamify/state";
 
-export type StudyTab = "overview" | "tasks" | "review" | "calendar";
+export type StudyTab = "overview" | "tasks" | "review" | "calendar" | "quiz";
 
 const TABS: { id: StudyTab; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "Overview", icon: <BarChart3 className="h-3.5 w-3.5" /> },
   { id: "tasks", label: "Tasks", icon: <CheckSquare className="h-3.5 w-3.5" /> },
   { id: "review", label: "Review", icon: <Brain className="h-3.5 w-3.5" /> },
+  { id: "quiz", label: "Quiz", icon: <HelpCircle className="h-3.5 w-3.5" /> },
   { id: "calendar", label: "Calendar", icon: <CalendarDays className="h-3.5 w-3.5" /> },
 ];
 
@@ -34,6 +37,8 @@ export function StudyShell({
   game,
   reviewScopeLabel,
   leeches,
+  quizzes,
+  quizId,
 }: {
   defaultTab: StudyTab;
   stats: StudyStats;
@@ -45,6 +50,9 @@ export function StudyShell({
   game: GameState | null;
   reviewScopeLabel?: string | null;
   leeches?: LeechCard[];
+  quizzes: QuizListItem[];
+  /** Deep-link straight into taking a just-generated quiz. */
+  quizId?: string | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -129,6 +137,7 @@ export function StudyShell({
             leeches={leeches ?? []}
           />
         )}
+        {tab === "quiz" && <QuizTab quizzes={quizzes} initialQuizId={quizId} />}
         {tab === "calendar" && <CalendarView initial={calendar} />}
       </div>
     </div>
