@@ -10,19 +10,30 @@ export interface EmbeddingsProvider {
   embed(texts: string[], inputType?: EmbeddingInputType): Promise<number[][]>;
 }
 
+// The provider object is immutable for a given process (it only reads env at
+// construction). getEmbeddingsProvider() runs on every embed + RAG call, so
+// build it once and reuse instead of re-allocating closures + re-reading env
+// each time. Provider choice is fixed at startup; switching requires a restart.
+let cachedProvider: EmbeddingsProvider | null = null;
+
 /** Lazily resolve the provider so missing keys don't crash unrelated code paths. */
 export function getEmbeddingsProvider(): EmbeddingsProvider {
+  if (cachedProvider) return cachedProvider;
   const provider = (process.env.EMBEDDINGS_PROVIDER ?? "openai").toLowerCase();
   switch (provider) {
     case "openai":
-      return openaiEmbeddings();
+      cachedProvider = openaiEmbeddings();
+      break;
     case "voyage":
-      return voyageEmbeddings();
+      cachedProvider = voyageEmbeddings();
+      break;
     case "local":
-      return localEmbeddings();
+      cachedProvider = localEmbeddings();
+      break;
     default:
       throw new Error(`Unknown EMBEDDINGS_PROVIDER: ${provider}`);
   }
+  return cachedProvider;
 }
 
 // ── OpenAI ───────────────────────────────────────────────────────────

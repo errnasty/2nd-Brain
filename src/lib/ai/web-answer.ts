@@ -1,5 +1,15 @@
 import Anthropic from "@anthropic-ai/sdk";
 
+// Single Anthropic client per process. webAnswerOnce / plainAnswerOnce /
+// streamWebAnswer each ran `new Anthropic()` on every call — needless
+// re-allocation + connection-pool churn on the web-search hot path. The SDK
+// client is stateless given its apiKey, so one is enough.
+let anthropicClient: Anthropic | null = null;
+function getAnthropic(apiKey: string | undefined): Anthropic {
+  if (!anthropicClient) anthropicClient = new Anthropic({ apiKey: apiKey ?? "" });
+  return anthropicClient;
+}
+
 // Sentinels appended to the end of the streamed body. The client slices the
 // answer at the first sentinel and parses each payload. Kept in sync with the
 // literals in the client components (route modules / libs can't share an
@@ -49,7 +59,7 @@ export async function webAnswerOnce({
   system: string;
   userContent: string;
 }): Promise<{ text: string; sources: WebSource[] }> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = getAnthropic(process.env.ANTHROPIC_API_KEY);
   const msg = await client.messages.create({
     model,
     max_tokens: MAX_TOKENS,
@@ -88,7 +98,7 @@ export async function plainAnswerOnce({
   system: string;
   userContent: string;
 }): Promise<{ text: string }> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = getAnthropic(process.env.ANTHROPIC_API_KEY);
   const msg = await client.messages.create({
     model,
     max_tokens: MAX_TOKENS,
@@ -103,7 +113,7 @@ export async function plainAnswerOnce({
 }
 
 export function streamWebAnswer({ model, system, userContent, history, signal }: StreamArgs): ReadableStream<Uint8Array> {
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = getAnthropic(process.env.ANTHROPIC_API_KEY);
   const encoder = new TextEncoder();
 
   const messages: Anthropic.MessageParam[] = [

@@ -41,13 +41,23 @@ export function aiAvailable(): boolean {
     : !!process.env.ANTHROPIC_API_KEY;
 }
 
+// The OpenAI-compatible client is stateless given its config — building a
+// fresh one on every fastModel()/smartModel() call (i.e. every AI generation)
+// is needless allocation + connection-setup churn. Build it once per process
+// and reuse. The API key comes from env at module load; if the operator
+// rotates it at runtime, a process restart picks it up (same as the SDK's
+// own behavior — the client reads the key lazily per request anyway).
+let openrouterClientSingleton: ReturnType<typeof createOpenAI> | null = null;
 /** OpenRouter speaks the OpenAI wire protocol; one client, every model. */
 export function openrouterClient() {
-  return createOpenAI({
-    baseURL: "https://openrouter.ai/api/v1",
-    apiKey: openrouterKey() ?? "",
-    headers: { "X-Title": "Second Brain" },
-  });
+  if (!openrouterClientSingleton) {
+    openrouterClientSingleton = createOpenAI({
+      baseURL: "https://openrouter.ai/api/v1",
+      apiKey: openrouterKey() ?? "",
+      headers: { "X-Title": "Second Brain" },
+    });
+  }
+  return openrouterClientSingleton;
 }
 
 /** Cheap/fast model for high-volume background work (tagging, cards, distill). */
