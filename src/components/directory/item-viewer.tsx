@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, Loader2, MoreVertical, Pencil, Rabbit, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, Loader2, Minimize2, MoreVertical, Pencil, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,8 @@ import {
   updateNoteAction,
   type ItemSummary,
 } from "@/app/(app)/directory/actions";
+import { editAssistAction } from "@/app/(app)/directory/ai-actions";
+import type { EditAssistMode } from "@/lib/ai/edit-assist";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
 import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
 import { celebrate } from "@/lib/gamify/celebrate";
@@ -129,6 +131,17 @@ export function ItemViewer({
   // selected), reset per-item. Drives the auto-tag-on-finish below — once per
   // edit session, not on every keystroke or every preview/edit toggle.
   const editedRef = useRef(false);
+
+  // AI edit-assistant (rewrite/summarize/continue) state for the note editor.
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [selRange, setSelRange] = useState({ start: 0, end: 0 });
+  const [assistBusy, setAssistBusy] = useState<EditAssistMode | null>(null);
+  const assistSnapshotRef = useRef<string | null>(null);
+
+  function trackSelection(e: React.SyntheticEvent<HTMLTextAreaElement>) {
+    const el = e.currentTarget;
+    setSelRange({ start: el.selectionStart, end: el.selectionEnd });
+  }
 
   /** Fire-and-forget auto-tag for a note the user just finished editing.
    *  autoTagDirectoryItem already no-ops server-side if the item has tags, so
@@ -374,6 +387,56 @@ export function ItemViewer({
         toast.error(err instanceof Error ? err.message : "Couldn't generate a quiz");
       } finally {
         setMakingQuiz(false);
+      }
+    });
+  }
+
+  function runAssist(mode: EditAssistMode) {
+    if (!item || assistBusy) return;
+    const { start, end } = selRange;
+    const selection = content.slice(start, end);
+    if (mode !== "continue" && !selection.trim()) {
+      toast.error("Select some text first");
+      return;
+    }
+    setAssistBusy(mode);
+    startTransition(async () => {
+      try {
+        const r = await editAssistAction({
+          mode,
+          selection,
+          title,
+          before: content.slice(0, start),
+          after: content.slice(end),
+        });
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
+        const snapshot = content;
+        const next = content.slice(0, start) + r.text + content.slice(end);
+        assistSnapshotRef.current = snapshot;
+        setContent(next);
+        setDirty(true);
+        editedRef.current = true;
+        editBufRef.current = { id: item.id, kind: item.kind, title, content: next };
+        const label = mode === "rewrite" ? "Rewrote" : mode === "summarize" ? "Summarized" : "Continued";
+        toast.success(label, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              const prev = assistSnapshotRef.current;
+              if (prev === null) return;
+              setContent(prev);
+              setDirty(true);
+              editBufRef.current = { id: item.id, kind: item.kind, title, content: prev };
+            },
+          },
+        });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't run the assistant");
+      } finally {
+        setAssistBusy(null);
       }
     });
   }
@@ -656,17 +719,70 @@ export function ItemViewer({
           )}
 
           {isNote && mode === "edit" && (
-            <Textarea
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value);
-                setDirty(true);
-                editedRef.current = true;
-                editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
-              }}
-              placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}
-              className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
-            />
+            <>
+              <div className="not-prose mb-2 flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => runAssist("rewrite")}
+                  disabled={assistBusy !== null}
+                  title="Rewrite the selected text"
+                >
+                  {assistBusy === "rewrite" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Repeat className="h-3 w-3" />
+                  )}
+                  Rewrite
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => runAssist("summarize")}
+                  disabled={assistBusy !== null}
+                  title="Summarize the selected text"
+                >
+                  {assistBusy === "summarize" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Minimize2 className="h-3 w-3" />
+                  )}
+                  Summarize
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => runAssist("continue")}
+                  disabled={assistBusy !== null}
+                  title="Continue writing from the cursor"
+                >
+                  {assistBusy === "continue" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ArrowRightCircle className="h-3 w-3" />
+                  )}
+                  Continue
+                </Button>
+              </div>
+              <Textarea
+                ref={contentTextareaRef}
+                value={content}
+                onChange={(e) => {
+                  setContent(e.target.value);
+                  setDirty(true);
+                  editedRef.current = true;
+                  editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
+                }}
+                onSelect={trackSelection}
+                onKeyUp={trackSelection}
+                onClick={trackSelection}
+                placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}
+                className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
+              />
+            </>
           )}
 
           {isNote && mode === "preview" && (

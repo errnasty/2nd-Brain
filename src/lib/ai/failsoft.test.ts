@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { distill } from "./distill";
+import { editAssist } from "./edit-assist";
 import { generateFlashcards } from "./flashcards";
 import { generateQuiz } from "./quiz";
 import { classifyItemSkills } from "@/lib/gamify/skill-classifier";
@@ -41,11 +42,20 @@ describe("AI helpers fail soft", () => {
     await expect(classifyItemSkills("Title", "content", [])).resolves.toBeNull();
   });
 
+  it("editAssist returns null with no key", async () => {
+    const ctx = { title: "Title", before: "", after: "" };
+    await expect(editAssist("rewrite", "some selected text", ctx)).resolves.toBeNull();
+    await expect(editAssist("continue", "", ctx)).resolves.toBeNull();
+  });
+
   it("guards empty content even when a key is present (no network call)", async () => {
     process.env.ANTHROPIC_API_KEY = "test-key-not-used";
     await expect(generateFlashcards("Title", "   ")).resolves.toEqual([]);
     await expect(generateQuiz([{ title: "Title", text: "   " }])).resolves.toEqual([]);
     await expect(distill("Title", "")).resolves.toBeNull();
     await expect(classifyItemSkills("", "", [])).resolves.toBeNull();
+    await expect(
+      editAssist("rewrite", "   ", { title: "Title", before: "", after: "" }),
+    ).resolves.toBeNull();
   });
 });
