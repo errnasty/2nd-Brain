@@ -27,7 +27,7 @@ export default function GlobalError({
           placeItems: "center",
           minHeight: "100dvh",
           margin: 0,
-          background: "#0a0a0a",
+          background: "#000000",
           color: "#e5e5e5",
         }}
       >

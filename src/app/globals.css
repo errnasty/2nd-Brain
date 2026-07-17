@@ -45,28 +45,30 @@
 
   .dark {
     /* Warm dark — deep charcoal/leather, not cold blue-grey */
-    --background: 24 8% 8%;
+    /* True-black canvas (OLED). Surfaces separate via borders + the raised
+       popover/accent tints below, not via a lifted background lightness. */
+    --background: 0 0% 0%;
     --foreground: 40 12% 90%;
-    --card: 24 8% 8%;
+    --card: 0 0% 0%;
     --card-foreground: 40 12% 90%;
-    --popover: 24 8% 10%;
+    --popover: 24 8% 7%;
     --popover-foreground: 40 12% 90%;
     --primary: 40 12% 90%;
-    --primary-foreground: 24 8% 8%;
+    --primary-foreground: 0 0% 0%;
     --secondary: 24 6% 14%;
     --secondary-foreground: 40 12% 90%;
-    --muted: 24 6% 14%;
+    --muted: 24 6% 13%;
     --muted-foreground: 38 5% 55%;
-    --accent: 24 6% 14%;
+    --accent: 24 6% 15%;
     --accent-foreground: 40 12% 90%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
-    --border: 24 6% 17%;
-    --input: 24 6% 17%;
+    --border: 24 6% 16%;
+    --input: 24 6% 16%;
     --ring: 40 10% 76%;
     /* Lighter brass for dark mode (desaturated/raised L for contrast). */
     --brand: 36 65% 60%;
-    --brand-foreground: 24 8% 8%;
+    --brand-foreground: 0 0% 0%;
   }
 
   /* ── Colour palettes ──────────────────────────────────────────────────
@@ -101,25 +103,25 @@
   }
   /* Mono (dark) */
   .dark[data-palette="mono"] {
-    --background: 0 0% 7%;
+    --background: 0 0% 0%;
     --foreground: 0 0% 92%;
-    --card: 0 0% 7%;
+    --card: 0 0% 0%;
     --card-foreground: 0 0% 92%;
-    --popover: 0 0% 9%;
+    --popover: 0 0% 7%;
     --popover-foreground: 0 0% 92%;
     --primary: 0 0% 92%;
-    --primary-foreground: 0 0% 7%;
-    --secondary: 0 0% 14%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 13%;
     --secondary-foreground: 0 0% 92%;
-    --muted: 0 0% 14%;
+    --muted: 0 0% 13%;
     --muted-foreground: 0 0% 58%;
-    --accent: 0 0% 17%;
+    --accent: 0 0% 16%;
     --accent-foreground: 0 0% 92%;
-    --border: 0 0% 18%;
-    --input: 0 0% 18%;
+    --border: 0 0% 17%;
+    --input: 0 0% 17%;
     --ring: 0 0% 80%;
     --brand: 0 0% 90%;
-    --brand-foreground: 0 0% 7%;
+    --brand-foreground: 0 0% 0%;
   }
 
   /* Ocean — cool slate neutrals, blue accent (light) */
@@ -146,25 +148,25 @@
   }
   /* Ocean (dark) */
   .dark[data-palette="ocean"] {
-    --background: 215 28% 9%;
+    --background: 0 0% 0%;
     --foreground: 210 16% 90%;
-    --card: 215 28% 9%;
+    --card: 0 0% 0%;
     --card-foreground: 210 16% 90%;
-    --popover: 215 28% 11%;
+    --popover: 215 28% 8%;
     --popover-foreground: 210 16% 90%;
     --primary: 210 16% 90%;
-    --primary-foreground: 215 28% 9%;
-    --secondary: 215 20% 15%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 215 20% 14%;
     --secondary-foreground: 210 16% 90%;
-    --muted: 215 20% 15%;
+    --muted: 215 20% 14%;
     --muted-foreground: 214 12% 60%;
-    --accent: 215 20% 18%;
+    --accent: 215 20% 17%;
     --accent-foreground: 210 16% 90%;
-    --border: 215 18% 19%;
-    --input: 215 18% 19%;
+    --border: 215 18% 18%;
+    --input: 215 18% 18%;
     --ring: 210 90% 66%;
     --brand: 210 90% 66%;
-    --brand-foreground: 215 28% 9%;
+    --brand-foreground: 0 0% 0%;
   }
 
   /* Forest — green accent (light) */
@@ -191,25 +193,25 @@
   }
   /* Forest (dark) */
   .dark[data-palette="forest"] {
-    --background: 150 14% 8%;
+    --background: 0 0% 0%;
     --foreground: 120 12% 90%;
-    --card: 150 14% 8%;
+    --card: 0 0% 0%;
     --card-foreground: 120 12% 90%;
-    --popover: 150 14% 10%;
+    --popover: 150 14% 7%;
     --popover-foreground: 120 12% 90%;
     --primary: 120 12% 90%;
-    --primary-foreground: 150 14% 8%;
-    --secondary: 150 10% 14%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 150 10% 13%;
     --secondary-foreground: 120 12% 90%;
-    --muted: 150 10% 14%;
+    --muted: 150 10% 13%;
     --muted-foreground: 140 8% 58%;
-    --accent: 150 10% 17%;
+    --accent: 150 10% 16%;
     --accent-foreground: 120 12% 90%;
-    --border: 150 10% 18%;
-    --input: 150 10% 18%;
+    --border: 150 10% 17%;
+    --input: 150 10% 17%;
     --ring: 145 50% 58%;
     --brand: 145 50% 58%;
-    --brand-foreground: 150 14% 8%;
+    --brand-foreground: 0 0% 0%;
   }
 }
 
