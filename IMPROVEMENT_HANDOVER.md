@@ -6,6 +6,13 @@ and added more. This continues (and supersedes the open items of)
 `OPTIMIZATION_HANDOVER.md` / `OPTIMIZATION_PLAN.md` — read those for the perf
 history; **do not redo anything they mark done.**
 
+> **Update 2026-07-12 (consolidation):** `OPTIMIZATION_PLAN.md` and
+> `OPTIMIZATION_HANDOVER.md` have been moved to `docs/history/` — all their
+> open items are resolved or carried into the comprehensive plan at
+> `.hermes/plans/2026-07-12_200000-comprehensive-improvement-all-aspects.md`.
+> This file remains the authoritative handover for owner-action items and
+> the full-surface backlog.
+
 Starting point for you: tree is green (`npx tsc --noEmit` clean, `npm test`
 128/128, `npm run lint` = eslint with `--max-warnings 0` passing,
 `npm run build` exit 0).
@@ -237,9 +244,12 @@ complete map. Impact/effort tags: 🔴 high-impact, 🟡 medium, ⚪ polish.
 - 🟡 CLAUDE.md mandates `graphify query` but `graphify-out/` doesn't exist in
   the repo — either commit the graph artifacts or drop the section (agents
   waste a turn discovering this every session).
-- ⚪ Three overlapping handoff docs now exist (OPTIMIZATION_PLAN.md,
+- ⚪ ~~Three overlapping handoff docs now exist (OPTIMIZATION_PLAN.md,
   OPTIMIZATION_HANDOVER.md, this file). Fold the two older ones into a
-  docs/history/ folder or delete after extracting the still-true constraints.
+  docs/history/ folder or delete after extracting the still-true constraints.~~
+  **Done (2026-07-12):** the two older docs are now in `docs/history/`.
+  A comprehensive improvement plan covering all remaining backlog items lives
+  at `.hermes/plans/2026-07-12_200000-comprehensive-improvement-all-aspects.md`.
 
 ### F. Observability & operations
 - 🟡 Error monitoring (already roadmap #4) — still the biggest ops gap.
