@@ -262,7 +262,7 @@ export function DirectoryNav({
             {creatingFolder ? (
               <input
                 autoFocus
-                className="flex-1 bg-transparent text-[10px] uppercase tracking-wider outline-none border-b border-primary py-0.5"
+                className="flex-1 bg-transparent text-[10px] max-md:text-base uppercase tracking-wider outline-none border-b border-primary py-0.5"
                 placeholder="Folder name…"
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
@@ -579,7 +579,7 @@ function FolderRow({
             {renaming ? (
               <input
                 ref={inputRef}
-                className="flex-1 bg-transparent text-sm outline-none border-b border-primary py-0"
+                className="flex-1 bg-transparent text-sm max-md:text-base outline-none border-b border-primary py-0"
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
                 onBlur={commitRename}

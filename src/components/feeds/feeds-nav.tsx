@@ -295,7 +295,7 @@ export function FeedsNav({
             {creatingFolder ? (
               <input
                 ref={newFolderRef}
-                className="flex-1 bg-transparent text-[10px] uppercase tracking-wider outline-none border-b border-primary py-0.5"
+                className="flex-1 bg-transparent text-[10px] max-md:text-base uppercase tracking-wider outline-none border-b border-primary py-0.5"
                 placeholder="Folder name…"
                 value={newFolderName}
                 onChange={(e) => setNewFolderName(e.target.value)}
@@ -514,7 +514,7 @@ function FolderSection({
               {renaming ? (
                 <input
                   ref={inputRef}
-                  className="flex-1 bg-transparent border-b border-primary outline-none text-sm py-0"
+                  className="flex-1 bg-transparent border-b border-primary outline-none text-sm max-md:text-base py-0"
                   value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
                   onBlur={commitRename}
@@ -699,7 +699,7 @@ function FeedRow({
               )}
               <input
                 ref={inputRef}
-                className="min-w-0 flex-1 border-b border-primary bg-transparent py-0 text-sm outline-none"
+                className="min-w-0 flex-1 border-b border-primary bg-transparent py-0 text-sm max-md:text-base outline-none"
                 value={renameValue}
                 onChange={(e) => setRenameValue(e.target.value)}
                 onBlur={commitRename}

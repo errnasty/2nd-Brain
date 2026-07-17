@@ -377,8 +377,8 @@ export function TagManager({
               </th>
               <th className="px-4 py-2.5 font-semibold">Tag</th>
               <th className="px-4 py-2.5 font-semibold">Used by</th>
-              <th className="px-4 py-2.5 font-semibold">Distribution</th>
-              <th className="px-4 py-2.5 font-semibold">Breakdown</th>
+              <th className="hidden px-4 py-2.5 font-semibold sm:table-cell">Distribution</th>
+              <th className="hidden px-4 py-2.5 font-semibold sm:table-cell">Breakdown</th>
               <th className="px-4 py-2.5 text-right font-semibold">Actions</th>
             </tr>
           </thead>
@@ -445,7 +445,7 @@ export function TagManager({
                     )}
                   </td>
                   <td className="px-4 py-3 tabular-nums">{u.total}</td>
-                  <td className="w-40 px-4 py-3">
+                  <td className="hidden w-40 px-4 py-3 sm:table-cell">
                     {/* Brass distribution bar — at-a-glance tag weight */}
                     <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                       <div
@@ -458,7 +458,7 @@ export function TagManager({
                       />
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-xs italic text-muted-foreground">
+                  <td className="hidden px-4 py-3 text-xs italic text-muted-foreground sm:table-cell">
                     {[
                       u.directoryItem > 0 ? `${u.directoryItem} dir.` : null,
                       u.article > 0 ? `${u.article} art.` : null,
