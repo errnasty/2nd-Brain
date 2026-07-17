@@ -8,7 +8,7 @@ import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { createNoteAction } from "@/app/(app)/directory/actions";
+import { autoTagItemAction, createNoteAction, saveUrlToDirectoryAction } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
 
 /**
@@ -42,6 +42,30 @@ export function QuickCapture() {
     }
   }, [open]);
 
+  // A pasted single bare URL (nothing else typed) captures the whole page
+  // instead of a note — "grab the idea" extends naturally to "grab the page".
+  const soleText = body.trim() || title.trim();
+  const urlToSave = /^https?:\/\/\S+$/.test(soleText) ? soleText : null;
+
+  async function saveUrl(thenOpen: boolean) {
+    if (!urlToSave) return;
+    setSaving(true);
+    const r = await saveUrlToDirectoryAction(urlToSave, null);
+    setSaving(false);
+    if (!r.ok) {
+      toast.error(r.error);
+      return;
+    }
+    setOpen(false);
+    if (thenOpen) {
+      router.push(`/directory?item=${r.itemId}`);
+    } else {
+      toast.success(r.alreadySaved ? "Already in your Directory" : "Page saved", {
+        action: { label: "Open", onClick: () => router.push(`/directory?item=${r.itemId}`) },
+      });
+    }
+  }
+
   async function save(thenOpen: boolean) {
     // Derive a title from the first line of the body when none is given, so a
     // pure brain-dump still saves with one keystroke.
@@ -55,6 +79,10 @@ export function QuickCapture() {
       return;
     }
     setOpen(false);
+    // A capture is a finished note — tag it now rather than waiting for the
+    // user to open and re-close it in the Directory. Same length gate as the
+    // viewer's auto-tag-on-finish so trivial one-liners aren't sent to the AI.
+    if (body.trim().length >= 80) void autoTagItemAction(r.itemId);
     if (thenOpen) {
       router.push(`/directory?item=${r.itemId}`);
     } else {
@@ -68,7 +96,8 @@ export function QuickCapture() {
     // Cmd/Ctrl+Enter saves; Shift adds the "open after save" intent.
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
       e.preventDefault();
-      void save(e.shiftKey);
+      if (urlToSave) void saveUrl(e.shiftKey);
+      else void save(e.shiftKey);
     }
   }
 
@@ -98,21 +127,31 @@ export function QuickCapture() {
             <Textarea
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder="Capture a thought, quote, or link… Markdown works."
+              placeholder="Capture a thought, quote, or link… paste a bare URL to save the whole page."
               className="min-h-[40vh] resize-none border-0 px-1 text-sm leading-relaxed shadow-none focus-visible:ring-0"
             />
           </div>
           <div className="flex items-center justify-between gap-3 border-t border-border px-4 py-2 text-[11px] text-muted-foreground">
             <span>
-              <kbd className="rounded border border-border bg-muted px-1">⌘/Ctrl ⏎</kbd> save ·{" "}
-              <kbd className="rounded border border-border bg-muted px-1">⇧⌘ ⏎</kbd> save &amp; open
+              {urlToSave ? (
+                "Link detected — saves the full page"
+              ) : (
+                <>
+                  <kbd className="rounded border border-border bg-muted px-1">⌘/Ctrl ⏎</kbd> save ·{" "}
+                  <kbd className="rounded border border-border bg-muted px-1">⇧⌘ ⏎</kbd> save &amp; open
+                </>
+              )}
             </span>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={saving}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={() => save(false)} disabled={saving || (!body.trim() && !title.trim())}>
-                {saving ? "Saving…" : "Capture"}
+              <Button
+                size="sm"
+                onClick={() => (urlToSave ? saveUrl(false) : save(false))}
+                disabled={saving || (!body.trim() && !title.trim())}
+              >
+                {saving ? "Saving…" : urlToSave ? "Save page" : "Capture"}
               </Button>
             </div>
           </div>

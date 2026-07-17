@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BarChart3, Brain, CalendarDays, CheckSquare, HelpCircle } from "lucide-react";
+import { BarChart3, Brain, CalendarDays, CheckSquare, HelpCircle, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { localKey, utcKey } from "@/lib/study/calendar";
 import { StatsOverview } from "./stats-overview";
@@ -10,7 +10,9 @@ import { CalendarView } from "./calendar-view";
 import { TasksView } from "@/components/tasks/tasks-view";
 import { ReviewView } from "@/components/review/review-view";
 import { QuizTab } from "./quiz-tab";
+import { CardsTab } from "./cards-tab";
 import { SessionRunner } from "./session-runner";
+import { lastLocation } from "@/lib/last-location";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";
 import type { DueCard, LeechCard } from "@/app/(app)/review/actions";
@@ -18,13 +20,14 @@ import type { QuizListItem } from "@/app/(app)/study/quiz-actions";
 import type { SessionPlan } from "@/app/(app)/study/session-actions";
 import type { GameState } from "@/lib/gamify/state";
 
-export type StudyTab = "overview" | "tasks" | "review" | "calendar" | "quiz";
+export type StudyTab = "overview" | "tasks" | "review" | "calendar" | "quiz" | "cards";
 
 const TABS: { id: StudyTab; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "Overview", icon: <BarChart3 className="h-3.5 w-3.5" /> },
   { id: "tasks", label: "Tasks", icon: <CheckSquare className="h-3.5 w-3.5" /> },
   { id: "review", label: "Review", icon: <Brain className="h-3.5 w-3.5" /> },
   { id: "quiz", label: "Quiz", icon: <HelpCircle className="h-3.5 w-3.5" /> },
+  { id: "cards", label: "Cards", icon: <Layers className="h-3.5 w-3.5" /> },
   { id: "calendar", label: "Calendar", icon: <CalendarDays className="h-3.5 w-3.5" /> },
 ];
 
@@ -68,6 +71,19 @@ export function StudyShell({
     setTab(defaultTab);
   }, [defaultTab]);
 
+  // Resume: on a bare visit (no explicit ?tab), restore the last tab used so
+  // "Study" lands where you left off instead of always on Overview.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab")) return;
+    const saved = lastLocation.getStudyTab();
+    if (saved && saved !== "overview" && TABS.some((t) => t.id === saved)) {
+      setTab(saved as StudyTab);
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", saved);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
+
   // Due-today task count for the Tasks tab badge (overdue + due today).
   const todayKey = localKey(new Date());
   const taskDue = tasks.filter(
@@ -76,6 +92,7 @@ export function StudyShell({
 
   function select(next: StudyTab) {
     setTab(next);
+    lastLocation.setStudyTab(next);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
     window.history.replaceState(null, "", url.toString());
@@ -172,6 +189,7 @@ export function StudyShell({
           />
         )}
         {tab === "quiz" && <QuizTab quizzes={quizzes} initialQuizId={quizId} />}
+        {tab === "cards" && <CardsTab />}
         {tab === "calendar" && <CalendarView initial={calendar} />}
       </div>
     </div>

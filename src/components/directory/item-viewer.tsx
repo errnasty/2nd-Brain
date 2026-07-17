@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, Loader2, MoreVertical, Pencil, Rabbit, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, Loader2, Minimize2, MoreVertical, Pencil, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -20,11 +20,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
+  autoTagItemAction,
   deleteDirectoryItemAction,
   distillItemAction,
   updateNoteAction,
   type ItemSummary,
 } from "@/app/(app)/directory/actions";
+import { editAssistAction } from "@/app/(app)/directory/ai-actions";
+import type { EditAssistMode } from "@/lib/ai/edit-assist";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
 import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
 import { celebrate } from "@/lib/gamify/celebrate";
@@ -80,6 +83,8 @@ export function ItemViewer({
   item,
   onClose,
   onRequestDelete,
+  startInEdit = false,
+  onStartInEditConsumed,
   listCollapsed = false,
   onToggleList,
 }: {
@@ -88,6 +93,11 @@ export function ItemViewer({
   /** Delete this item via the shell's undo-toast flow (it also closes the
    *  viewer). When absent, falls back to a confirm-then-delete. */
   onRequestDelete?: (id: string) => void;
+  /** True for a note the shell just created — focus + select the title so
+   *  typing immediately replaces "Untitled note". One-shot: call
+   *  onStartInEditConsumed once handled so it doesn't refire. */
+  startInEdit?: boolean;
+  onStartInEditConsumed?: () => void;
   /** Whether the Directory list (third bar) is collapsed. */
   listCollapsed?: boolean;
   /** Toggle the Directory list open/closed (desktop). */
@@ -106,6 +116,7 @@ export function ItemViewer({
   const [queryOpen, setQueryOpen] = useState(false);
   const [rabbitholeOpen, setRabbitholeOpen] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [distilling, setDistilling] = useState(false);
   const [makingCards, setMakingCards] = useState(false);
@@ -116,6 +127,35 @@ export function ItemViewer({
   // when switching items / closing / unloading — refs survive the re-render that
   // a new item triggers, so this still holds the OUTGOING item's text.
   const editBufRef = useRef<{ id: string; kind: string; title: string; content: string } | null>(null);
+  // True once a note has actually been typed into this "session" (since it was
+  // selected), reset per-item. Drives the auto-tag-on-finish below — once per
+  // edit session, not on every keystroke or every preview/edit toggle.
+  const editedRef = useRef(false);
+
+  // AI edit-assistant (rewrite/summarize/continue) state for the note editor.
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const [selRange, setSelRange] = useState({ start: 0, end: 0 });
+  const [assistBusy, setAssistBusy] = useState<EditAssistMode | null>(null);
+  const assistSnapshotRef = useRef<string | null>(null);
+
+  function trackSelection(e: React.SyntheticEvent<HTMLTextAreaElement>) {
+    const el = e.currentTarget;
+    setSelRange({ start: el.selectionStart, end: el.selectionEnd });
+  }
+
+  /** Fire-and-forget auto-tag for a note the user just finished editing.
+   *  autoTagDirectoryItem already no-ops server-side if the item has tags, so
+   *  this is safe to call even when nothing will actually change. */
+  const maybeAutoTag = useCallback((id: string, kind: string, text: string) => {
+    if (!editedRef.current) return;
+    editedRef.current = false;
+    if (kind !== "user_note" || text.trim().length < 80) return;
+    void autoTagItemAction(id).then((r) => {
+      if (r.ok && r.tags.length > 0) {
+        toast.info(`Tagged: ${r.tags.map((t) => `#${t}`).join(" ")}`);
+      }
+    });
+  }, []);
 
   const flushSave = useCallback(() => {
     const b = editBufRef.current;
@@ -144,6 +184,7 @@ export function ItemViewer({
     setTitle(item.title);
     setContent("");
     setDirty(false);
+    editedRef.current = false;
     setQueryOpen(false);
     setRabbitholeOpen(false);
     setMode(item.kind === "user_note" ? "edit" : "preview");
@@ -175,9 +216,13 @@ export function ItemViewer({
       // Switching items inside the 800ms autosave debounce would otherwise drop
       // the pending edit — flush it now.
       flushSave();
+      // Leaving a note that was actually edited: auto-tag it. Covers both
+      // switching to a different item and closing the panel (item → null).
+      const buf = editBufRef.current;
+      if (buf) maybeAutoTag(buf.id, buf.kind, buf.content);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the item ID only; the `item` object identity churns on every parent render
-  }, [item?.id, flushSave]);
+  }, [item?.id, flushSave, maybeAutoTag]);
 
   // Flush a pending edit if the tab/window is closing.
   useEffect(() => {
@@ -185,6 +230,22 @@ export function ItemViewer({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [flushSave]);
+
+  // A just-created note: focus + select the title so the first keystroke
+  // replaces "Untitled note" instead of requiring a click + select-all first.
+  useEffect(() => {
+    if (!item || !startInEdit || item.kind !== "user_note") return;
+    const raf = requestAnimationFrame(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    });
+    onStartInEditConsumed?.();
+    return () => cancelAnimationFrame(raf);
+    // onStartInEditConsumed intentionally omitted: it's a fresh closure from the
+    // parent every render, and including it would refire this on every render
+    // rather than only when the item/flag actually change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id, startInEdit]);
 
   // For saved articles, hit the existing article endpoints for the rendered body.
   useEffect(() => {
@@ -330,6 +391,56 @@ export function ItemViewer({
     });
   }
 
+  function runAssist(mode: EditAssistMode) {
+    if (!item || assistBusy) return;
+    const { start, end } = selRange;
+    const selection = content.slice(start, end);
+    if (mode !== "continue" && !selection.trim()) {
+      toast.error("Select some text first");
+      return;
+    }
+    setAssistBusy(mode);
+    startTransition(async () => {
+      try {
+        const r = await editAssistAction({
+          mode,
+          selection,
+          title,
+          before: content.slice(0, start),
+          after: content.slice(end),
+        });
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
+        const snapshot = content;
+        const next = content.slice(0, start) + r.text + content.slice(end);
+        assistSnapshotRef.current = snapshot;
+        setContent(next);
+        setDirty(true);
+        editedRef.current = true;
+        editBufRef.current = { id: item.id, kind: item.kind, title, content: next };
+        const label = mode === "rewrite" ? "Rewrote" : mode === "summarize" ? "Summarized" : "Continued";
+        toast.success(label, {
+          action: {
+            label: "Undo",
+            onClick: () => {
+              const prev = assistSnapshotRef.current;
+              if (prev === null) return;
+              setContent(prev);
+              setDirty(true);
+              editBufRef.current = { id: item.id, kind: item.kind, title, content: prev };
+            },
+          },
+        });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Couldn't run the assistant");
+      } finally {
+        setAssistBusy(null);
+      }
+    });
+  }
+
   if (!item) {
     return (
       <section className="hidden flex-1 items-center justify-center text-sm text-muted-foreground lg:flex">
@@ -414,7 +525,10 @@ export function ItemViewer({
               <Pencil className="mr-1 inline h-3 w-3" /> Edit
             </button>
             <button
-              onClick={() => setMode("preview")}
+              onClick={() => {
+                setMode("preview");
+                if (item) maybeAutoTag(item.id, item.kind, content);
+              }}
               className={cn(
                 "rounded px-2 py-0.5 text-xs transition-colors",
                 mode === "preview"
@@ -427,9 +541,9 @@ export function ItemViewer({
           </div>
         )}
 
-        {isArticle && articleData?.url && (
+        {isArticle && (articleData?.url ?? full?.sourceUrl) && (
           <Button size="icon" variant="ghost" asChild title="Open original">
-            <a href={articleData.url} target="_blank" rel="noopener noreferrer">
+            <a href={articleData?.url ?? full?.sourceUrl ?? "#"} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="h-4 w-4" />
             </a>
           </Button>
@@ -578,10 +692,12 @@ export function ItemViewer({
           {/* Title */}
           {(isNote || isDoc) && mode === "edit" ? (
             <Input
+              ref={titleInputRef}
               value={title}
               onChange={(e) => {
                 setTitle(e.target.value);
                 setDirty(true);
+                if (item.kind === "user_note") editedRef.current = true;
                 editBufRef.current = { id: item.id, kind: item.kind, title: e.target.value, content };
               }}
               className="editorial-display border-0 px-0 text-3xl font-bold tracking-tight shadow-none focus-visible:ring-0"
@@ -603,16 +719,70 @@ export function ItemViewer({
           )}
 
           {isNote && mode === "edit" && (
-            <Textarea
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value);
-                setDirty(true);
-                editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
-              }}
-              placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}
-              className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
-            />
+            <>
+              <div className="not-prose mb-2 flex items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => runAssist("rewrite")}
+                  disabled={assistBusy !== null}
+                  title="Rewrite the selected text"
+                >
+                  {assistBusy === "rewrite" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Repeat className="h-3 w-3" />
+                  )}
+                  Rewrite
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => runAssist("summarize")}
+                  disabled={assistBusy !== null}
+                  title="Summarize the selected text"
+                >
+                  {assistBusy === "summarize" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Minimize2 className="h-3 w-3" />
+                  )}
+                  Summarize
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 gap-1.5 px-2 text-xs"
+                  onClick={() => runAssist("continue")}
+                  disabled={assistBusy !== null}
+                  title="Continue writing from the cursor"
+                >
+                  {assistBusy === "continue" ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ArrowRightCircle className="h-3 w-3" />
+                  )}
+                  Continue
+                </Button>
+              </div>
+              <Textarea
+                ref={contentTextareaRef}
+                value={content}
+                onChange={(e) => {
+                  setContent(e.target.value);
+                  setDirty(true);
+                  editedRef.current = true;
+                  editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
+                }}
+                onSelect={trackSelection}
+                onKeyUp={trackSelection}
+                onClick={trackSelection}
+                placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}
+                className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
+              />
+            </>
           )}
 
           {isNote && mode === "preview" && (
@@ -633,6 +803,12 @@ export function ItemViewer({
                 <div dangerouslySetInnerHTML={{ __html: articleData.fullText }} />
               ) : articleData?.excerpt ? (
                 <p>{articleData.excerpt}</p>
+              ) : !full?.articleId && full?.content ? (
+                // A URL saved directly (not via an RSS feed article) — the
+                // extracted text has no HTML/markdown structure, so render it
+                // as plain preformatted text rather than through the Markdown
+                // renderer (which would misread stray *, _, # in the prose).
+                <div className="whitespace-pre-wrap">{full.content}</div>
               ) : (
                 <p className="text-muted-foreground italic">Article body not available.</p>
               )}

@@ -1,57 +1,14 @@
 "use client";
 
-import * as React from "react";
 import { Brain, Eye, FolderInput, HelpCircle, Inbox, Trash2 } from "lucide-react";
-import {
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuSub,
-  ContextMenuSubContent,
-  ContextMenuSubTrigger,
-} from "@/components/ui/context-menu";
-import {
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-} from "@/components/ui/dropdown-menu";
+import type { MenuPrimitives } from "@/components/ui/menu-primitives";
 import type { DirectoryFolder } from "@/lib/db/schema";
 
-// The same actions are offered two ways — right-click (ContextMenu) and a hover
-// kebab (DropdownMenu). Those are different Radix primitives, so we render the
-// item list once against an injected set of components rather than duplicating
-// the JSX (and, worse, the handler wiring) in both menus.
-type MenuItemComp = React.ComponentType<{
-  onClick?: (e: React.MouseEvent) => void;
-  className?: string;
-  children: React.ReactNode;
-}>;
-type MenuPlainComp = React.ComponentType<{ className?: string; children?: React.ReactNode }>;
-
-export type MenuPrimitives = {
-  Item: MenuItemComp;
-  Sub: MenuPlainComp;
-  SubTrigger: MenuPlainComp;
-  SubContent: MenuPlainComp;
-  Separator: React.ComponentType<{ className?: string }>;
-};
-
-export const CONTEXT_MENU_PRIMITIVES: MenuPrimitives = {
-  Item: ContextMenuItem as unknown as MenuItemComp,
-  Sub: ContextMenuSub as unknown as MenuPlainComp,
-  SubTrigger: ContextMenuSubTrigger as unknown as MenuPlainComp,
-  SubContent: ContextMenuSubContent as unknown as MenuPlainComp,
-  Separator: ContextMenuSeparator as unknown as MenuPrimitives["Separator"],
-};
-
-export const DROPDOWN_MENU_PRIMITIVES: MenuPrimitives = {
-  Item: DropdownMenuItem as unknown as MenuItemComp,
-  Sub: DropdownMenuSub as unknown as MenuPlainComp,
-  SubTrigger: DropdownMenuSubTrigger as unknown as MenuPlainComp,
-  SubContent: DropdownMenuSubContent as unknown as MenuPlainComp,
-  Separator: DropdownMenuSeparator as unknown as MenuPrimitives["Separator"],
-};
+export {
+  CONTEXT_MENU_PRIMITIVES,
+  DROPDOWN_MENU_PRIMITIVES,
+  type MenuPrimitives,
+} from "@/components/ui/menu-primitives";
 
 export function ItemRowMenuItems({
   prims,
