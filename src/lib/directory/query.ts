@@ -49,29 +49,30 @@ export async function fetchDirectoryPage(
 ): Promise<DirectoryPage> {
   const { folder = null, tagIds = [], offset = 0, limit = 50, sort = "updated" } = opts;
 
-  // Resolve the item ids matching ALL selected tags (AND semantics).
-  let tagFilteredIds: string[] | null = null;
-  if (tagIds.length > 0) {
-    const matched = await db
-      .select({ itemId: itemTags.itemId })
-      .from(itemTags)
-      .where(
-        and(
-          eq(itemTags.userId, userId),
-          eq(itemTags.itemKind, "directory_item"),
-          inArray(itemTags.tagId, tagIds),
-        ),
-      )
-      .groupBy(itemTags.itemId)
-      .having(sql`count(distinct ${itemTags.tagId}) = ${tagIds.length}`);
-    tagFilteredIds = matched.map((m) => m.itemId);
-    if (tagFilteredIds.length === 0) return { items: [], itemTagsById: {}, hasMore: false };
-  }
-
   const conds = [eq(directoryItems.userId, userId)];
   if (folder === "unsorted") conds.push(isNull(directoryItems.folderId));
   else if (folder) conds.push(eq(directoryItems.folderId, folder));
-  if (tagFilteredIds) conds.push(inArray(directoryItems.id, tagFilteredIds));
+  if (tagIds.length > 0) {
+    // Items carrying ALL selected tags (AND semantics). Inlined as a subquery
+    // so it doesn't cost a serial round-trip before the page query can start.
+    conds.push(
+      inArray(
+        directoryItems.id,
+        db
+          .select({ itemId: itemTags.itemId })
+          .from(itemTags)
+          .where(
+            and(
+              eq(itemTags.userId, userId),
+              eq(itemTags.itemKind, "directory_item"),
+              inArray(itemTags.tagId, tagIds),
+            ),
+          )
+          .groupBy(itemTags.itemId)
+          .having(sql`count(distinct ${itemTags.tagId}) = ${tagIds.length}`),
+      ),
+    );
+  }
 
   // Sort, always with an id tiebreaker → a total order so offset paging
   // (infinite scroll) can't skip/duplicate rows sharing a sort key.
@@ -90,33 +91,40 @@ export async function fetchDirectoryPage(
           ? [desc(tagCountExpr), desc(directoryItems.updatedAt), desc(directoryItems.id)]
           : [desc(directoryItems.updatedAt), desc(directoryItems.id)];
 
-  const rows = await db
-    .select({
-      id: directoryItems.id,
-      title: directoryItems.title,
-      preview: sql<string | null>`substring(${directoryItems.content}, 1, 240)`.as("preview"),
-      kind: directoryItems.kind,
-      folderId: directoryItems.folderId,
-      sourceUrl: directoryItems.sourceUrl,
-      articleId: directoryItems.articleId,
-      documentId: directoryItems.documentId,
-      readingStatus: directoryItems.readingStatus,
-      createdAt: directoryItems.createdAt,
-      updatedAt: directoryItems.updatedAt,
-    })
+  // The tag-name lookup targets exactly this page's item ids. Instead of
+  // waiting for the item rows and paying a second round-trip, both queries run
+  // in parallel: the tag query scopes itself with a subquery repeating the same
+  // filter/order/limit (cheap and indexed; re-evaluating it costs far less than
+  // a serial round-trip). Tags for the +1 sentinel row are simply unused.
+  const pickedIds = db
+    .select({ id: directoryItems.id })
     .from(directoryItems)
     .where(and(...conds))
     .orderBy(...orderBy)
-    .limit(limit + 1) // +1 sentinel to detect more
+    .limit(limit + 1)
     .offset(offset);
 
-  const hasMore = rows.length > limit;
-  const items = (hasMore ? rows.slice(0, limit) : rows) as DirItem[];
-
-  let itemTagsById: Record<string, string[]> = {};
-  if (items.length > 0) {
-    const ids = items.map((i) => i.id);
-    const tagRows = await db
+  const [rows, tagRows] = await Promise.all([
+    db
+      .select({
+        id: directoryItems.id,
+        title: directoryItems.title,
+        preview: sql<string | null>`substring(${directoryItems.content}, 1, 240)`.as("preview"),
+        kind: directoryItems.kind,
+        folderId: directoryItems.folderId,
+        sourceUrl: directoryItems.sourceUrl,
+        articleId: directoryItems.articleId,
+        documentId: directoryItems.documentId,
+        readingStatus: directoryItems.readingStatus,
+        createdAt: directoryItems.createdAt,
+        updatedAt: directoryItems.updatedAt,
+      })
+      .from(directoryItems)
+      .where(and(...conds))
+      .orderBy(...orderBy)
+      .limit(limit + 1) // +1 sentinel to detect more
+      .offset(offset),
+    db
       .select({ itemId: itemTags.itemId, name: tags.name })
       .from(itemTags)
       .innerJoin(tags, eq(tags.id, itemTags.tagId))
@@ -124,14 +132,18 @@ export async function fetchDirectoryPage(
         and(
           eq(itemTags.userId, userId),
           eq(itemTags.itemKind, "directory_item"),
-          inArray(itemTags.itemId, ids),
+          inArray(itemTags.itemId, pickedIds),
         ),
-      );
-    itemTagsById = tagRows.reduce((acc, r) => {
-      (acc[r.itemId] ??= []).push(r.name);
-      return acc;
-    }, {} as Record<string, string[]>);
-  }
+      ),
+  ]);
+
+  const hasMore = rows.length > limit;
+  const items = (hasMore ? rows.slice(0, limit) : rows) as DirItem[];
+
+  const itemTagsById = tagRows.reduce((acc, r) => {
+    (acc[r.itemId] ??= []).push(r.name);
+    return acc;
+  }, {} as Record<string, string[]>);
 
   return { items, itemTagsById, hasMore };
 }
