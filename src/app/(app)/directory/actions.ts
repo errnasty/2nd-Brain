@@ -186,6 +186,23 @@ async function autoTagDirectoryItem(userId: string, itemId: string) {
   return persisted;
 }
 
+/**
+ * Manual/on-demand trigger for auto-tagging (e.g. "tag this note now that I'm
+ * done editing it"). Thin wrapper — autoTagDirectoryItem already no-ops when
+ * the item has tags, so calling this repeatedly on the same item is safe.
+ */
+export async function autoTagItemAction(itemId: string) {
+  const { user } = await requireUser();
+  try {
+    const tagNames = await autoTagDirectoryItem(user.id, itemId);
+    if (tagNames.length > 0) revalidatePath("/directory");
+    return { ok: true as const, tags: tagNames };
+  } catch (err) {
+    console.error("autoTagItemAction failed:", err instanceof Error ? err.message : err);
+    return { ok: false as const, error: "Couldn't tag this item" };
+  }
+}
+
 // ── Folder CRUD ──────────────────────────────────────────────────────
 
 const FolderNameSchema = z.object({ name: z.string().trim().min(1).max(60) });

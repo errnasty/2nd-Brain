@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
+  autoTagItemAction,
   deleteDirectoryItemAction,
   distillItemAction,
   updateNoteAction,
@@ -80,6 +81,8 @@ export function ItemViewer({
   item,
   onClose,
   onRequestDelete,
+  startInEdit = false,
+  onStartInEditConsumed,
   listCollapsed = false,
   onToggleList,
 }: {
@@ -88,6 +91,11 @@ export function ItemViewer({
   /** Delete this item via the shell's undo-toast flow (it also closes the
    *  viewer). When absent, falls back to a confirm-then-delete. */
   onRequestDelete?: (id: string) => void;
+  /** True for a note the shell just created — focus + select the title so
+   *  typing immediately replaces "Untitled note". One-shot: call
+   *  onStartInEditConsumed once handled so it doesn't refire. */
+  startInEdit?: boolean;
+  onStartInEditConsumed?: () => void;
   /** Whether the Directory list (third bar) is collapsed. */
   listCollapsed?: boolean;
   /** Toggle the Directory list open/closed (desktop). */
@@ -106,6 +114,7 @@ export function ItemViewer({
   const [queryOpen, setQueryOpen] = useState(false);
   const [rabbitholeOpen, setRabbitholeOpen] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [distilling, setDistilling] = useState(false);
   const [makingCards, setMakingCards] = useState(false);
@@ -116,6 +125,24 @@ export function ItemViewer({
   // when switching items / closing / unloading — refs survive the re-render that
   // a new item triggers, so this still holds the OUTGOING item's text.
   const editBufRef = useRef<{ id: string; kind: string; title: string; content: string } | null>(null);
+  // True once a note has actually been typed into this "session" (since it was
+  // selected), reset per-item. Drives the auto-tag-on-finish below — once per
+  // edit session, not on every keystroke or every preview/edit toggle.
+  const editedRef = useRef(false);
+
+  /** Fire-and-forget auto-tag for a note the user just finished editing.
+   *  autoTagDirectoryItem already no-ops server-side if the item has tags, so
+   *  this is safe to call even when nothing will actually change. */
+  const maybeAutoTag = useCallback((id: string, kind: string, text: string) => {
+    if (!editedRef.current) return;
+    editedRef.current = false;
+    if (kind !== "user_note" || text.trim().length < 80) return;
+    void autoTagItemAction(id).then((r) => {
+      if (r.ok && r.tags.length > 0) {
+        toast.info(`Tagged: ${r.tags.map((t) => `#${t}`).join(" ")}`);
+      }
+    });
+  }, []);
 
   const flushSave = useCallback(() => {
     const b = editBufRef.current;
@@ -144,6 +171,7 @@ export function ItemViewer({
     setTitle(item.title);
     setContent("");
     setDirty(false);
+    editedRef.current = false;
     setQueryOpen(false);
     setRabbitholeOpen(false);
     setMode(item.kind === "user_note" ? "edit" : "preview");
@@ -175,9 +203,13 @@ export function ItemViewer({
       // Switching items inside the 800ms autosave debounce would otherwise drop
       // the pending edit — flush it now.
       flushSave();
+      // Leaving a note that was actually edited: auto-tag it. Covers both
+      // switching to a different item and closing the panel (item → null).
+      const buf = editBufRef.current;
+      if (buf) maybeAutoTag(buf.id, buf.kind, buf.content);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on the item ID only; the `item` object identity churns on every parent render
-  }, [item?.id, flushSave]);
+  }, [item?.id, flushSave, maybeAutoTag]);
 
   // Flush a pending edit if the tab/window is closing.
   useEffect(() => {
@@ -185,6 +217,22 @@ export function ItemViewer({
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [flushSave]);
+
+  // A just-created note: focus + select the title so the first keystroke
+  // replaces "Untitled note" instead of requiring a click + select-all first.
+  useEffect(() => {
+    if (!item || !startInEdit || item.kind !== "user_note") return;
+    const raf = requestAnimationFrame(() => {
+      titleInputRef.current?.focus();
+      titleInputRef.current?.select();
+    });
+    onStartInEditConsumed?.();
+    return () => cancelAnimationFrame(raf);
+    // onStartInEditConsumed intentionally omitted: it's a fresh closure from the
+    // parent every render, and including it would refire this on every render
+    // rather than only when the item/flag actually change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item?.id, startInEdit]);
 
   // For saved articles, hit the existing article endpoints for the rendered body.
   useEffect(() => {
@@ -414,7 +462,10 @@ export function ItemViewer({
               <Pencil className="mr-1 inline h-3 w-3" /> Edit
             </button>
             <button
-              onClick={() => setMode("preview")}
+              onClick={() => {
+                setMode("preview");
+                if (item) maybeAutoTag(item.id, item.kind, content);
+              }}
               className={cn(
                 "rounded px-2 py-0.5 text-xs transition-colors",
                 mode === "preview"
@@ -578,10 +629,12 @@ export function ItemViewer({
           {/* Title */}
           {(isNote || isDoc) && mode === "edit" ? (
             <Input
+              ref={titleInputRef}
               value={title}
               onChange={(e) => {
                 setTitle(e.target.value);
                 setDirty(true);
+                if (item.kind === "user_note") editedRef.current = true;
                 editBufRef.current = { id: item.id, kind: item.kind, title: e.target.value, content };
               }}
               className="editorial-display border-0 px-0 text-3xl font-bold tracking-tight shadow-none focus-visible:ring-0"
@@ -608,6 +661,7 @@ export function ItemViewer({
               onChange={(e) => {
                 setContent(e.target.value);
                 setDirty(true);
+                editedRef.current = true;
                 editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
               }}
               placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}

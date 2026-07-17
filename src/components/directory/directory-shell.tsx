@@ -90,6 +90,10 @@ export function DirectoryShell({
 }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The item just created via "New note" — ItemViewer opens it straight into
+  // edit mode with the title selected, so typing replaces "Untitled note"
+  // instead of requiring a rename + mode-switch first.
+  const [freshItemId, setFreshItemId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [view, setView] = useState<"list" | "board">("list");
   const [listCollapsed, toggleListCollapsed] = useListCollapse("directory.listCollapsed.v1");
@@ -398,7 +402,7 @@ export function DirectoryShell({
         folderId: targetFolderId,
       });
       if (r.ok) {
-        toast.success("Note created");
+        setFreshItemId(r.itemId);
         selectItem(r.itemId);
       } else {
         toast.error(r.error);
@@ -682,6 +686,8 @@ export function DirectoryShell({
         item={selectedItem}
         onClose={() => selectItem(null)}
         onRequestDelete={(id) => deleteItemsWithUndo([id])}
+        startInEdit={!!selectedItem && selectedItem.id === freshItemId}
+        onStartInEditConsumed={() => setFreshItemId(null)}
         listCollapsed={listCollapsed}
         onToggleList={toggleListCollapsed}
       />

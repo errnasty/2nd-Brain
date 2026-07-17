@@ -8,7 +8,7 @@ import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { createNoteAction } from "@/app/(app)/directory/actions";
+import { autoTagItemAction, createNoteAction } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
 
 /**
@@ -55,6 +55,10 @@ export function QuickCapture() {
       return;
     }
     setOpen(false);
+    // A capture is a finished note — tag it now rather than waiting for the
+    // user to open and re-close it in the Directory. Same length gate as the
+    // viewer's auto-tag-on-finish so trivial one-liners aren't sent to the AI.
+    if (body.trim().length >= 80) void autoTagItemAction(r.itemId);
     if (thenOpen) {
       router.push(`/directory?item=${r.itemId}`);
     } else {
