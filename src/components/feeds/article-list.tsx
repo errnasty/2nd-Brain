@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlignJustify, ArrowDownUp, Bookmark, Check, CheckCheck, ChevronLeft, Copy, Inbox, Loader2, Search, Star, X } from "lucide-react";
+import { AlignJustify, ArrowDownUp, Bookmark, Check, CheckCheck, ChevronLeft, Copy, Inbox, Loader2, MoreVertical, Search, Star, X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FeedsBulkBar } from "@/components/feeds/feeds-bulk-bar";
 import {
@@ -16,6 +16,14 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { CONTEXT_MENU_PRIMITIVES, DROPDOWN_MENU_PRIMITIVES, type MenuPrimitives } from "@/components/ui/menu-primitives";
+import { ArticleRowMenuItems } from "./article-row-menu";
+import { saveArticleToDirectoryAction } from "@/app/(app)/directory/actions";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -268,6 +276,36 @@ export function ArticleList({
     });
   }
 
+  // Row-menu actions (right-click / hover kebab) — optimistic like the toolbar.
+  function toggleStar(id: string, current: boolean) {
+    startTransition(async () => {
+      applyOptimistic({ id, starred: !current });
+      try {
+        await toggleStarredAction(id, !current);
+      } catch {
+        applyOptimistic({ id, starred: current });
+        toast.error("Couldn't update star");
+      }
+    });
+  }
+
+  function setRead(id: string, read: boolean) {
+    startTransition(async () => {
+      applyOptimistic({ id, readStatus: read ? "read" : "unread" });
+      await setReadStatusAction({ articleIds: [id], status: read ? "read" : "unread" });
+    });
+  }
+
+  function saveToDirectory(id: string) {
+    const t = toast.loading("Saving to Directory…");
+    saveArticleToDirectoryAction(id)
+      .then((r) => {
+        if (r.ok) toast.success(r.alreadySaved ? "Already in your Directory" : "Saved to Directory", { id: t });
+        else toast.error(r.error, { id: t });
+      })
+      .catch(() => toast.error("Couldn't save to Directory", { id: t }));
+  }
+
   function bulkStar() {
     if (selectedIds.length === 0) return;
     const ids = selectedIds;
@@ -508,6 +546,9 @@ export function ArticleList({
           selected={selected}
           onToggleSelect={toggleSelect}
           onToggleReadLater={toggleReadLater}
+          onToggleStar={toggleStar}
+          onSetRead={setRead}
+          onSaveToDirectory={saveToDirectory}
           onPrefetch={prefetch}
           onMarkRead={markReadOne}
           onAutoRead={onAutoRead}
@@ -543,6 +584,9 @@ function VirtualizedArticleList({
   selected,
   onToggleSelect,
   onToggleReadLater,
+  onToggleStar,
+  onSetRead,
+  onSaveToDirectory,
   onPrefetch,
   onMarkRead,
   onAutoRead,
@@ -559,6 +603,9 @@ function VirtualizedArticleList({
   selected: Set<string>;
   onToggleSelect: (id: string) => void;
   onToggleReadLater: (id: string, current: boolean) => void;
+  onToggleStar: (id: string, current: boolean) => void;
+  onSetRead: (id: string, read: boolean) => void;
+  onSaveToDirectory: (id: string) => void;
   onPrefetch: (id: string) => void;
   onMarkRead: (id: string) => void;
   onAutoRead: (ids: string[]) => void;
@@ -624,9 +671,21 @@ function VirtualizedArticleList({
         {virtualizer.getVirtualItems().map((row) => {
           const item = items[row.index];
           const isSelected = selectedId === item.id;
+          const rowMenu = (prims: MenuPrimitives) => (
+            <ArticleRowMenuItems
+              prims={prims}
+              item={item}
+              onOpen={() => onOpen(item.id)}
+              onToggleStar={() => onToggleStar(item.id, item.starred)}
+              onToggleReadLater={() => onToggleReadLater(item.id, item.readLater)}
+              onSetRead={(read) => onSetRead(item.id, read)}
+              onSaveToDirectory={() => onSaveToDirectory(item.id)}
+            />
+          );
           return (
+            <ContextMenu key={item.id}>
+              <ContextMenuTrigger asChild>
             <div
-              key={item.id}
               data-index={row.index}
               ref={virtualizer.measureElement}
               className="group absolute left-0 top-0 w-full"
@@ -766,7 +825,25 @@ function VirtualizedArticleList({
               >
                 <Bookmark className={cn("h-3.5 w-3.5", item.readLater && "fill-current")} />
               </button>
+              {/* Actions kebab — same items as right-click, for discoverability + touch */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label="Article actions"
+                    className="absolute right-9 top-2 z-10 rounded bg-background/80 p-1 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity hover:bg-accent hover:text-foreground focus:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                  >
+                    <MoreVertical className="h-3.5 w-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                  {rowMenu(DROPDOWN_MENU_PRIMITIVES)}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>{rowMenu(CONTEXT_MENU_PRIMITIVES)}</ContextMenuContent>
+            </ContextMenu>
           );
         })}
       </div>
