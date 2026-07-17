@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, Upload, X } from "lucide-react";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -43,6 +43,7 @@ import { BulkActionBar } from "./bulk-action-bar";
 import { DirectoryBoard } from "./directory-board";
 import { GapsDialog } from "./gaps-dialog";
 import { CurriculumDialog } from "./curriculum-dialog";
+import { SaveUrlDialog } from "./save-url-dialog";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
 import { lastLocation } from "@/lib/last-location";
@@ -99,6 +100,7 @@ export function DirectoryShell({
   const [listCollapsed, toggleListCollapsed] = useListCollapse("directory.listCollapsed.v1");
   const [gapsOpen, setGapsOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
+  const [saveUrlOpen, setSaveUrlOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   const [extraItems, setExtraItems] = useState<DirectoryListItem[]>([]);
@@ -604,6 +606,15 @@ export function DirectoryShell({
             >
               <Lightbulb className="h-3.5 w-3.5" />
             </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7"
+              onClick={() => setSaveUrlOpen(true)}
+              title="Save a page from a URL"
+            >
+              <Link2 className="h-3.5 w-3.5" />
+            </Button>
             <UploadButton onPick={onFilesPicked} />
             <Button
               size="icon"
@@ -710,6 +721,12 @@ export function DirectoryShell({
       <CurriculumDialog
         open={curriculumOpen}
         onOpenChange={setCurriculumOpen}
+        folder={activeFolder}
+      />
+
+      <SaveUrlDialog
+        open={saveUrlOpen}
+        onOpenChange={setSaveUrlOpen}
         folder={activeFolder}
       />
     </>

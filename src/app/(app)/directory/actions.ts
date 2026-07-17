@@ -17,6 +17,7 @@ import { requireUser } from "@/lib/auth";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
+import { extractReadable } from "@/lib/readability/extract";
 import { chunkText } from "@/lib/documents/chunker";
 import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
@@ -648,6 +649,106 @@ export async function saveArticleToDirectoryAction(articleId: string, folderId?:
     return {
       ok: false as const,
       error: err instanceof Error ? err.message : "Failed to save article",
+    };
+  }
+}
+
+// ── Save an arbitrary URL to the Directory ──────────────────────────
+
+const SaveUrlSchema = z.object({
+  url: z.string().trim().url(),
+  folderId: z.string().uuid().nullish(),
+});
+
+/**
+ * Paste any web page URL and have it captured into the library — outside of
+ * an RSS subscription. Extracts readable text via Readability (same extractor
+ * feed articles use) and stores it as a saved_article item with NO `articleId`
+ * (there's no `articles` row backing it). getDirectoryItemStudyText and
+ * autoTagDirectoryItem both already fall back to directory_items.content when
+ * articleId is null, so flashcards/quiz/tagging work unchanged.
+ */
+export async function saveUrlToDirectoryAction(url: string, folderId?: string | null) {
+  const parsed = SaveUrlSchema.safeParse({ url, folderId });
+  if (!parsed.success) return { ok: false as const, error: "Enter a valid URL" };
+  const { user } = await requireUser();
+
+  try {
+    // Dedup: this exact URL already saved (as a plain saved_article, not one
+    // backed by a feed article) → open the existing item instead of duplicating.
+    const [existing] = await db
+      .select({ id: directoryItems.id })
+      .from(directoryItems)
+      .where(
+        and(
+          eq(directoryItems.userId, user.id),
+          eq(directoryItems.kind, "saved_article"),
+          eq(directoryItems.sourceUrl, parsed.data.url),
+        ),
+      )
+      .limit(1);
+    if (existing) return { ok: true as const, itemId: existing.id, alreadySaved: true };
+
+    let extracted;
+    try {
+      extracted = await extractReadable(parsed.data.url);
+    } catch (err) {
+      return {
+        ok: false as const,
+        error: `Couldn't read that page: ${err instanceof Error ? err.message : "extraction failed"}`,
+      };
+    }
+    const text = extracted.textContent.trim();
+    if (!text) return { ok: false as const, error: "No readable text found on that page" };
+
+    const title =
+      extracted.title?.trim() ||
+      (() => {
+        try {
+          return new URL(parsed.data.url).hostname;
+        } catch {
+          return "Saved page";
+        }
+      })();
+
+    const [row] = await db
+      .insert(directoryItems)
+      .values({
+        userId: user.id,
+        folderId: parsed.data.folderId ?? null,
+        kind: "saved_article",
+        title,
+        sourceUrl: parsed.data.url,
+        articleId: null,
+        content: text,
+        updatedAt: new Date(),
+      })
+      .returning({ id: directoryItems.id });
+
+    try {
+      await autoTagDirectoryItem(user.id, row.id);
+    } catch (err) {
+      console.warn("autoTag after URL save failed:", err instanceof Error ? err.message : err);
+    }
+    // Embed inline (not just the background backfill): the notes-only backfill
+    // phase wouldn't otherwise pick up a saved_article row with no articleId.
+    void embedNote(row.id, user.id, title, text);
+
+    const xp = await awardXp(user.id, {
+      source: "article_saved",
+      itemId: row.id,
+      refKind: "url_saved",
+      refId: row.id,
+    });
+
+    bustMapCache(user.id);
+    revalidatePath("/directory");
+    return { ok: true as const, itemId: row.id, alreadySaved: false, xp };
+  } catch (err) {
+    console.error("saveUrlToDirectoryAction failed:", err instanceof Error ? err.message : err);
+    return {
+      ok: false as const,
+      error: err instanceof Error ? err.message : "Couldn't save this page",
     };
   }
 }

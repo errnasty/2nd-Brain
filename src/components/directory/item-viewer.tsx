@@ -478,9 +478,9 @@ export function ItemViewer({
           </div>
         )}
 
-        {isArticle && articleData?.url && (
+        {isArticle && (articleData?.url ?? full?.sourceUrl) && (
           <Button size="icon" variant="ghost" asChild title="Open original">
-            <a href={articleData.url} target="_blank" rel="noopener noreferrer">
+            <a href={articleData?.url ?? full?.sourceUrl ?? "#"} target="_blank" rel="noopener noreferrer">
               <ExternalLink className="h-4 w-4" />
             </a>
           </Button>
@@ -687,6 +687,12 @@ export function ItemViewer({
                 <div dangerouslySetInnerHTML={{ __html: articleData.fullText }} />
               ) : articleData?.excerpt ? (
                 <p>{articleData.excerpt}</p>
+              ) : !full?.articleId && full?.content ? (
+                // A URL saved directly (not via an RSS feed article) — the
+                // extracted text has no HTML/markdown structure, so render it
+                // as plain preformatted text rather than through the Markdown
+                // renderer (which would misread stray *, _, # in the prose).
+                <div className="whitespace-pre-wrap">{full.content}</div>
               ) : (
                 <p className="text-muted-foreground italic">Article body not available.</p>
               )}
