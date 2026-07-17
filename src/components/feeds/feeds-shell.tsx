@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { ArticleList, type ArticleListItem } from "./article-list";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
+import { lastLocation } from "@/lib/last-location";
 
 // The reader (712 lines: panels, TTS, takeaways, next/image…) loads only once
 // an article is actually opened — it's the bulk of /feeds' initial JS. Its
@@ -78,10 +79,25 @@ export function FeedsShell({
 
   const onSelect = useCallback((id: string | null) => {
     setSelectedId(id);
+    lastLocation.setFeedsArticle(id);
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("article", id);
     else url.searchParams.delete("article");
     window.history.replaceState(null, "", url.toString());
+  }, []);
+
+  // Resume: on a bare visit (no ?article), reopen the last article read. The
+  // reader fetches it by id, so it works even if it's outside the current list.
+  useEffect(() => {
+    if (urlArticle) return;
+    const saved = lastLocation.getFeedsArticle();
+    if (saved) {
+      setSelectedId(saved);
+      const url = new URL(window.location.href);
+      url.searchParams.set("article", saved);
+      window.history.replaceState(null, "", url.toString());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [listCollapsed, toggleListCollapsed] = useListCollapse("feeds.listCollapsed.v1");

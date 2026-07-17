@@ -11,6 +11,7 @@ import { TasksView } from "@/components/tasks/tasks-view";
 import { ReviewView } from "@/components/review/review-view";
 import { QuizTab } from "./quiz-tab";
 import { SessionRunner } from "./session-runner";
+import { lastLocation } from "@/lib/last-location";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";
 import type { DueCard, LeechCard } from "@/app/(app)/review/actions";
@@ -68,6 +69,19 @@ export function StudyShell({
     setTab(defaultTab);
   }, [defaultTab]);
 
+  // Resume: on a bare visit (no explicit ?tab), restore the last tab used so
+  // "Study" lands where you left off instead of always on Overview.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("tab")) return;
+    const saved = lastLocation.getStudyTab();
+    if (saved && saved !== "overview" && TABS.some((t) => t.id === saved)) {
+      setTab(saved as StudyTab);
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", saved);
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, []);
+
   // Due-today task count for the Tasks tab badge (overdue + due today).
   const todayKey = localKey(new Date());
   const taskDue = tasks.filter(
@@ -76,6 +90,7 @@ export function StudyShell({
 
   function select(next: StudyTab) {
     setTab(next);
+    lastLocation.setStudyTab(next);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
     window.history.replaceState(null, "", url.toString());

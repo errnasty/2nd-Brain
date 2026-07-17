@@ -45,6 +45,7 @@ import { GapsDialog } from "./gaps-dialog";
 import { CurriculumDialog } from "./curriculum-dialog";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
+import { lastLocation } from "@/lib/last-location";
 import type { DirectoryFolder } from "@/lib/db/schema";
 import type { ReadingStatus, DirectorySort } from "@/lib/directory/query";
 
@@ -195,6 +196,29 @@ export function DirectoryShell({
   useEffect(() => {
     setSelectedId(urlItem);
   }, [urlItem]);
+
+  // Resume: on a truly bare visit (no query params at all), restore the last
+  // folder + open item so "Directory" lands where you left off. Any explicit
+  // destination (folder/tags/item/scope/search adds a param) opts out.
+  useEffect(() => {
+    if (window.location.search) return;
+    const f = lastLocation.getDirectoryFolder();
+    const i = lastLocation.getDirectoryItem();
+    if (!f && !i) return;
+    const params = new URLSearchParams();
+    if (f) params.set("folder", f);
+    if (i) params.set("item", i);
+    router.replace(`/directory?${params.toString()}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Persist the current folder + open item for the next bare visit.
+  useEffect(() => {
+    lastLocation.setDirectoryFolder(activeFolder);
+  }, [activeFolder]);
+  useEffect(() => {
+    lastLocation.setDirectoryItem(selectedId);
+  }, [selectedId]);
 
   const [hydratedItem, setHydratedItem] = useState<DirectoryListItem | null>(null);
 
