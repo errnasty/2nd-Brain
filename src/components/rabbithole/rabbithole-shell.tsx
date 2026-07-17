@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
-import { ExternalLink, Library, Rabbit } from "lucide-react";
+import { ArrowLeft, ExternalLink, Library, Rabbit } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Rabbithole } from "@/components/reader/rabbithole";
@@ -108,6 +108,17 @@ export function RabbitholeShell({
           {/* Root document */}
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              {/* The hole list is a desktop-only sidebar; on mobile this is the
+                  only way back out of a hole to pick/start another one. */}
+              <button
+                onClick={() => router.push("/rabbithole")}
+                className="-ml-1 inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground lg:hidden"
+                title="All holes"
+                aria-label="Back to all holes"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Holes
+              </button>
               <span className="truncate text-sm font-semibold">{root.title}</span>
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 — select text to dig

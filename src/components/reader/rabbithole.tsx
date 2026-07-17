@@ -138,8 +138,12 @@ export function Rabbithole({
 
   // Text-selection → popover. One document-level listener; the selection's
   // container decides the branch parent (root body vs the open answer).
+  // Bound to BOTH mouseup and touchend: touch text-selection (long-press drag)
+  // does not emit a mouseup, so without touchend the whole dig interaction is
+  // dead on phones/tablets. The small delay lets the touch selection settle
+  // (iOS finalizes the range + native callout after touchend) before we read it.
   useEffect(() => {
-    function onMouseUp(e: MouseEvent) {
+    function onSelectEnd(e: Event) {
       if (popoverRef.current?.contains(e.target as Node)) return;
       window.setTimeout(() => {
         const sel = window.getSelection();
@@ -172,17 +176,28 @@ export function Rabbithole({
         }
 
         const rect = range.getBoundingClientRect();
+        // Clamp the popover (340px wide, ~150px tall) fully inside the viewport
+        // so it never spills off a narrow phone screen. Prefer below the
+        // selection; flip above if there isn't room.
+        const halfW = 170;
+        const popH = 150;
+        const below = rect.bottom + 8;
+        const y = below + popH > window.innerHeight ? Math.max(8, rect.top - popH - 8) : below;
         setPopover({
           text: text.slice(0, 2000),
           parentId,
-          x: Math.min(Math.max(rect.left + rect.width / 2, 180), window.innerWidth - 180),
-          y: Math.min(rect.bottom + 8, window.innerHeight - 140),
+          x: Math.min(Math.max(rect.left + rect.width / 2, halfW + 8), window.innerWidth - halfW - 8),
+          y,
         });
         setQuestion("");
-      }, 0);
+      }, 10);
     }
-    document.addEventListener("mouseup", onMouseUp);
-    return () => document.removeEventListener("mouseup", onMouseUp);
+    document.addEventListener("mouseup", onSelectEnd);
+    document.addEventListener("touchend", onSelectEnd);
+    return () => {
+      document.removeEventListener("mouseup", onSelectEnd);
+      document.removeEventListener("touchend", onSelectEnd);
+    };
   }, [bodyRef]);
 
   /** Breadcrumb path for a node: walk parents up to the root document. */
@@ -382,7 +397,7 @@ export function Rabbithole({
                 }
               }}
               placeholder="Or ask your own question…"
-              className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-sm max-md:text-base outline-none focus-visible:ring-1 focus-visible:ring-ring"
               autoFocus
             />
             <button
