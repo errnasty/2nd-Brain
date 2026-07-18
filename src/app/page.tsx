@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { Reveal } from "@/components/landing/reveal";
 import { LandingReveal } from "@/components/landing/landing-reveal";
+import { ThemeToggle } from "@/components/shell/theme-toggle";
 
 export const metadata: Metadata = {
   title: "Second Brain — read, remember, and think with your knowledge",
@@ -80,8 +81,8 @@ export default async function LandingPage() {
             <div className="editorial-display text-xl font-bold">Second Brain</div>
             <div className="editorial-eyebrow hidden sm:block">Vol. III · Personal Edition</div>
           </div>
-          <nav className="flex items-center gap-4 font-serif text-sm sm:gap-6">
-            <Link href="/guide" className="text-muted-foreground hover:text-foreground">
+          <nav className="flex items-center gap-3 font-serif text-sm sm:gap-5">
+            <Link href="/guide" className="hidden text-muted-foreground hover:text-foreground sm:inline">
               Guide
             </Link>
             <Link href="/login" className="text-muted-foreground hover:text-foreground">
@@ -93,6 +94,7 @@ export default async function LandingPage() {
             >
               Get started
             </Link>
+            <ThemeToggle />
           </nav>
         </div>
       </header>
@@ -102,7 +104,7 @@ export default async function LandingPage() {
         <div className="landing-hero-glow" aria-hidden />
         <div className="relative mx-auto w-full max-w-5xl px-5 py-16 sm:px-8 sm:py-20">
           {/* date / issue line */}
-          <LandingReveal className="mb-8 flex items-baseline gap-4" delay={0}>
+          <LandingReveal className="mb-8 flex items-baseline gap-4" delay={0} as="self">
             <span className="editorial-eyebrow font-medium text-foreground">Saturday · July 18, 2026</span>
             <span className="landing-rule h-px flex-1 bg-foreground" />
             <span className="editorial-eyebrow">The Reading Issue</span>
@@ -184,7 +186,7 @@ export default async function LandingPage() {
 
       {/* ── FOUR PILLARS ────────────────────────────────────────────── */}
       <section className="mx-auto w-full max-w-6xl border-b border-foreground px-5 py-16 sm:px-8 sm:py-20">
-        <LandingReveal className="mb-10 flex flex-wrap items-baseline gap-3" delay={0}>
+        <LandingReveal className="mb-10 flex flex-wrap items-baseline gap-3" delay={0} as="self">
           <span className="editorial-eyebrow font-medium text-foreground">§ 01</span>
           <div className="editorial-display text-2xl font-semibold sm:text-[2rem]">
             Four things it does. That&apos;s the whole app.
@@ -224,7 +226,7 @@ export default async function LandingPage() {
       {/* ── PRODUCT SCREENSHOTS (mocks) ────────────────────────────── */}
       <section className="border-b border-foreground bg-muted/40">
         <div className="mx-auto w-full max-w-6xl px-5 py-16 sm:px-8 sm:py-20">
-          <LandingReveal className="mb-10 flex flex-wrap items-baseline gap-3" delay={0}>
+          <LandingReveal className="mb-10 flex flex-wrap items-baseline gap-3" delay={0} as="self">
             <span className="editorial-eyebrow font-medium text-foreground">§ 02</span>
             <div className="editorial-display text-2xl font-semibold sm:text-[2rem]">
               What it actually looks like.
@@ -408,7 +410,7 @@ export default async function LandingPage() {
 
       {/* ── COMPARISON ─────────────────────────────────────────────── */}
       <section className="mx-auto w-full max-w-6xl border-b border-foreground px-5 py-16 sm:px-8 sm:py-20">
-        <LandingReveal className="mb-9 flex flex-wrap items-baseline gap-3" delay={0}>
+        <LandingReveal className="mb-9 flex flex-wrap items-baseline gap-3" delay={0} as="self">
           <span className="editorial-eyebrow font-medium text-foreground">§ 03</span>
           <div className="editorial-display text-2xl font-semibold sm:text-[2rem]">
             Why not just use …?

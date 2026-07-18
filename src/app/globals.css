@@ -494,12 +494,14 @@
 .lh-stagger.motion-safe-in .lh-line:nth-child(2) { animation-delay: 0.18s; }
 .lh-stagger.motion-safe-in .lh-line:nth-child(3) { animation-delay: 0.34s; }
 
-/* Section rule — grows from the left when scrolled into view. */
+/* Section rule — grows from the left when its ancestor scrolls into view.
+   Works whether motion-safe-in lands on the rule itself or a parent wrapper. */
 .landing-rule {
   transform-origin: left center;
   transform: scaleX(0);
 }
-.landing-rule.motion-safe-in {
+.landing-rule.motion-safe-in,
+.motion-safe-in .landing-rule {
   animation: landing-rule-grow 1s cubic-bezier(0.7, 0, 0.2, 1) both;
   opacity: 1;
 }
@@ -581,4 +583,25 @@
     opacity: 1 !important;
     transform: none !important;
   }
+}
+
+/* ── Landing polish ───────────────────────────────────────────────────
+   Smooth-scroll for anchor nav, a gentle color fade on theme switch so
+   the B&W flip doesn't snap, and a snappier hero (the 0.95s stagger was
+   a touch sluggish — 0.7s reads as more confident). */
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+}
+
+/* Theme switch: fade colors over 200ms (transform/opacity stay instant so
+   layout never janks). Only applies to elements already on the page. */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease !important;
+}
+
+/* Snappier hero stagger — 0.7s with the same easing. */
+.lh-stagger.motion-safe-in .lh-line {
+  animation-duration: 0.7s;
 }

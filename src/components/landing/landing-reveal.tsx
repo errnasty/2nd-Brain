@@ -15,7 +15,7 @@ export function LandingReveal({
   children,
   className,
   delay,
-  as = "self",
+  as = "child",
 }: {
   children: ReactNode;
   className?: string;
@@ -31,6 +31,9 @@ export function LandingReveal({
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ||
       document.documentElement.dataset.reduceMotion === "true";
     const target = as === "self" ? el : (el.firstElementChild as HTMLElement | null) ?? el;
+    // If the hero is already in the viewport on load (it usually is), the IO
+    // callback can race past the first paint — fire immediately so the stagger
+    // never gets stuck at opacity:0.
     if (reduce) {
       target.classList.add("motion-safe-in");
       return;
