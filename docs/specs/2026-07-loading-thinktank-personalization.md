@@ -1,7 +1,7 @@
 # Spec: Loading feedback, ThinkTank, personalized onboarding, multi-user support
 
 **Date:** July 18, 2026
-**Status:** Approved design — not yet implemented
+**Status:** Implemented (July 18, 2026) — all four features shipped on this branch; see `src/data/changelog.ts` entries `2026-07-18-c` through `2026-07-18-f`
 **Scope:** Four features, in recommended build order:
 
 1. [Loading animations for creation flows + mobile page transitions](#1-loading-animations--mobile-page-transitions)
