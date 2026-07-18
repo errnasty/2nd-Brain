@@ -10,6 +10,7 @@ import { LoadingButton } from "@/components/ui/loading-button";
 import { BusyOverlay } from "@/components/ui/busy-overlay";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { isSeveredResponse } from "@/lib/ui/severed";
 
 /**
  * Topic deep-dive: ask for a theme, generate a Prereqs→Core→Advanced curriculum
@@ -66,6 +67,13 @@ export function CurriculumDialog({
       .catch((e) => {
         if ((e as Error)?.name === "AbortError") {
           toast.dismiss(id);
+          return;
+        }
+        // A severed long response isn't a failure — the note still lands.
+        if (isSeveredResponse(e)) {
+          toast.message("Still building in the background — the curriculum note will appear in your Directory shortly.", { id });
+          onOpenChange(false);
+          setTopic("");
           return;
         }
         toast.error(e instanceof Error ? e.message : "Failed", { id });

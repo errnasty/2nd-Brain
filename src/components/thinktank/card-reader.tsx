@@ -18,6 +18,7 @@ import { LoadingButton } from "@/components/ui/loading-button";
 import { Markdown } from "@/components/ui/markdown";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { isSeveredResponse } from "@/lib/ui/severed";
 import type { ThinkTankCard, ThinkTankDeck } from "@/lib/db/schema";
 import {
   makeFlashcardsFromCardAction,
@@ -133,11 +134,10 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
     } catch (err) {
       // A severed long response (serverless timeout) isn't a failure — the
       // generation finishes server-side. Say so instead of alarming the user.
-      const msg = err instanceof Error ? err.message : "";
-      if (/unexpected response/i.test(msg) || /fetch/i.test(msg)) {
+      if (isSeveredResponse(err)) {
         toast.message("Still working in the background — your flashcards will appear in Study shortly.");
       } else {
-        toast.error(msg || "Couldn't make flashcards");
+        toast.error(err instanceof Error ? err.message : "Couldn't make flashcards");
       }
     } finally {
       setCardingId(null);
@@ -161,7 +161,11 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
         toast.error(data.error ?? "Couldn't build the curriculum");
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't build the curriculum");
+      if (isSeveredResponse(err)) {
+        toast.message("Still building in the background — the curriculum note will appear in your Directory shortly.");
+      } else {
+        toast.error(err instanceof Error ? err.message : "Couldn't build the curriculum");
+      }
     } finally {
       setBuildingCurriculum(false);
     }

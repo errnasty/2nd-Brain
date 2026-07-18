@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingButton } from "@/components/ui/loading-button";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
+import { isSeveredResponse } from "@/lib/ui/severed";
 
 type Gap = { topic: string; why: string };
 
@@ -100,6 +101,12 @@ export function GapsDialog({
       .catch((e) => {
         if ((e as Error)?.name === "AbortError") {
           toast.dismiss(id);
+          return;
+        }
+        // A severed long response isn't a failure — the note still lands.
+        if (isSeveredResponse(e)) {
+          toast.message("Still researching in the background — the note will appear in your Directory shortly.", { id });
+          onOpenChange(false);
           return;
         }
         toast.error(e instanceof Error ? e.message : "Research failed", { id });

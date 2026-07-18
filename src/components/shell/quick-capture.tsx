@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingButton } from "@/components/ui/loading-button";
 import { autoTagItemAction, createNoteAction, saveUrlToDirectoryAction } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
+import { isSeveredResponse } from "@/lib/ui/severed";
 
 /**
  * Frictionless global capture — "grab the idea before it vanishes". Opens from
@@ -51,7 +52,21 @@ export function QuickCapture() {
   async function saveUrl(thenOpen: boolean) {
     if (!urlToSave) return;
     setSaving(true);
-    const r = await saveUrlToDirectoryAction(urlToSave, null);
+    let r: Awaited<ReturnType<typeof saveUrlToDirectoryAction>>;
+    try {
+      r = await saveUrlToDirectoryAction(urlToSave, null);
+    } catch (err) {
+      setSaving(false);
+      // Slow pages can outlive the serverless response window; the save still
+      // completes server-side.
+      if (isSeveredResponse(err)) {
+        toast.message("Still saving in the background — the page will appear in your Directory shortly.");
+        setOpen(false);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Couldn't save this page");
+      }
+      return;
+    }
     setSaving(false);
     if (!r.ok) {
       toast.error(r.error);

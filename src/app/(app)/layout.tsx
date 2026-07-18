@@ -21,29 +21,24 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // it shares the single auth round-trip with the pages below.
   const { user } = await requireUser();
 
-  // The "What's New" watermark + onboarding state + interests, from one
-  // settings read. Fail soft — a settings-read hiccup must never block the
-  // whole app shell from rendering.
+  // The "What's New" watermark + onboarding state + interests (one settings
+  // read) and the masthead display name — independent, so fetched in parallel.
+  // Both fail soft: a read hiccup must never block the app shell. Defaulting
+  // onboardingDone true on error keeps a hiccup from re-showing the tour.
   let lastSeenChangelog: string | null = null;
-  // Default true on error so a read hiccup can't re-show the tour to a veteran.
   let onboardingDone = true;
   let interests: string[] = [];
-  try {
-    const settings = await getUserSettings(user.id);
-    lastSeenChangelog = settings.lastSeenChangelog ?? null;
-    onboardingDone = settings.onboardingDone ?? false;
-    interests = settings.interests ?? [];
-  } catch {
-    // ignore — treat as "nothing seen yet"; the modal simply may re-show once.
-  }
-
-  // Chosen display name for the sidebar masthead + onboarding prefill.
   let displayName: string | null = null;
-  try {
-    displayName = await getDisplayName(user.id);
-  } catch {
-    // fail soft — fall back to email-only masthead
+  const [settingsResult, nameResult] = await Promise.allSettled([
+    getUserSettings(user.id),
+    getDisplayName(user.id),
+  ]);
+  if (settingsResult.status === "fulfilled") {
+    lastSeenChangelog = settingsResult.value.lastSeenChangelog ?? null;
+    onboardingDone = settingsResult.value.onboardingDone ?? false;
+    interests = settingsResult.value.interests ?? [];
   }
+  if (nameResult.status === "fulfilled") displayName = nameResult.value;
 
   return (
     <AppDialogProvider>

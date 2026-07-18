@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-h",
+    date: "July 18, 2026",
+    title: "Snappier pages, and long AI jobs never cry wolf",
+    tag: "improvement",
+    summary:
+      "Pages fetch their data more efficiently — duplicate lookups are gone and independent ones run at the same time — so switching sections feels quicker, especially with several people using the app. And every long-running AI job (curriculum, gap research, saving a slow web page, flashcards) now says \"still working\" instead of showing a false error when it takes a while.",
+    items: [
+      "The app shell, Today, and Settings load with fewer, parallel database reads.",
+      "Curriculum building, gap research, and page saving no longer show an error just because they took long — the result still arrives in your Directory.",
+    ],
+  },
+  {
     id: "2026-07-18-g",
     date: "July 18, 2026",
     title: "ThinkTank decks build reliably — and check their facts",
