@@ -649,6 +649,14 @@ export type UserSettingsData = {
   // this user has acknowledged (see src/data/changelog.ts). Entries with a
   // greater id are shown as unseen. Additive jsonb key — no migration needed.
   lastSeenChangelog?: string;
+  // Whether this user finished (or dismissed) the intro tour. Server-side so
+  // it holds across devices/browsers; the legacy localStorage flag is
+  // backfilled on first load. Additive jsonb key — no migration needed.
+  onboardingDone?: boolean;
+  // Topics the user said they want to learn (onboarding step / Settings).
+  // Seeds ThinkTank suggestions. Shallow-merge caveat: always send the whole
+  // array. Additive jsonb key — no migration needed.
+  interests?: string[];
 };
 
 export const userSettings = pgTable(

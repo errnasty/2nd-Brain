@@ -1,5 +1,7 @@
 import { requireUser } from "@/lib/auth";
 import { SettingsForm } from "@/components/settings/settings-form";
+import { ProfileSettings } from "@/components/settings/profile-settings";
+import { getDisplayName } from "@/lib/profile/store";
 import { StudyGenerationSettings } from "@/components/settings/study-generation-settings";
 import { DesktopSettings } from "@/components/settings/desktop-settings";
 import { OpenInDesktop } from "@/components/settings/open-in-desktop";
@@ -23,6 +25,12 @@ export default async function SettingsPage() {
   } catch (err) {
     console.error("SettingsPage: getUserSettings failed:", err instanceof Error ? err.message : err);
   }
+  let displayName: string | null = null;
+  try {
+    displayName = await getDisplayName(user.id);
+  } catch (err) {
+    console.error("SettingsPage: getDisplayName failed:", err instanceof Error ? err.message : err);
+  }
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10">
@@ -40,6 +48,7 @@ export default async function SettingsPage() {
         ) : (
           <OpenInDesktop />
         )}
+        <ProfileSettings initialName={displayName} initialInterests={settings.interests ?? []} />
         <SettingsForm />
         <StudyGenerationSettings
           initial={{

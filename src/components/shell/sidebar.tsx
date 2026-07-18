@@ -35,7 +35,13 @@ const nav = [
 
 const VOLUME_KEY = "sidebar.volumeNumber.v1";
 
-export function Sidebar({ userEmail }: { userEmail: string }) {
+export function Sidebar({
+  userEmail,
+  displayName,
+}: {
+  userEmail: string;
+  displayName?: string | null;
+}) {
   const pathname = usePathname();
   // ⌘ on macOS, Ctrl elsewhere. Resolved after mount to avoid hydration mismatch.
   const [mod, setMod] = useState("⌘");
@@ -84,6 +90,9 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
             </span>
           )}
         </div>
+        {displayName && (
+          <div className="mt-1 truncate text-xs font-medium">{displayName}</div>
+        )}
         <div className="mt-1 truncate text-[11px] text-muted-foreground">{userEmail}</div>
       </div>
       <Separator />

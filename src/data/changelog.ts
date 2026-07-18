@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-e",
+    date: "July 18, 2026",
+    title: "The app now gets to know you",
+    tag: "feature",
+    summary:
+      "The welcome tour now asks your name, what you want to learn, and your preferred look — and the app uses it: the daily brief greets you by name, your interests power upcoming topic suggestions, and your chosen palette applies right away. Everything is editable later in Settings.",
+    items: [
+      "New-user intro asks for your name, learning interests, and favorite color palette.",
+      "Today's brief and the sidebar greet you by your chosen name.",
+      "A new Profile section in Settings lets you change your name and interests anytime.",
+      "The tour now remembers you finished it across all your devices.",
+    ],
+  },
+  {
     id: "2026-07-18-d",
     date: "July 18, 2026",
     title: "Your settings are now yours alone on shared computers",
