@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   GraduationCap,
   Library,
+  Lightbulb,
   Loader2,
   MessageCircle,
   Network,
@@ -28,6 +29,7 @@ const nav = [
   { href: "/feeds", label: "Feeds", icon: Rss, chord: "F" },
   { href: "/directory", label: "Directory", icon: Library, chord: "D" },
   { href: "/study", label: "Study", icon: GraduationCap, chord: "S" },
+  { href: "/thinktank", label: "ThinkTank", icon: Lightbulb, chord: "K" },
   { href: "/rabbithole", label: "Rabbithole", icon: Rabbit, chord: "R" },
   { href: "/map", label: "Knowledge Map", icon: Network, chord: "M" },
   { href: "/tags", label: "Tags", icon: Tag, chord: "G" },

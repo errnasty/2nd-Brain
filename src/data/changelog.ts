@@ -27,6 +27,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-f",
+    date: "July 18, 2026",
+    title: "ThinkTank: learn any topic in bite-sized idea cards",
+    tag: "feature",
+    summary:
+      "A new tab for learning. Type any topic — or tap a suggestion drawn from your interests — and the AI builds a swipeable deck of short idea cards, ordered from the basics to the advanced stuff and connected to what's already in your library.",
+    items: [
+      "Each deck is 8–12 cards, one big idea each, readable in under a minute apiece.",
+      "Cards cite related notes and articles you've already saved.",
+      "Save any card to your library, turn it into flashcards for review, or go deeper in Rabbithole.",
+      "Finish a deck and build a full curriculum note in one tap.",
+      "Your reading position is remembered, so decks work in short sittings.",
+      "Find it in the sidebar, the More menu on mobile, or jump with g then k.",
+    ],
+  },
+  {
     id: "2026-07-18-e",
     date: "July 18, 2026",
     title: "The app now gets to know you",

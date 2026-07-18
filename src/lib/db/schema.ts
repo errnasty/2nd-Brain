@@ -541,6 +541,69 @@ export const quizAttempts = pgTable(
   }),
 );
 
+// ── ThinkTank: AI-generated topic-learning decks ───────────────────────
+// A topic becomes a deck of bite-sized "idea cards" (prerequisites → core →
+// advanced), read in a swipeable card reader. Cards can be saved to the
+// Directory or turned into flashcards. `pacing` is a v2 seam: "daily" will
+// unlock one card per day (Imprint-style drip) without schema rework.
+// SYNCED to desktop.
+export type ThinkTankSection = "prerequisites" | "core" | "advanced";
+export type ThinkTankRef = { itemId?: string; title: string; url?: string };
+
+export const thinktankDecks = pgTable(
+  "thinktank_decks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    topic: text("topic").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    // "error" marks a failed generation the user can retry/delete; decks are
+    // inserted whole, so "generating" only appears if async generation lands.
+    status: text("status").$type<"generating" | "ready" | "error">().default("ready").notNull(),
+    pacing: text("pacing").$type<"free" | "daily">().default("free").notNull(),
+    // Reader resume point (index of the last card viewed).
+    lastPosition: integer("last_position").default(0).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("thinktank_decks_user_created_idx").on(t.userId, t.createdAt.desc()),
+    userUpdatedIdx: index("thinktank_decks_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
+export const thinktankCards = pgTable(
+  "thinktank_cards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    deckId: uuid("deck_id")
+      .notNull()
+      .references(() => thinktankDecks.id, { onDelete: "cascade" }),
+    // Reading order; doubles as the day index for v2 daily pacing.
+    position: integer("position").notNull(),
+    section: text("section").$type<ThinkTankSection>().notNull(),
+    title: text("title").notNull(),
+    // One self-contained idea, ≤ ~80 words of markdown.
+    body: text("body").notNull(),
+    // Library items + web sources this card draws on.
+    sourceRefs: jsonb("source_refs").$type<ThinkTankRef[]>().default([]).notNull(),
+    // Set when "Save to library" created a Directory note (idempotency).
+    savedItemId: uuid("saved_item_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    deckIdx: index("thinktank_cards_deck_idx").on(t.deckId, t.position),
+    userUpdatedIdx: index("thinktank_cards_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
@@ -548,6 +611,8 @@ export type DirectoryFlashcard = typeof directoryFlashcards.$inferSelect;
 export type RabbitholeNode = typeof rabbitholeNodes.$inferSelect;
 export type Quiz = typeof quizzes.$inferSelect;
 export type QuizAttempt = typeof quizAttempts.$inferSelect;
+export type ThinkTankDeck = typeof thinktankDecks.$inferSelect;
+export type ThinkTankCard = typeof thinktankCards.$inferSelect;
 
 // ── Gamification ────────────────────────────────────────────────────────
 // A generic XP/skill engine. Domain-agnostic ('knowledge' now; 'fitness' etc

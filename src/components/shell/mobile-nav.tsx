@@ -10,6 +10,7 @@ import {
   GraduationCap,
   Inbox,
   Library,
+  Lightbulb,
   Menu,
   MessageCircle,
   MoreHorizontal,
@@ -40,6 +41,7 @@ const TABS = [
 
 // Secondary sections — surfaced through the "More" sheet, not the bottom bar.
 const MORE_LINKS = [
+  { href: "/thinktank", label: "ThinkTank", icon: Lightbulb },
   { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/rabbithole", label: "Rabbithole", icon: Rabbit },
@@ -53,6 +55,7 @@ const TITLES: Record<string, string> = {
   "/feeds": "Feeds",
   "/directory": "Directory",
   "/ask": "Ask",
+  "/thinktank": "ThinkTank",
   "/map": "Knowledge Map",
   "/study": "Study",
   "/rabbithole": "Rabbithole",
