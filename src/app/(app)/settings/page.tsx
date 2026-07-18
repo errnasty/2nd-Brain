@@ -6,6 +6,7 @@ import { OpenInDesktop } from "@/components/settings/open-in-desktop";
 import { SettingsShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { ReplayTutorial } from "@/components/settings/replay-tutorial";
 import { DangerZone } from "@/components/settings/danger-zone";
+import { SignOut } from "@/components/settings/sign-out";
 import { AiUsageCard } from "@/components/settings/ai-usage-card";
 import { ChangePassword } from "@/components/settings/change-password";
 import { getUserSettings } from "@/lib/settings/store";
@@ -56,7 +57,13 @@ export default async function SettingsPage() {
         {!isDesktop && (
           <div className="mt-8 space-y-3">
             <ChangePassword />
+            <SignOut />
             <DangerZone />
+          </div>
+        )}
+        {isDesktop && (
+          <div className="mt-8 space-y-3">
+            <SignOut />
           </div>
         )}
       </div>
