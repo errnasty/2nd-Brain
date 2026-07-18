@@ -133,14 +133,14 @@ export function RabbitholeShell({
               </button>
             </div>
             <ScrollArea className="flex-1">
-              <div ref={bodyRef} className="mx-auto max-w-[68ch] px-6 py-8">
+              <div ref={bodyRef} className="mx-auto max-w-[68ch] px-4 py-6 sm:px-6 sm:py-8">
                 {root.text.trim() ? (
                   root.markdown ? (
-                    <div className="prose-reader">
+                    <div className="prose-reader break-words">
                       <Markdown>{root.text}</Markdown>
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
+                    <div className="whitespace-pre-wrap break-words font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
                       {root.text}
                     </div>
                   )
@@ -153,8 +153,11 @@ export function RabbitholeShell({
             </ScrollArea>
           </div>
 
-          {/* Branch panel — stacked below on mobile, right column on desktop */}
-          <div className="h-[45vh] shrink-0 border-t border-border lg:h-auto lg:w-[440px] lg:border-l lg:border-t-0">
+          {/* Branch panel — stacked below on mobile, right column on desktop.
+              On mobile: svh (accounts for browser chrome) + a max so a short
+              screen still leaves the document readable; min-w-0/overflow-hidden
+              keep long answers from forcing horizontal scroll. */}
+          <div className="h-[45svh] max-h-[55%] min-w-0 shrink-0 overflow-hidden border-t border-border lg:h-auto lg:max-h-none lg:w-[440px] lg:border-l lg:border-t-0">
             <Rabbithole
               variant="inline"
               itemId={root.itemId}

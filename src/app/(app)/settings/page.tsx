@@ -9,11 +9,19 @@ import { DangerZone } from "@/components/settings/danger-zone";
 import { AiUsageCard } from "@/components/settings/ai-usage-card";
 import { ChangePassword } from "@/components/settings/change-password";
 import { getUserSettings } from "@/lib/settings/store";
+import type { UserSettingsData } from "@/lib/db/schema";
 
 export default async function SettingsPage() {
   const { user } = await requireUser();
   const isDesktop = process.env.APP_RUNTIME === "desktop";
-  const settings = await getUserSettings(user.id);
+  // Fail soft: a settings-read failure (transient DB issue, pending migration)
+  // must not take down the whole Settings page — render defaults instead.
+  let settings: UserSettingsData = {};
+  try {
+    settings = await getUserSettings(user.id);
+  } catch (err) {
+    console.error("SettingsPage: getUserSettings failed:", err instanceof Error ? err.message : err);
+  }
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10">

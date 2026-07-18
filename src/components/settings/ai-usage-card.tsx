@@ -9,7 +9,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 export async function AiUsageCard({ userId }: { userId: string }) {
   const budget = dailyTokenBudget();
   if (!budget) return null;
-  const { used } = await checkAiBudget(userId);
+  // Fail soft: a usage-read failure must not take down the whole Settings page
+  // (this card is awaited inline in it) — just hide the card.
+  let used: number;
+  try {
+    ({ used } = await checkAiBudget(userId));
+  } catch (err) {
+    console.error("AiUsageCard: checkAiBudget failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
   const pct = Math.min(100, Math.round((used / budget) * 100));
 
   return (

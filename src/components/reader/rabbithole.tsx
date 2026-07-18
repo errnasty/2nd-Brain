@@ -498,13 +498,13 @@ export function Rabbithole({
           {view ? (
             <div>
               {/* The passage this branch was dug from */}
-              <blockquote className="mb-3 border-l-2 border-primary/40 pl-3 text-sm italic text-muted-foreground">
+              <blockquote className="mb-3 break-words border-l-2 border-primary/40 pl-3 text-sm italic text-muted-foreground">
                 {view.anchorText.length > 280 ? `${view.anchorText.slice(0, 280)}…` : view.anchorText}
               </blockquote>
               {view.question && (
-                <div className="mb-3 text-sm font-medium">{view.question}</div>
+                <div className="mb-3 break-words text-sm font-medium">{view.question}</div>
               )}
-              <div ref={panelBodyRef} className="prose-reader prose-sm max-w-none text-sm">
+              <div ref={panelBodyRef} className="prose-reader prose-sm max-w-none break-words text-sm">
                 {view.content ? (
                   <Markdown>{view.content}</Markdown>
                 ) : (
