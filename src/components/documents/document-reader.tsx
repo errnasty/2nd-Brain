@@ -44,9 +44,9 @@ export function DocumentReader({ document }: { document: Document | null }) {
         </div>
         <ReaderControls />
       </div>
-      <ScrollArea className="flex-1">
+      <ScrollArea className="min-w-0 flex-1">
         <article
-          className="prose-reader px-4 py-8"
+          className="prose-reader px-4 py-8 overflow-x-hidden"
           style={
             {
               "--reader-font": prefs.font,
@@ -59,7 +59,7 @@ export function DocumentReader({ document }: { document: Document | null }) {
             Added {formatRelativeTime(document.createdAt)}
           </div>
           {document.fullText ? (
-            <div className="whitespace-pre-wrap">{document.fullText}</div>
+            <div className="whitespace-pre-wrap break-words">{document.fullText}</div>
           ) : (
             <p className="text-muted-foreground">No extracted text.</p>
           )}

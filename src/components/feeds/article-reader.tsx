@@ -573,7 +573,7 @@ export function ArticleReader({
       </div>
       <ScrollArea ref={scrollRootRef} className="min-w-0 flex-1">
         <article
-          className="prose-reader px-4 py-8"
+          className="prose-reader overflow-x-hidden px-4 py-8"
           style={
             {
               "--reader-font": prefs.font,

@@ -29,12 +29,13 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     id: "2026-07-18-a",
     date: "July 18, 2026",
-    title: "Article text stays in view; reader toolbar folds into a menu on phones",
+    title: "Reading text no longer runs off the right edge on phones",
     tag: "fix",
     summary:
-      "On narrow phones, article and document text no longer ran off the right edge — the reading column now fits the screen. The article reader's crowded icon row also collapses the star, bookmark, and ask buttons into the ⋯ menu on small screens, so everything fits without squishing.",
+      "Article, document, and note text was getting cut off on the right of a phone screen because the reading column could grow wider than the display. It now fits the screen and long words or links wrap instead of overflowing. The article reader's crowded icon row also tucks star, bookmark, and ask into the ⋯ menu on small screens.",
     items: [
-      "Reading text (articles, documents, rabbithole) no longer gets cut off on the right of a phone screen.",
+      "Articles, documents, notes, and rabbithole text all stay within the screen width on phones.",
+      "Long unbroken words, links, and extracted PDF text now wrap instead of forcing horizontal scroll.",
       "On phones, the article reader's extra actions (star, read-later, ask) are tucked inside the ⋯ menu instead of crowding the top bar.",
     ],
   },

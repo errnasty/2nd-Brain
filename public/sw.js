@@ -16,8 +16,8 @@
 // names and the activate handler below drops the previous build's caches —
 // hashed _next/static assets are immutable and would otherwise accumulate in
 // the user's storage forever. Do not hand-edit the version suffixes.
-const STATIC_CACHE = "sb-static-0CknnApSISd55WOgyesum";
-const PAGE_CACHE = "sb-pages-0CknnApSISd55WOgyesum";
+const STATIC_CACHE = "sb-static-57BPz6_BPFqS-ncRq9o3V";
+const PAGE_CACHE = "sb-pages-57BPz6_BPFqS-ncRq9o3V";
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();

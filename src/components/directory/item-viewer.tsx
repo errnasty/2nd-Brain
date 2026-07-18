@@ -605,8 +605,8 @@ export function ItemViewer({
         </DropdownMenu>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div ref={bodyRef} className="mx-auto max-w-[68ch] px-6 py-8">
+      <ScrollArea className="min-w-0 flex-1">
+        <div ref={bodyRef} className="mx-auto w-full max-w-[68ch] px-6 py-8">
           {/* Breadcrumb */}
           {full && (
             <nav
@@ -808,7 +808,7 @@ export function ItemViewer({
                 // extracted text has no HTML/markdown structure, so render it
                 // as plain preformatted text rather than through the Markdown
                 // renderer (which would misread stray *, _, # in the prose).
-                <div className="whitespace-pre-wrap">{full.content}</div>
+                <div className="whitespace-pre-wrap break-words">{full.content}</div>
               ) : (
                 <p className="text-muted-foreground italic">Article body not available.</p>
               )}
@@ -835,7 +835,7 @@ export function ItemViewer({
                   {linkifyWikilinks(content || docBody, outgoing)}
                 </Markdown>
               ) : content || docBody ? (
-                <div className="whitespace-pre-wrap font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
+                <div className="whitespace-pre-wrap break-words font-[Georgia,'Times_New_Roman',serif] text-[1.05rem] leading-[1.85]">
                   {content || docBody}
                 </div>
               ) : (
