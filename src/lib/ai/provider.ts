@@ -26,7 +26,7 @@ export function openrouterKey(): string | undefined {
   return process.env.OPENROUTER_API_KEY;
 }
 
-function activeProvider(): "openrouter" | "anthropic" {
+export function activeProvider(): "openrouter" | "anthropic" {
   const forced = process.env.AI_PROVIDER;
   if (forced === "anthropic") return "anthropic";
   if (forced === "openrouter") return "openrouter";

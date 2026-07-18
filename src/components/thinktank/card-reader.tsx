@@ -171,6 +171,8 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
           <div className="truncate text-sm font-semibold">{deck.title}</div>
           <div className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
             {index < cards.length ? `Card ${index + 1} of ${cards.length}` : "Finished"}
+            {deck.model && <span className="ml-2 opacity-60">· {deck.model}</span>}
+            {deck.tokenCount != null && <span className="ml-2 opacity-60">· {deck.tokenCount.toLocaleString()} tok</span>}
           </div>
         </div>
         <div className="hidden items-center gap-1 sm:flex">

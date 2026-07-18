@@ -12,7 +12,7 @@ import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { aiAvailable } from "@/lib/ai/provider";
 import { retrieveFromDirectory } from "@/lib/ai/rag";
-import { generateThinkTankDeck } from "@/lib/ai/thinktank";
+import { generateThinkTankDeck, type ThinkTankDetail } from "@/lib/ai/thinktank";
 import { awardXp } from "@/lib/gamify/award";
 import { createNoteAction } from "@/app/(app)/directory/actions";
 import { createCardsFromTextAction } from "@/app/(app)/review/actions";
@@ -23,7 +23,7 @@ import { createCardsFromTextAction } from "@/app/(app)/review/actions";
  * (~10–30s) behind a busy overlay; the deck `status` column is the seam for
  * async generation later.
  */
-export async function createThinkTankDeckAction(rawTopic: string) {
+export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkTankDetail = "standard") {
   const topic = (rawTopic ?? "").trim().slice(0, 200);
   if (!topic) return { ok: false as const, error: "Enter a topic to learn" };
   const { user } = await requireUser();
@@ -52,7 +52,7 @@ export async function createThinkTankDeckAction(rawTopic: string) {
     })();
     const related = await grounding;
 
-    const deck = await generateThinkTankDeck(topic, related);
+    const deck = await generateThinkTankDeck(topic, related, detail);
     if (!deck || deck.cards.length === 0) {
       return { ok: false as const, error: "Couldn't build a deck for this topic — try again" };
     }
@@ -65,6 +65,9 @@ export async function createThinkTankDeckAction(rawTopic: string) {
         title: deck.title,
         description: deck.description,
         status: "ready",
+        model: deck.model,
+        tokenCount: deck.tokenCount,
+        detail,
       })
       .returning({ id: thinktankDecks.id });
 
