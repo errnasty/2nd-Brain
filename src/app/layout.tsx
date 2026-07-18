@@ -38,11 +38,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         {/* Set the colour palette before first paint so switching away from the
             default (parchment) doesn't flash. Mirrors next-themes' own anti-FOUC
             script; safe under suppressHydrationWarning since React doesn't own
-            the data-palette attribute. */}
+            the data-palette attribute. Tries the signed-in account's scoped key
+            first (see scopedKey in lib/settings), then the legacy shared key. */}
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{var p=localStorage.getItem('app.palette.v1');if(p)document.documentElement.setAttribute('data-palette',p);}catch(e){}",
+              "try{var h=localStorage.getItem('app.activeUser.v1');var p=(h&&localStorage.getItem('app.palette.v1.u_'+h))||localStorage.getItem('app.palette.v1');if(p)document.documentElement.setAttribute('data-palette',p);}catch(e){}",
           }}
         />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem>

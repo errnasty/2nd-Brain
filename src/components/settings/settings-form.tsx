@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import {
+  ASK_MODEL_KEY,
   FONT_FAMILY_DEFAULT,
   FONT_OPTIONS,
   FONT_SCALE_DEFAULT,
@@ -26,6 +27,8 @@ import {
   getFontScale,
   getPalette,
   getReduceMotion,
+  getScopedItem,
+  setScopedItem,
   setFontFamily,
   setFontScale,
   setPalette,
@@ -35,7 +38,6 @@ import {
 } from "@/lib/settings";
 import { toast } from "sonner";
 
-const MODEL_STORAGE_KEY = "ask.model.v1";
 
 // Representative swatch per palette (the CSS vars are scoped to :root/.dark, so
 // a swatch can't read them here — these mirror each palette's --brand accent).
@@ -73,12 +75,8 @@ export function SettingsForm() {
     setFontFamilyState(getFontFamily());
     setPaletteState(getPalette());
     setReduceMotionState(getReduceMotion());
-    try {
-      const m = localStorage.getItem(MODEL_STORAGE_KEY);
-      if (m && CHAT_MODELS.some((x) => x.id === m)) setModel(m);
-    } catch {
-      // ignore
-    }
+    const m = getScopedItem(ASK_MODEL_KEY);
+    if (m && CHAT_MODELS.some((x) => x.id === m)) setModel(m);
   }, []);
 
   function bumpFont(delta: number) {
@@ -99,11 +97,7 @@ export function SettingsForm() {
 
   function chooseModel(id: string) {
     setModel(id);
-    try {
-      localStorage.setItem(MODEL_STORAGE_KEY, id);
-    } catch {
-      // ignore
-    }
+    setScopedItem(ASK_MODEL_KEY, id);
   }
 
   function resetAll() {

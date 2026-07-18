@@ -39,11 +39,17 @@ function LoginForm() {
         import("@/lib/offline/db"),
       ]);
       const supabase = createSupabaseBrowserClient();
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       // Drop any previous user's offline sidebar mirror so this session never
       // paints stale cross-account folders/tags.
       await clearOfflineMirror();
+      // Switch client-side prefs (palette, fonts, model choice) to this
+      // account's own scoped keys.
+      if (data.user) {
+        const { setActiveUser } = await import("@/lib/settings");
+        setActiveUser(data.user.id);
+      }
       router.replace(redirectTo);
       router.refresh();
     } catch (err) {

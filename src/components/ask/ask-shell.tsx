@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
+import { ASK_MODEL_KEY, getScopedItem, setScopedItem } from "@/lib/settings";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import { generateFlashcardsAction, createFlashcardAction } from "@/app/(app)/review/actions";
 import { searchAttachableItemsAction, type AttachableItem } from "@/app/(app)/ask/actions";
@@ -50,7 +51,6 @@ import { fetchDirectoryItemByIdAction } from "@/app/(app)/directory/actions";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
-const MODEL_STORAGE_KEY = "ask.model.v1";
 
 type Source = {
   n: number;
@@ -189,12 +189,8 @@ export function AskShell() {
   const openPath = useCallback((path: string) => router.push(path), [router]);
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(MODEL_STORAGE_KEY);
-      if (saved && CHAT_MODELS.some((m) => m.id === saved)) setModelId(saved);
-    } catch {
-      // ignore
-    }
+    const saved = getScopedItem(ASK_MODEL_KEY);
+    if (saved && CHAT_MODELS.some((m) => m.id === saved)) setModelId(saved);
   }, []);
 
   // #4 Cross-surface hand-off: /ask?prefill=…&attach=<directoryItemId> lets
@@ -227,11 +223,7 @@ export function AskShell() {
 
   function chooseModel(id: string) {
     setModelId(id);
-    try {
-      localStorage.setItem(MODEL_STORAGE_KEY, id);
-    } catch {
-      // ignore
-    }
+    setScopedItem(ASK_MODEL_KEY, id);
   }
 
   const refreshMemory = useCallback(async () => {

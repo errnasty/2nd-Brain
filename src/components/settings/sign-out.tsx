@@ -31,6 +31,10 @@ export function SignOut() {
         import("@/lib/offline/db"),
       ]);
       await clearOfflineMirror();
+      // Forget which account's scoped prefs are active (the prefs themselves
+      // stay, so signing back in restores this account's look instantly).
+      const { clearActiveUser } = await import("@/lib/settings");
+      clearActiveUser();
       await createSupabaseBrowserClient().auth.signOut();
       router.replace("/login");
       router.refresh();

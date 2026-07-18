@@ -36,6 +36,8 @@ export function DangerZone() {
           import("@/lib/offline/db"),
         ]);
         await clearOfflineMirror();
+        const { clearActiveUser } = await import("@/lib/settings");
+        clearActiveUser();
         await createSupabaseBrowserClient().auth.signOut();
       } catch {
         // Session is already invalid server-side.

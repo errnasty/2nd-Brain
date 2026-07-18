@@ -16,6 +16,7 @@ import {
   Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getScopedItem, setScopedItem } from "@/lib/settings";
 import { LinkPendingReporter } from "@/components/shell/route-progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -50,13 +51,13 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
 
     try {
       const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-      const raw = localStorage.getItem(VOLUME_KEY);
+      const raw = getScopedItem(VOLUME_KEY);
       const parsed = raw ? (JSON.parse(raw) as { n: number; lastDay: string }) : null;
       if (parsed && parsed.lastDay === todayKey) {
         setVolume(parsed.n);
       } else {
         const next = parsed ? parsed.n + 1 : dayOfYear(new Date());
-        localStorage.setItem(VOLUME_KEY, JSON.stringify({ n: next, lastDay: todayKey }));
+        setScopedItem(VOLUME_KEY, JSON.stringify({ n: next, lastDay: todayKey }));
         setVolume(next);
       }
     } catch {

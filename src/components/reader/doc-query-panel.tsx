@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { ASK_MODEL_KEY, getScopedItem } from "@/lib/settings";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import {
@@ -17,14 +18,12 @@ import {
   type DocPrompt,
 } from "@/lib/ai/doc-prompts";
 
-const MODEL_STORAGE_KEY = "ask.model.v1";
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
 type WebSource = { title: string; url: string };
 
 function getModel(): string {
-  if (typeof window === "undefined") return DEFAULT_CHAT_MODEL;
-  return window.localStorage.getItem(MODEL_STORAGE_KEY) || DEFAULT_CHAT_MODEL;
+  return getScopedItem(ASK_MODEL_KEY) || DEFAULT_CHAT_MODEL;
 }
 
 /** Strip HTML tags + collapse whitespace so article HTML becomes plain text. */

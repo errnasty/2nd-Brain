@@ -11,6 +11,7 @@ import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
 import { PageTransition } from "@/components/shell/page-transition";
 import { RouteProgress } from "@/components/shell/route-progress";
+import { SettingsEffects } from "@/components/settings-effects";
 import { AppDialogProvider } from "@/components/ui/app-dialogs";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -31,6 +32,9 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <AppDialogProvider>
       <div className="flex h-dvh w-full overflow-hidden bg-background text-foreground">
+        {/* Re-applies prefs from the signed-in account's scoped keys (the root
+            layout's instance runs before the user is known). */}
+        <SettingsEffects userId={user.id} />
         <Sidebar userEmail={user.email ?? ""} />
         {/* On mobile, clear the fixed top app bar and bottom tab bar (+ safe
             areas). Desktop has neither, so the padding collapses at md+. */}

@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-d",
+    date: "July 18, 2026",
+    title: "Your settings are now yours alone on shared computers",
+    tag: "improvement",
+    summary:
+      "Appearance settings — color palette, font, text size, reduce motion — and your AI model choice now belong to your account instead of the browser. Two people sharing one computer each keep their own look, and signing back in restores yours instantly.",
+    items: [
+      "Each account gets its own palette, font, text size, motion, and model preferences.",
+      "Existing settings carry over automatically to the first account that signs in.",
+      "Signing out keeps your preferences safe for the next time you sign in.",
+    ],
+  },
+  {
     id: "2026-07-18-c",
     date: "July 18, 2026",
     title: "Clear loading feedback everywhere + smoother mobile navigation",
