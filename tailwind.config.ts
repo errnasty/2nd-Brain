@@ -77,11 +77,29 @@ const config: Config = {
           from: { opacity: "0", transform: "translateY(4px)" },
           to: { opacity: "1", transform: "none" },
         },
+        // Directional variants for mobile bottom-tab switches: the new page
+        // slides in from the side the user is heading toward.
+        "page-in-left": {
+          from: { opacity: "0", transform: "translateX(24px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        "page-in-right": {
+          from: { opacity: "0", transform: "translateX(-24px)" },
+          to: { opacity: "1", transform: "none" },
+        },
+        "route-progress": {
+          "0%": { transform: "translateX(-100%)" },
+          "50%": { transform: "translateX(20%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         "page-in": "page-in 0.15s ease-out",
+        "page-in-left": "page-in-left 0.18s ease-out",
+        "page-in-right": "page-in-right 0.18s ease-out",
+        "route-progress": "route-progress 1s ease-in-out infinite",
       },
     },
   },

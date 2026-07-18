@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Lightbulb, Loader2, Search } from "lucide-react";
+import { Lightbulb, Search } from "lucide-react";
 import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/ui/loading-button";
+import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
 
 type Gap = { topic: string; why: string };
@@ -120,7 +122,7 @@ export function GapsDialog({
           <div className="max-h-[60vh] space-y-2 overflow-y-auto">
             {loading ? (
               <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" /> Analyzing your collection…
+                <Spinner /> Analyzing your collection…
               </div>
             ) : gapsError ? (
               <div className="flex flex-col items-center gap-2 py-6 text-center text-sm text-muted-foreground">
@@ -143,20 +145,17 @@ export function GapsDialog({
                     <div className="text-sm font-medium">{g.topic}</div>
                     <div className="mt-0.5 text-xs text-muted-foreground">{g.why}</div>
                   </div>
-                  <Button
+                  <LoadingButton
                     size="sm"
                     variant="outline"
                     className="shrink-0 gap-1"
+                    loading={researching === g.topic}
                     disabled={researching !== null}
                     onClick={() => research(g.topic)}
                   >
-                    {researching === g.topic ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Search className="h-3.5 w-3.5" />
-                    )}
+                    {researching !== g.topic && <Search className="h-3.5 w-3.5" />}
                     Research
-                  </Button>
+                  </LoadingButton>
                 </div>
               ))
             )}

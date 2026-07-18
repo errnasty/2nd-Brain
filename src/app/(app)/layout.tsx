@@ -10,6 +10,7 @@ import { WhatsNew } from "@/components/shell/whats-new";
 import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
 import { PageTransition } from "@/components/shell/page-transition";
+import { RouteProgress } from "@/components/shell/route-progress";
 import { AppDialogProvider } from "@/components/ui/app-dialogs";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -38,6 +39,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <PageTransition>{children}</PageTransition>
         </main>
         <MobileNav />
+        <RouteProgress />
         <CommandPalette />
         <QuickCapture />
         <Confetti />

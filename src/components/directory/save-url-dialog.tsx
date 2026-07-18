@@ -3,9 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { Link2, Loader2 } from "lucide-react";
+import { Link2 } from "lucide-react";
 import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/ui/loading-button";
 import { Input } from "@/components/ui/input";
 import { saveUrlToDirectoryAction } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
@@ -75,10 +76,10 @@ export function SaveUrlDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={loading}>
               Cancel
             </Button>
-            <Button onClick={save} disabled={loading || !url.trim()} className="gap-1.5">
-              {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+            <LoadingButton onClick={save} loading={loading} disabled={!url.trim()} className="gap-1.5">
+              {!loading && <Link2 className="h-3.5 w-3.5" />}
               Save
-            </Button>
+            </LoadingButton>
           </div>
         </DialogPrimitive.Content>
       </DialogPortal>

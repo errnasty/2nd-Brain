@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-c",
+    date: "July 18, 2026",
+    title: "Clear loading feedback everywhere + smoother mobile navigation",
+    tag: "improvement",
+    summary:
+      "Every create and generate action now shows a spinner while it works, so you always know something is happening. On the phone, switching between the bottom tabs slides in the direction you're heading, and a slim progress bar appears at the top whenever a page takes a moment to load.",
+    items: [
+      "Saving a capture, adding a feed, saving a page, uploading files, and AI generation all show consistent progress indicators.",
+      "Longer AI jobs (like building a curriculum) show a clear overlay with what's happening.",
+      "Mobile bottom-tab switches now slide left or right to match where you're going; other page changes keep the gentle fade.",
+      "A loading bar at the top of the screen and a spinning tab icon show when a page is still on its way.",
+      "All of it respects your reduce-motion preference.",
+    ],
+  },
+  {
     id: "2026-07-18-b",
     date: "July 18, 2026",
     title: "A new front page + black-and-white default theme",

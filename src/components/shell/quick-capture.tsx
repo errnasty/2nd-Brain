@@ -8,6 +8,7 @@ import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/ui/loading-button";
 import { autoTagItemAction, createNoteAction, saveUrlToDirectoryAction } from "@/app/(app)/directory/actions";
 import { toast } from "sonner";
 
@@ -146,13 +147,15 @@ export function QuickCapture() {
               <Button size="sm" variant="ghost" onClick={() => setOpen(false)} disabled={saving}>
                 Cancel
               </Button>
-              <Button
+              <LoadingButton
                 size="sm"
+                loading={saving}
+                loadingText="Saving…"
                 onClick={() => (urlToSave ? saveUrl(false) : save(false))}
-                disabled={saving || (!body.trim() && !title.trim())}
+                disabled={!body.trim() && !title.trim()}
               >
-                {saving ? "Saving…" : urlToSave ? "Save page" : "Capture"}
-              </Button>
+                {urlToSave ? "Save page" : "Capture"}
+              </LoadingButton>
             </div>
           </div>
         </DialogPrimitive.Content>

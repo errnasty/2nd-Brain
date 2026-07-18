@@ -16,6 +16,7 @@ import {
   Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LinkPendingReporter } from "@/components/shell/route-progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
@@ -127,6 +128,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
                 <Icon className={cn("h-4 w-4", active && "text-brand")} />
                 <span className="flex-1">{label}</span>
                 <NavHint chord={chord} />
+                <LinkPendingReporter />
               </Link>
             );
           })}
