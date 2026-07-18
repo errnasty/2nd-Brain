@@ -54,15 +54,18 @@ export async function webAnswerOnce({
   model,
   system,
   userContent,
+  maxTokens,
 }: {
   model: string;
   system: string;
   userContent: string;
+  /** Override the default answer budget (e.g. structured output needing more room). */
+  maxTokens?: number;
 }): Promise<{ text: string; sources: WebSource[] }> {
   const client = getAnthropic(process.env.ANTHROPIC_API_KEY);
   const msg = await client.messages.create({
     model,
-    max_tokens: MAX_TOKENS,
+    max_tokens: maxTokens ?? MAX_TOKENS,
     system,
     messages: [{ role: "user", content: userContent }],
     tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_SEARCHES }],
@@ -93,15 +96,17 @@ export async function plainAnswerOnce({
   model,
   system,
   userContent,
+  maxTokens,
 }: {
   model: string;
   system: string;
   userContent: string;
+  maxTokens?: number;
 }): Promise<{ text: string }> {
   const client = getAnthropic(process.env.ANTHROPIC_API_KEY);
   const msg = await client.messages.create({
     model,
-    max_tokens: MAX_TOKENS,
+    max_tokens: maxTokens ?? MAX_TOKENS,
     system,
     messages: [{ role: "user", content: userContent }],
   });

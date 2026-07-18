@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-g",
+    date: "July 18, 2026",
+    title: "ThinkTank decks build reliably — and check their facts",
+    tag: "improvement",
+    summary:
+      "Building a deck no longer shows an error while the deck quietly finishes in the background — you now land on a live progress screen that flips into the reader the moment the cards are ready. And the AI now verifies facts with a quick web search while writing, so cards cite real sources you can open.",
+    items: [
+      "No more false errors on long generations; the app waits and updates itself.",
+      "Cards now show their sources — links from the web and from your own library.",
+      "If a build genuinely fails, you get a clear retry button instead of a dead deck.",
+      "Making flashcards no longer alarms you if it takes a moment — they arrive in Study either way.",
+    ],
+  },
+  {
     id: "2026-07-18-f",
     date: "July 18, 2026",
     title: "ThinkTank: learn any topic in bite-sized idea cards",

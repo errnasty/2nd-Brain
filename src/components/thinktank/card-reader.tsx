@@ -117,6 +117,8 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
       } else {
         toast.error(r.error);
       }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save the card");
     } finally {
       setSavingId(null);
     }
@@ -128,6 +130,15 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
       const r = await makeFlashcardsFromCardAction(card.id);
       if (r.ok) toast.success(`${r.count} flashcards added to Study`);
       else toast.error(r.error);
+    } catch (err) {
+      // A severed long response (serverless timeout) isn't a failure — the
+      // generation finishes server-side. Say so instead of alarming the user.
+      const msg = err instanceof Error ? err.message : "";
+      if (/unexpected response/i.test(msg) || /fetch/i.test(msg)) {
+        toast.message("Still working in the background — your flashcards will appear in Study shortly.");
+      } else {
+        toast.error(msg || "Couldn't make flashcards");
+      }
     } finally {
       setCardingId(null);
     }
@@ -206,7 +217,7 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
               {card.sourceRefs.length > 0 && (
                 <div className="mt-5 rounded-lg border border-border bg-card p-3">
                   <div className="pb-1.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                    From your library
+                    Sources
                   </div>
                   {card.sourceRefs.map((r) =>
                     r.itemId ? (
@@ -215,8 +226,18 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
                         href={`/directory?item=${r.itemId}`}
                         className="block truncate py-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                       >
-                        {r.title}
+                        {r.title} <span className="opacity-60">· your library</span>
                       </Link>
+                    ) : r.url ? (
+                      <a
+                        key={`${card.id}-${r.url}`}
+                        href={r.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block truncate py-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {r.title} <span className="opacity-60">· web</span>
+                      </a>
                     ) : (
                       <div key={`${card.id}-${r.title}`} className="truncate py-0.5 text-xs text-muted-foreground">
                         {r.title}

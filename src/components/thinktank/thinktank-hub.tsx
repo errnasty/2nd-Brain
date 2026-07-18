@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, Lightbulb, Trash2 } from "lucide-react";
 import { LoadingButton } from "@/components/ui/loading-button";
-import { BusyOverlay } from "@/components/ui/busy-overlay";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -39,6 +39,8 @@ export function ThinkTankHub({
   const [building, setBuilding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Fast: inserts a "generating" deck and routes to it; the deck page kicks
+  // the background build and polls, so nothing here waits on the AI.
   async function build(t: string) {
     const trimmed = t.trim();
     if (!trimmed || building) return;
@@ -48,12 +50,11 @@ export function ThinkTankHub({
       if (r.ok) {
         setTopic("");
         router.push(`/thinktank/${r.deckId}`);
-        router.refresh();
       } else {
         toast.error(r.error);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't build the deck");
+      toast.error(err instanceof Error ? err.message : "Couldn't start the deck");
     } finally {
       setBuilding(false);
     }
@@ -85,7 +86,6 @@ export function ThinkTankHub({
         </header>
 
         <div className="relative rounded-xl border border-border bg-card p-4">
-          <BusyOverlay show={building} label="Building your deck… ~20s" />
           <div className="flex gap-2">
             <Input
               value={topic}
@@ -139,11 +139,23 @@ export function ThinkTankHub({
                         <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{d.description}</div>
                       )}
                       <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                        <span>{d.cardCount} cards</span>
-                        <span>·</span>
-                        <span className={cn(finished && "text-brand")}>
-                          {finished ? "Finished" : `Card ${progress} of ${d.cardCount}`}
-                        </span>
+                        {d.cardCount === 0 ? (
+                          d.status === "error" ? (
+                            <span className="text-destructive">Failed — open to retry</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5">
+                              <Spinner className="h-3 w-3" /> Building…
+                            </span>
+                          )
+                        ) : (
+                          <>
+                            <span>{d.cardCount} cards</span>
+                            <span>·</span>
+                            <span className={cn(finished && "text-brand")}>
+                              {finished ? "Finished" : `Card ${progress} of ${d.cardCount}`}
+                            </span>
+                          </>
+                        )}
                         <ArrowRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" />
                       </div>
                     </Link>
