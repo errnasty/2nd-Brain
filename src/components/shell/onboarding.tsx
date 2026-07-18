@@ -239,12 +239,22 @@ export function Onboarding() {
           </div>
 
           <div className="flex items-center justify-between gap-3 border-t border-border px-6 py-3">
-            <button
-              onClick={finish}
-              className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
-            >
-              Skip
-            </button>
+            {last ? (
+              <a
+                href="/guide"
+                onClick={finish}
+                className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+              >
+                Read the full guide →
+              </a>
+            ) : (
+              <button
+                onClick={finish}
+                className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground hover:text-foreground"
+              >
+                Skip
+              </button>
+            )}
             <div className="flex items-center gap-2">
               {i > 0 && (
                 <Button size="sm" variant="ghost" onClick={() => setI((n) => n - 1)}>

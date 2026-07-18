@@ -645,6 +645,10 @@ export type UserSettingsData = {
   flashcardCount?: number;
   quizDifficulty?: "easy" | "medium" | "hard";
   quizCount?: number;
+  // Watermark for the "What's New" panel: the id of the newest changelog entry
+  // this user has acknowledged (see src/data/changelog.ts). Entries with a
+  // greater id are shown as unseen. Additive jsonb key — no migration needed.
+  lastSeenChangelog?: string;
 };
 
 export const userSettings = pgTable(

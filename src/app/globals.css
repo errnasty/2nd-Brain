@@ -293,6 +293,9 @@
   font-size: var(--reader-font-size, 19px);
   line-height: var(--reader-line-height, 1.85);
   @apply max-w-[68ch] mx-auto;
+  /* Long URLs / unbroken tokens (common in imported docs) must wrap instead of
+     forcing horizontal overflow — critical on narrow mobile reading panes. */
+  overflow-wrap: break-word;
 }
 
 .prose-reader h1 {
@@ -410,4 +413,29 @@
 }
 [data-reader-theme="sepia"] .prose-reader {
   color: #3d2f1a;
+}
+
+/* ── Landing page motion ─────────────────────────────────────────────
+   Dependency-free entrance animations for the marketing landing. Applied via
+   Tailwind arbitrary `animate-[landing-rise_...]` with per-element delays.
+   The global `html[data-reduce-motion="true"] *` rule (and `motion-safe:`)
+   collapse these to ~0s, leaving every element at its final, visible state. */
+@keyframes landing-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes landing-glow {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.8;
+  }
 }

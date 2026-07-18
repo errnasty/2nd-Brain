@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BookOpen,
   ChevronRight,
   FolderClosed,
   GraduationCap,
@@ -41,6 +42,7 @@ const MORE_LINKS = [
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/rabbithole", label: "Rabbithole", icon: Rabbit },
   { href: "/tags", label: "Tags", icon: Tag },
+  { href: "/guide", label: "Guide", icon: BookOpen },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

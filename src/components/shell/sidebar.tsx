@@ -133,7 +133,19 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
         </nav>
       </ScrollArea>
       <Separator />
-      <div className="p-2">
+      <div className="space-y-0.5 p-2">
+        <Link
+          href="/guide"
+          aria-current={isActive("/guide") ? "page" : undefined}
+          className={cn(
+            "block rounded-md px-3 py-2 text-sm transition-colors",
+            isActive("/guide")
+              ? "bg-accent font-semibold text-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+          )}
+        >
+          Guide
+        </Link>
         <Link
           href="/settings"
           prefetch={true}

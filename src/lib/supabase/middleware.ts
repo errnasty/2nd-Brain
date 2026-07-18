@@ -52,6 +52,11 @@ export async function updateSession(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
   const isAuthRoute =
+    // Public marketing/reference pages. NOTE: "/" must be matched EXACTLY —
+    // startsWith("/") would make every route public. The landing page itself
+    // redirects a logged-in visitor to /today.
+    pathname === "/" ||
+    pathname.startsWith("/guide") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||
     pathname.startsWith("/forgot-password") ||

@@ -4,10 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import {
+  BookOpen,
   Brain,
   CheckSquare,
   FileText,
   FolderTree,
+  Gift,
   GraduationCap,
   Hash,
   Loader2,
@@ -41,6 +43,12 @@ const ACTIONS: ActionCommand[] = [
     keywords: "tutorial onboarding tour help guide getting started",
     run: () => window.dispatchEvent(new CustomEvent("open-onboarding")),
   },
+  {
+    label: "What's New",
+    icon: <Gift className="h-4 w-4" />,
+    keywords: "changelog updates release notes recent changes news",
+    run: () => window.dispatchEvent(new CustomEvent("open-whats-new")),
+  },
 ];
 
 const NAV: NavCommand[] = [
@@ -56,6 +64,7 @@ const NAV: NavCommand[] = [
   { label: "Map", href: "/map", icon: <Network className="h-4 w-4" />, keywords: "graph knowledge" },
   { label: "Tags", href: "/tags", icon: <Hash className="h-4 w-4" />, keywords: "labels taxonomy" },
   { label: "Settings", href: "/settings", icon: <Settings className="h-4 w-4" />, keywords: "preferences account" },
+  { label: "Guide", href: "/guide", icon: <BookOpen className="h-4 w-4" />, keywords: "help how to docs learn features manual" },
 ];
 
 function hitIcon(kind: GlobalSearchHit["kind"]) {

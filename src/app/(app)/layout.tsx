@@ -1,10 +1,12 @@
 import { requireUser } from "@/lib/auth";
+import { getUserSettings } from "@/lib/settings/store";
 import { Sidebar } from "@/components/shell/sidebar";
 import { MobileNav } from "@/components/shell/mobile-nav";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { QuickCapture } from "@/components/shell/quick-capture";
 import { Confetti } from "@/components/shell/confetti";
 import { Onboarding } from "@/components/shell/onboarding";
+import { WhatsNew } from "@/components/shell/whats-new";
 import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
 import { PageTransition } from "@/components/shell/page-transition";
@@ -15,6 +17,15 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // app loads instantly/offline; on web it verifies via getUser(). Cached, so
   // it shares the single auth round-trip with the pages below.
   const { user } = await requireUser();
+
+  // The "What's New" watermark. Fail soft — a settings-read hiccup must never
+  // block the whole app shell from rendering.
+  let lastSeenChangelog: string | null = null;
+  try {
+    lastSeenChangelog = (await getUserSettings(user.id)).lastSeenChangelog ?? null;
+  } catch {
+    // ignore — treat as "nothing seen yet"; the modal simply may re-show once.
+  }
 
   return (
     <AppDialogProvider>
@@ -31,6 +42,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <QuickCapture />
         <Confetti />
         <Onboarding />
+        <WhatsNew lastSeen={lastSeenChangelog} />
         <GlobalShortcuts />
       </div>
     </AppDialogProvider>
