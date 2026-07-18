@@ -77,12 +77,14 @@ declare
   touch_tables text[] := array[
     'profiles','folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','item_tags','directory_flashcards',
-    'skills','player_profile','user_settings','rabbithole_nodes','quizzes','quiz_attempts'
+    'skills','player_profile','user_settings','rabbithole_nodes','quizzes','quiz_attempts',
+    'thinktank_decks','thinktank_cards'
   ];
   tomb_tables text[] := array[
     'folders','feeds','tags','articles','documents','document_chunks',
     'directory_folders','directory_items','directory_flashcards',
-    'skills','player_profile','user_settings','rabbithole_nodes','quizzes','quiz_attempts'
+    'skills','player_profile','user_settings','rabbithole_nodes','quizzes','quiz_attempts',
+    'thinktank_decks','thinktank_cards'
   ];
   t text;
 begin
@@ -218,6 +220,43 @@ create index if not exists quiz_attempts_quiz_idx on quiz_attempts (quiz_id, com
 create index if not exists quiz_attempts_user_updated_idx on quiz_attempts (user_id, updated_at);
 `;
 
+// ThinkTank — mirrors cloud migration 0021. Always-run + idempotent so existing
+// local DBs gain the tables without a reinstall. SYNCED (triggers installed
+// by SYNC_SUPPORT_SQL via the table arrays above). No RLS locally — the
+// embedded DB is single-user.
+const THINKTANK_SQL = `
+create table if not exists thinktank_decks (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  topic text not null,
+  title text not null,
+  description text,
+  status text not null default 'ready',
+  pacing text not null default 'free',
+  last_position integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists thinktank_decks_user_created_idx on thinktank_decks (user_id, created_at desc);
+create index if not exists thinktank_decks_user_updated_idx on thinktank_decks (user_id, updated_at);
+
+create table if not exists thinktank_cards (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  deck_id uuid not null references thinktank_decks(id) on delete cascade,
+  position integer not null,
+  section text not null,
+  title text not null,
+  body text not null,
+  source_refs jsonb not null default '[]'::jsonb,
+  saved_item_id uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists thinktank_cards_deck_idx on thinktank_cards (deck_id, position);
+create index if not exists thinktank_cards_user_updated_idx on thinktank_cards (user_id, updated_at);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -309,6 +348,14 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(QUIZ_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] quiz tables failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run BEFORE sync support (same reason): thinktank tables must exist
+  // before SYNC_SUPPORT_SQL installs their triggers. Idempotent.
+  try {
+    await client.exec(THINKTANK_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] thinktank tables failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { FolderInput, HelpCircle, Inbox, Loader2, Trash2, X } from "lucide-react";
+import { FolderInput, HelpCircle, Inbox, Trash2, X } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -87,7 +88,7 @@ export function BulkActionBar({
 
       <Button size="sm" variant="ghost" onClick={handleMakeQuiz} disabled={makingQuiz}>
         {makingQuiz ? (
-          <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          <Spinner className="mr-1.5 h-3.5 w-3.5" />
         ) : (
           <HelpCircle className="mr-1.5 h-3.5 w-3.5" />
         )}

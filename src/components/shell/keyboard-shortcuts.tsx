@@ -30,6 +30,7 @@ export const SHORTCUT_GROUPS: Group[] = [
       { keys: ["g", "f"], label: "Feeds", chord: "f", href: "/feeds" },
       { keys: ["g", "d"], label: "Directory", chord: "d", href: "/directory" },
       { keys: ["g", "s"], label: "Study", chord: "s", href: "/study" },
+      { keys: ["g", "k"], label: "ThinkTank", chord: "k", href: "/thinktank" },
       { keys: ["g", "r"], label: "Rabbithole", chord: "r", href: "/rabbithole" },
       { keys: ["g", "m"], label: "Knowledge Map", chord: "m", href: "/map" },
       { keys: ["g", "g"], label: "Tags", chord: "g", href: "/tags" },

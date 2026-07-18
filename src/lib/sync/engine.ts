@@ -59,6 +59,9 @@ const TABLES: TableCfg[] = [
   // Quizzes before attempts: quiz_attempts.quiz_id references quizzes.
   { name: "quizzes", pk: ["id"], userCol: "user_id", exclude: [] },
   { name: "quiz_attempts", pk: ["id"], userCol: "user_id", exclude: [] },
+  // Decks before cards: thinktank_cards.deck_id references thinktank_decks.
+  { name: "thinktank_decks", pk: ["id"], userCol: "user_id", exclude: [] },
+  { name: "thinktank_cards", pk: ["id"], userCol: "user_id", exclude: [] },
   // Gamification aggregates. xp_events is the local-only ledger (not synced).
   { name: "player_profile", pk: ["id"], userCol: "user_id", exclude: [] },
   { name: "skills", pk: ["id"], userCol: "user_id", exclude: [] },

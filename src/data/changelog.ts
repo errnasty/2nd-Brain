@@ -27,6 +27,64 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-f",
+    date: "July 18, 2026",
+    title: "ThinkTank: learn any topic in bite-sized idea cards",
+    tag: "feature",
+    summary:
+      "A new tab for learning. Type any topic — or tap a suggestion drawn from your interests — and the AI builds a swipeable deck of short idea cards, ordered from the basics to the advanced stuff and connected to what's already in your library.",
+    items: [
+      "Each deck is 8–12 cards, one big idea each, readable in under a minute apiece.",
+      "Cards cite related notes and articles you've already saved.",
+      "Save any card to your library, turn it into flashcards for review, or go deeper in Rabbithole.",
+      "Finish a deck and build a full curriculum note in one tap.",
+      "Your reading position is remembered, so decks work in short sittings.",
+      "Find it in the sidebar, the More menu on mobile, or jump with g then k.",
+    ],
+  },
+  {
+    id: "2026-07-18-e",
+    date: "July 18, 2026",
+    title: "The app now gets to know you",
+    tag: "feature",
+    summary:
+      "The welcome tour now asks your name, what you want to learn, and your preferred look — and the app uses it: the daily brief greets you by name, your interests power upcoming topic suggestions, and your chosen palette applies right away. Everything is editable later in Settings.",
+    items: [
+      "New-user intro asks for your name, learning interests, and favorite color palette.",
+      "Today's brief and the sidebar greet you by your chosen name.",
+      "A new Profile section in Settings lets you change your name and interests anytime.",
+      "The tour now remembers you finished it across all your devices.",
+    ],
+  },
+  {
+    id: "2026-07-18-d",
+    date: "July 18, 2026",
+    title: "Your settings are now yours alone on shared computers",
+    tag: "improvement",
+    summary:
+      "Appearance settings — color palette, font, text size, reduce motion — and your AI model choice now belong to your account instead of the browser. Two people sharing one computer each keep their own look, and signing back in restores yours instantly.",
+    items: [
+      "Each account gets its own palette, font, text size, motion, and model preferences.",
+      "Existing settings carry over automatically to the first account that signs in.",
+      "Signing out keeps your preferences safe for the next time you sign in.",
+    ],
+  },
+  {
+    id: "2026-07-18-c",
+    date: "July 18, 2026",
+    title: "Clear loading feedback everywhere + smoother mobile navigation",
+    tag: "improvement",
+    summary:
+      "Every create and generate action now shows a spinner while it works, so you always know something is happening. On the phone, switching between the bottom tabs slides in the direction you're heading, and a slim progress bar appears at the top whenever a page takes a moment to load.",
+    items: [
+      "Saving a capture, adding a feed, saving a page, uploading files, and AI generation all show consistent progress indicators.",
+      "Longer AI jobs (like building a curriculum) show a clear overlay with what's happening.",
+      "Mobile bottom-tab switches now slide left or right to match where you're going; other page changes keep the gentle fade.",
+      "A loading bar at the top of the screen and a spinning tab icon show when a page is still on its way.",
+      "All of it respects your reduce-motion preference.",
+    ],
+  },
+  {
     id: "2026-07-18-b",
     date: "July 18, 2026",
     title: "A new front page + black-and-white default theme",

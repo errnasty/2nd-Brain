@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import {
   GraduationCap,
   Library,
+  Lightbulb,
   Loader2,
   MessageCircle,
   Network,
@@ -16,6 +17,8 @@ import {
   Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getScopedItem, setScopedItem } from "@/lib/settings";
+import { LinkPendingReporter } from "@/components/shell/route-progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 
@@ -26,6 +29,7 @@ const nav = [
   { href: "/feeds", label: "Feeds", icon: Rss, chord: "F" },
   { href: "/directory", label: "Directory", icon: Library, chord: "D" },
   { href: "/study", label: "Study", icon: GraduationCap, chord: "S" },
+  { href: "/thinktank", label: "ThinkTank", icon: Lightbulb, chord: "K" },
   { href: "/rabbithole", label: "Rabbithole", icon: Rabbit, chord: "R" },
   { href: "/map", label: "Knowledge Map", icon: Network, chord: "M" },
   { href: "/tags", label: "Tags", icon: Tag, chord: "G" },
@@ -33,7 +37,13 @@ const nav = [
 
 const VOLUME_KEY = "sidebar.volumeNumber.v1";
 
-export function Sidebar({ userEmail }: { userEmail: string }) {
+export function Sidebar({
+  userEmail,
+  displayName,
+}: {
+  userEmail: string;
+  displayName?: string | null;
+}) {
   const pathname = usePathname();
   // ⌘ on macOS, Ctrl elsewhere. Resolved after mount to avoid hydration mismatch.
   const [mod, setMod] = useState("⌘");
@@ -49,13 +59,13 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
 
     try {
       const todayKey = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-      const raw = localStorage.getItem(VOLUME_KEY);
+      const raw = getScopedItem(VOLUME_KEY);
       const parsed = raw ? (JSON.parse(raw) as { n: number; lastDay: string }) : null;
       if (parsed && parsed.lastDay === todayKey) {
         setVolume(parsed.n);
       } else {
         const next = parsed ? parsed.n + 1 : dayOfYear(new Date());
-        localStorage.setItem(VOLUME_KEY, JSON.stringify({ n: next, lastDay: todayKey }));
+        setScopedItem(VOLUME_KEY, JSON.stringify({ n: next, lastDay: todayKey }));
         setVolume(next);
       }
     } catch {
@@ -82,6 +92,9 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
             </span>
           )}
         </div>
+        {displayName && (
+          <div className="mt-1 truncate text-xs font-medium">{displayName}</div>
+        )}
         <div className="mt-1 truncate text-[11px] text-muted-foreground">{userEmail}</div>
       </div>
       <Separator />
@@ -127,6 +140,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
                 <Icon className={cn("h-4 w-4", active && "text-brand")} />
                 <span className="flex-1">{label}</span>
                 <NavHint chord={chord} />
+                <LinkPendingReporter />
               </Link>
             );
           })}

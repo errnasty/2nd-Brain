@@ -48,9 +48,13 @@ function SignupFormInner({ requiresInvite }: { requiresInvite: boolean }) {
         // (pre-confirmed) with the service role, then we sign in normally.
         const result = await inviteSignupAction(email, password, inviteCode);
         if (!result.ok) throw new Error(result.error);
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data: signIn, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
         await clearOfflineMirror(); // fresh account — no stale offline mirror
+        if (signIn.user) {
+          const { setActiveUser } = await import("@/lib/settings");
+          setActiveUser(signIn.user.id); // prefs start scoped to the new account
+        }
         router.replace("/");
         router.refresh();
         return;
@@ -64,6 +68,10 @@ function SignupFormInner({ requiresInvite }: { requiresInvite: boolean }) {
       // yet — tell the user to check their email.
       if (data.session) {
         await clearOfflineMirror(); // fresh account — no stale offline mirror
+        if (data.user) {
+          const { setActiveUser } = await import("@/lib/settings");
+          setActiveUser(data.user.id); // prefs start scoped to the new account
+        }
         router.replace("/");
         router.refresh();
       } else {

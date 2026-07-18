@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/ui/loading-button";
 import { toast } from "sonner";
 import { addFeedAction } from "@/app/(app)/feeds/actions";
 import type { Folder } from "@/lib/db/schema";
@@ -99,9 +100,9 @@ export function AddFeedDialog({
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={pending || !url.trim()}>
-              {pending ? "Adding…" : "Add feed"}
-            </Button>
+            <LoadingButton type="submit" loading={pending} loadingText="Adding…" disabled={!url.trim()}>
+              Add feed
+            </LoadingButton>
           </DialogFooter>
         </form>
       </DialogContent>

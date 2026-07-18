@@ -2,12 +2,21 @@ import Link from "next/link";
 import { ArrowRight, Brain } from "lucide-react";
 import { DailyBrief } from "@/components/today/daily-brief";
 import { requireUser } from "@/lib/auth";
+import { getDisplayName } from "@/lib/profile/store";
 import { fetchCardStats } from "@/app/(app)/review/actions";
 
-/** Best-effort first name: profile/metadata name, else the email local part. */
-function firstNameOf(user: { email?: string | null; user_metadata?: Record<string, unknown> }): string | undefined {
+/** Best-effort first name: chosen display name, profile/metadata name, else
+ *  the email local part. */
+function firstNameOf(
+  user: { email?: string | null; user_metadata?: Record<string, unknown> },
+  displayName: string | null,
+): string | undefined {
   const meta = user.user_metadata ?? {};
-  const full = (typeof meta.full_name === "string" && meta.full_name) || (typeof meta.name === "string" && meta.name) || "";
+  const full =
+    displayName ||
+    (typeof meta.full_name === "string" && meta.full_name) ||
+    (typeof meta.name === "string" && meta.name) ||
+    "";
   const raw = full || (user.email ? user.email.split("@")[0] : "");
   const first = raw.split(/[\s._-]+/).filter(Boolean)[0];
   if (!first) return undefined;
@@ -16,7 +25,14 @@ function firstNameOf(user: { email?: string | null; user_metadata?: Record<strin
 
 export default async function TodayPage() {
   const { user } = await requireUser();
-  const name = firstNameOf(user);
+  // Fail-soft: a profile-read hiccup must not break Today.
+  let displayName: string | null = null;
+  try {
+    displayName = await getDisplayName(user.id);
+  } catch {
+    // fall back to auth metadata / email
+  }
+  const name = firstNameOf(user, displayName);
   // One cheap count query. Fail-soft: a pending migration must not break Today.
   let due = 0;
   try {

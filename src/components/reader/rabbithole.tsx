@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { ASK_MODEL_KEY, getScopedItem } from "@/lib/settings";
 import { RABBITHOLE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import {
   RABBITHOLE_LENSES,
@@ -15,11 +16,9 @@ import {
   type RabbitholeLens,
 } from "@/lib/rabbithole/lenses";
 
-const MODEL_STORAGE_KEY = "ask.model.v1"; // shared with the Ask tab / DocQueryPanel
-
+// Model choice is shared with the Ask tab / DocQueryPanel (per-user scoped).
 function getModel(): string {
-  if (typeof window === "undefined") return DEFAULT_CHAT_MODEL;
-  return window.localStorage.getItem(MODEL_STORAGE_KEY) || DEFAULT_CHAT_MODEL;
+  return getScopedItem(ASK_MODEL_KEY) || DEFAULT_CHAT_MODEL;
 }
 
 export type RhNode = {

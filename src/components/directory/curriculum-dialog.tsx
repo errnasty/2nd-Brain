@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { GraduationCap, Loader2 } from "lucide-react";
+import { GraduationCap } from "lucide-react";
 import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { LoadingButton } from "@/components/ui/loading-button";
+import { BusyOverlay } from "@/components/ui/busy-overlay";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 
@@ -76,6 +78,7 @@ export function CurriculumDialog({
       <DialogPortal>
         <DialogOverlay />
         <DialogPrimitive.Content className="fixed left-[50%] top-[50%] z-50 w-full max-w-md translate-x-[-50%] translate-y-[-50%] rounded-xl border border-border bg-background p-5 shadow-2xl data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95">
+          <BusyOverlay show={loading} label="Building your curriculum… ~20s" />
           <DialogPrimitive.Title className="mb-1 flex items-center gap-2 text-base font-semibold">
             <GraduationCap className="h-4 w-4" /> Generate curriculum
           </DialogPrimitive.Title>
@@ -94,10 +97,10 @@ export function CurriculumDialog({
             <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={loading}>
               Cancel
             </Button>
-            <Button onClick={generate} disabled={loading || !topic.trim()} className="gap-1.5">
-              {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GraduationCap className="h-3.5 w-3.5" />}
+            <LoadingButton onClick={generate} loading={loading} disabled={!topic.trim()} className="gap-1.5">
+              {!loading && <GraduationCap className="h-3.5 w-3.5" />}
               Generate
-            </Button>
+            </LoadingButton>
           </div>
         </DialogPrimitive.Content>
       </DialogPortal>

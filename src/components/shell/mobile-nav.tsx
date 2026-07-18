@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BookOpen,
@@ -10,6 +10,7 @@ import {
   GraduationCap,
   Inbox,
   Library,
+  Lightbulb,
   Menu,
   MessageCircle,
   MoreHorizontal,
@@ -24,6 +25,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Spinner } from "@/components/ui/spinner";
+import { LinkPendingReporter } from "@/components/shell/route-progress";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { useSidebarData } from "@/lib/offline/use-sidebar-data";
 import type { CachedFolder } from "@/lib/offline/db";
@@ -38,6 +41,7 @@ const TABS = [
 
 // Secondary sections — surfaced through the "More" sheet, not the bottom bar.
 const MORE_LINKS = [
+  { href: "/thinktank", label: "ThinkTank", icon: Lightbulb },
   { href: "/map", label: "Knowledge Map", icon: Network },
   { href: "/study", label: "Study", icon: GraduationCap },
   { href: "/rabbithole", label: "Rabbithole", icon: Rabbit },
@@ -51,6 +55,7 @@ const TITLES: Record<string, string> = {
   "/feeds": "Feeds",
   "/directory": "Directory",
   "/ask": "Ask",
+  "/thinktank": "ThinkTank",
   "/map": "Knowledge Map",
   "/study": "Study",
   "/rabbithole": "Rabbithole",
@@ -139,8 +144,9 @@ export function MobileNav() {
               )}
             >
               {active && <span className="absolute inset-x-4 top-0 h-0.5 rounded-full bg-brand" />}
-              <Icon className="h-5 w-5" />
+              <TabIcon icon={Icon} />
               <span className="text-[10px]">{label}</span>
+              <LinkPendingReporter />
             </Link>
           );
         })}
@@ -162,6 +168,13 @@ export function MobileNav() {
       <MoreSheet open={moreOpen} onClose={() => setMoreOpen(false)} activePath={pathname} />
     </>
   );
+}
+
+/** Bottom-tab icon that becomes a spinner while its route is loading. */
+function TabIcon({ icon: Icon }: { icon: typeof Sparkles }) {
+  const { pending } = useLinkStatus();
+  if (pending) return <Spinner className="h-5 w-5" />;
+  return <Icon className="h-5 w-5" />;
 }
 
 /** Close an overlay on Escape while it's open (parity with Radix Dialog). */
@@ -229,6 +242,7 @@ function MoreSheet({
               >
                 <Icon className="h-5 w-5 text-muted-foreground" />
                 <span>{label}</span>
+                <LinkPendingReporter />
               </Link>
             );
           })}

@@ -44,7 +44,14 @@ const TAG_META: Record<ChangelogTag, { label: string; icon: React.ReactNode; cla
  *
  * Mirrors the first-run Onboarding modal's visual language.
  */
-export function WhatsNew({ lastSeen }: { lastSeen: string | null }) {
+export function WhatsNew({
+  lastSeen,
+  onboardingDone,
+}: {
+  lastSeen: string | null;
+  /** Server-side onboarding flag (authoritative since per-user gating). */
+  onboardingDone?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const unseen = useMemo(() => unseenChangelog(lastSeen), [lastSeen]);
@@ -53,9 +60,10 @@ export function WhatsNew({ lastSeen }: { lastSeen: string | null }) {
   // done (a brand-new user shouldn't get two modals stacked).
   useEffect(() => {
     if (unseen.length === 0) return;
-    let onboarded = false;
+    let onboarded = onboardingDone === true;
     try {
-      onboarded = localStorage.getItem(ONBOARDING_DONE_KEY) === "1";
+      // Legacy browser-global flag still counts for pre-server-flag sessions.
+      onboarded ||= localStorage.getItem(ONBOARDING_DONE_KEY) === "1";
     } catch {
       // ignore
     }
@@ -65,7 +73,7 @@ export function WhatsNew({ lastSeen }: { lastSeen: string | null }) {
       setOpen(true);
     }, 700);
     return () => clearTimeout(t);
-  }, [unseen.length]);
+  }, [unseen.length, onboardingDone]);
 
   // Anytime access — shows the full history.
   useEffect(() => {

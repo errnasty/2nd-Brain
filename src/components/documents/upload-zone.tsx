@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Upload, FileText, Loader2 } from "lucide-react";
+import { Upload, FileText } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { uploadDocumentAction } from "@/app/(app)/documents/actions";
 import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
@@ -83,7 +84,7 @@ export function UploadZone({ folderId }: { folderId?: string | null }) {
         }}
       />
       {pending ? (
-        <Loader2 className="h-7 w-7 animate-spin text-muted-foreground" />
+        <Spinner className="h-7 w-7 text-muted-foreground" />
       ) : (
         <Upload className="h-7 w-7 text-muted-foreground" />
       )}
