@@ -4,7 +4,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function DocumentsLoading() {
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <section className="flex w-full flex-col border-r border-border md:max-w-sm md:shrink-0">
+      <section className="flex w-full flex-col border-r border-border lg:max-w-sm lg:shrink-0">
         <div className="p-3">
           <Skeleton className="h-24 w-full rounded-lg" />
         </div>

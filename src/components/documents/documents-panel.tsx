@@ -44,11 +44,11 @@ export function DocumentsPanel({
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* Mobile drill-down: the list hides once a document is open (the reader
-          has its own X to come back); both panes show side-by-side at md+. */}
+          has its own X to come back); both panes show side-by-side at lg+. */}
       <section
         className={cn(
-          "w-full flex-col border-r border-border md:max-w-sm md:shrink-0",
-          selected ? "hidden md:flex" : "flex",
+          "w-full flex-col border-r border-border lg:max-w-sm lg:shrink-0",
+          selected ? "hidden lg:flex" : "flex",
         )}
       >
         <div className="p-3">

@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18",
+    date: "July 18, 2026",
+    title: "Consistent mobile layout on any screen size",
+    tag: "fix",
+    summary:
+      "Narrowing your desktop browser now shows the exact same mobile layout as your phone. The shell, side-by-side readers, and loading screens all switch to mobile at a single width, so there's no more in-between view that matched neither.",
+  },
+  {
     id: "2026-07-13",
     date: "July 13, 2026",
     title: "A proper welcome — guide, landing page & What's New",

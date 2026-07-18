@@ -88,7 +88,7 @@ export function MobileNav() {
     <>
       {/* Top app bar */}
       <header
-        className="fixed inset-x-0 top-0 z-40 flex items-center gap-1 border-b border-border bg-card/95 px-1.5 backdrop-blur md:hidden"
+        className="fixed inset-x-0 top-0 z-40 flex items-center gap-1 border-b border-border bg-card/95 px-1.5 backdrop-blur lg:hidden"
         style={{ height: "calc(3rem + env(safe-area-inset-top))", paddingTop: "env(safe-area-inset-top)" }}
       >
         <button
@@ -120,7 +120,7 @@ export function MobileNav() {
 
       {/* Bottom tab bar */}
       <nav
-        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-border bg-card/95 backdrop-blur md:hidden"
+        className="fixed inset-x-0 bottom-0 z-40 flex items-stretch border-t border-border bg-card/95 backdrop-blur lg:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {TABS.map(({ href, label, icon: Icon }) => {
@@ -190,7 +190,7 @@ function MoreSheet({
     <>
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-black/50 transition-opacity md:hidden",
+          "fixed inset-0 z-40 bg-black/50 transition-opacity lg:hidden",
           open ? "opacity-100" : "pointer-events-none opacity-0",
         )}
         onClick={onClose}
@@ -198,7 +198,7 @@ function MoreSheet({
       />
       <div
         className={cn(
-          "fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t border-border bg-card transition-transform duration-200 md:hidden",
+          "fixed inset-x-0 bottom-0 z-50 rounded-t-2xl border-t border-border bg-card transition-transform duration-200 lg:hidden",
           open ? "translate-y-0" : "translate-y-full",
         )}
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.5rem)" }}
@@ -285,7 +285,7 @@ function FolderDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       {/* Scrim */}
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-black/40 transition-opacity md:hidden",
+          "fixed inset-0 z-40 bg-black/40 transition-opacity lg:hidden",
           open ? "opacity-100" : "pointer-events-none opacity-0",
         )}
         onClick={onClose}
@@ -294,7 +294,7 @@ function FolderDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       {/* Drawer */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-border bg-card transition-transform duration-200 md:hidden",
+          "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-border bg-card transition-transform duration-200 lg:hidden",
           open ? "translate-x-0" : "-translate-x-full",
         )}
         aria-hidden={!open}

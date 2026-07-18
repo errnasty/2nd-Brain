@@ -493,7 +493,7 @@ export function ItemViewer({
     <section className="flex flex-1 flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-1 border-b border-border px-3 py-2">
-        <Button size="sm" variant="ghost" onClick={onClose} className="md:hidden -ml-1 gap-1 px-2">
+        <Button size="sm" variant="ghost" onClick={onClose} className="lg:hidden -ml-1 gap-1 px-2">
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>

@@ -28,7 +28,7 @@ export function PaneToggles({
   if (!navControllable && !onToggleList) return null;
 
   return (
-    <div className={cn("hidden items-center md:flex", className)}>
+    <div className={cn("hidden items-center lg:flex", className)}>
       {navControllable && (
         <Button
           size="icon"

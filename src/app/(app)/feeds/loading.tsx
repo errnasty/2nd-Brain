@@ -3,7 +3,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function FeedsLoading() {
   return (
     <>
-      <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border md:flex">
+      <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border lg:flex">
         <div className="space-y-3 p-3">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="space-y-2">

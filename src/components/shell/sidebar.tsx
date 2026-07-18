@@ -68,7 +68,7 @@ export function Sidebar({ userEmail }: { userEmail: string }) {
   }
 
   return (
-    <aside className="hidden w-60 shrink-0 border-r border-border md:flex md:flex-col">
+    <aside className="hidden w-60 shrink-0 border-r border-border lg:flex lg:flex-col">
       <div className="px-4 py-5">
         <div className="flex items-baseline gap-1.5">
           <span className="text-base font-semibold leading-none tracking-tight">Second Brain</span>

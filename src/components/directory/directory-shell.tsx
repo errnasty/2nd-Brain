@@ -487,11 +487,11 @@ export function DirectoryShell({
       <section
         className={cn(
           "w-full flex-col border-r border-border",
-          view === "board" ? "flex-1" : "md:max-w-sm md:shrink-0",
+          view === "board" ? "flex-1" : "lg:max-w-sm lg:shrink-0",
           selectedId ? "hidden" : "flex",
           // Collapse the list on desktop too (only in list view, only with a
-          // doc open) so the viewer fills the width. Otherwise re-show at md+.
-          view === "list" && selectedId && listCollapsed ? "md:hidden" : "md:flex",
+          // doc open) so the viewer fills the width. Otherwise re-show at lg+.
+          view === "list" && selectedId && listCollapsed ? "lg:hidden" : "lg:flex",
         )}
       >
         {/* ── Editorial header ───────────────────────────────────── */}
@@ -500,7 +500,7 @@ export function DirectoryShell({
             {/* Mobile back */}
             <button
               onClick={() => router.push("/directory")}
-              className="-ml-0.5 hover:text-foreground md:hidden"
+              className="-ml-0.5 hover:text-foreground lg:hidden"
               title="Folders"
             >
               <ChevronLeft className="h-3 w-3" />

@@ -415,16 +415,16 @@ export function ArticleList({
   return (
     <section
       className={cn(
-        "w-full flex-col border-r border-border md:max-w-sm md:shrink-0",
+        "w-full flex-col border-r border-border lg:max-w-sm lg:shrink-0",
         selectedId ? "hidden" : "flex",
         // Collapse on desktop too when an article is open and the reader is widened.
-        collapsed && selectedId ? "md:hidden" : "md:flex",
+        collapsed && selectedId ? "lg:hidden" : "lg:flex",
       )}
     >
       {/* Mobile back */}
       <button
         onClick={() => router.push("/feeds")}
-        className="flex items-center gap-1 px-3 pt-3 text-xs text-muted-foreground hover:text-foreground md:hidden"
+        className="flex items-center gap-1 px-3 pt-3 text-xs text-muted-foreground hover:text-foreground lg:hidden"
       >
         <ChevronLeft className="h-3.5 w-3.5" /> Folders
       </button>

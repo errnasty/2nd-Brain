@@ -432,7 +432,7 @@ export function ArticleReader({
       <div className="flex items-center gap-1 border-b border-border px-2 py-2">
         {/* Mobile-only back: returns to the article list (list is hidden on
             mobile while reading; side-by-side on md+ so no button needed). */}
-        <Button size="sm" variant="ghost" onClick={close} className="md:hidden -ml-1 gap-1 px-2">
+        <Button size="sm" variant="ghost" onClick={close} className="lg:hidden -ml-1 gap-1 px-2">
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>

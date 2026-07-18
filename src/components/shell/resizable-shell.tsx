@@ -54,12 +54,14 @@ export function ResizableShell({
     else p.collapse();
   }, []);
 
-  // Mobile (<768px): skip the resizable panel layout entirely — the bottom
-  // MobileNav covers navigation, and the panel would otherwise squish content.
-  // Default to desktop on first render to avoid hydration flicker; flip after
-  // mount if the viewport actually is mobile.
+  // Mobile (<1024px, i.e. below Tailwind's `lg`): skip the resizable panel
+  // layout entirely — the bottom MobileNav covers navigation and the panel
+  // would otherwise squish content. This threshold MUST match the `lg:` shell
+  // switches (sidebar / mobile-nav / layout padding) so there's a single
+  // mobile↔desktop boundary and no in-between "hybrid" layout. Default to
+  // desktop on first render to avoid hydration flicker; flip after mount.
   useEffect(() => {
-    const m = window.matchMedia("(max-width: 767px)");
+    const m = window.matchMedia("(max-width: 1023px)");
     const update = () => setIsMobile(m.matches);
     update();
     m.addEventListener("change", update);

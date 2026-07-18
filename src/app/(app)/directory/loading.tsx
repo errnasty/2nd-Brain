@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
  */
 export default function DirectoryLoading() {
   return (
-    <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border md:flex">
+    <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border lg:flex">
       <div className="flex items-center justify-between px-3 py-3">
         <Skeleton className="h-4 w-24" />
         <div className="flex gap-1">
