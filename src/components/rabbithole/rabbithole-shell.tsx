@@ -91,7 +91,7 @@ export function RabbitholeShell({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-1">
+    <div className="flex h-full min-h-0 min-w-0 w-full flex-1 overflow-hidden">
       {/* Hole list — desktop sidebar */}
       <aside className="hidden w-72 shrink-0 flex-col border-r border-border lg:flex">
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
@@ -119,7 +119,7 @@ export function RabbitholeShell({
                 <ArrowLeft className="h-4 w-4" />
                 Holes
               </button>
-              <span className="truncate text-sm font-semibold">{root.title}</span>
+              <span className="min-w-0 flex-1 truncate text-sm font-semibold">{root.title}</span>
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 — select text to dig
               </span>

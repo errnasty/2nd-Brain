@@ -82,7 +82,7 @@ export function ResizableShell({
     }
     return (
       <PaneChromeProvider value={mobileChrome}>
-        <div className="h-full w-full overflow-hidden">{children}</div>
+        <div className="h-full min-w-0 w-full overflow-hidden">{children}</div>
       </PaneChromeProvider>
     );
   }
@@ -108,7 +108,7 @@ export function ResizableShell({
           <div className="absolute inset-y-0 -left-1 right-auto w-2 cursor-col-resize" />
         </PanelResizeHandle>
         <Panel defaultSize={100 - defaultNavSize}>
-          <div className="h-full overflow-hidden">{children}</div>
+          <div className="h-full min-w-0 overflow-hidden">{children}</div>
         </Panel>
       </PanelGroup>
 

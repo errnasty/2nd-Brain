@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-b",
+    date: "July 18, 2026",
+    title: "Reader pages now stay within your phone screen",
+    tag: "fix",
+    summary:
+      "Document, feed, and Rabbithole pages now keep their reading column within the phone screen, so titles and paragraphs wrap instead of being cut off. Extra document actions now move into the overflow menu on small screens, keeping the top bar usable.",
+  },
+  {
     id: "2026-07-18-a",
     date: "July 18, 2026",
     title: "Reading text no longer runs off the right edge on phones",

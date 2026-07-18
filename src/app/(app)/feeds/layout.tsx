@@ -52,7 +52,7 @@ export default async function FeedsLayout({ children }: { children: React.ReactN
         mobileRoute="feeds"
         nav={<FeedsNav folders={foldersList} feeds={feedsList} unread={unread} />}
       >
-        <div className="flex h-full overflow-hidden">{children}</div>
+        <div className="flex h-full min-w-0 w-full overflow-hidden">{children}</div>
       </ResizableShell>
     </>
   );

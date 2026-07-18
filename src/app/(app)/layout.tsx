@@ -33,7 +33,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <Sidebar userEmail={user.email ?? ""} />
         {/* On mobile, clear the fixed top app bar and bottom tab bar (+ safe
             areas). Desktop has neither, so the padding collapses at md+. */}
-        <main className="flex-1 overflow-hidden pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(3.5rem+env(safe-area-inset-bottom))] lg:pt-0 lg:pb-0">
+        <main className="min-w-0 flex-1 overflow-hidden pt-[calc(3rem+env(safe-area-inset-top))] pb-[calc(3.5rem+env(safe-area-inset-bottom))] lg:pt-0 lg:pb-0">
           <SyncConflictBanner />
           <PageTransition>{children}</PageTransition>
         </main>

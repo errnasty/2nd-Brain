@@ -71,7 +71,7 @@ export default async function DirectoryLayout({ children }: { children: React.Re
           />
         }
       >
-        <div className="flex h-full overflow-hidden">{children}</div>
+        <div className="flex h-full min-w-0 w-full overflow-hidden">{children}</div>
       </ResizableShell>
     </DirectoryDndShell>
   );

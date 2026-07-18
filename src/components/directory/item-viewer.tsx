@@ -490,29 +490,29 @@ export function ItemViewer({
   } as const;
 
   return (
-    <section className="flex flex-1 flex-col overflow-hidden">
+    <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-1 border-b border-border px-3 py-2">
+      <div className="flex min-w-0 items-center gap-1 border-b border-border px-3 py-2">
         <Button size="sm" variant="ghost" onClick={onClose} className="lg:hidden -ml-1 gap-1 px-2">
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>
         <PaneToggles listCollapsed={listCollapsed} onToggleList={onToggleList} className="-ml-1 mr-0.5" />
-        <div className="flex flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-          <span>{item.kind.replace("_", " ")}</span>
-          <span>·</span>
-          <span>{formatRelativeTime(item.updatedAt)}</span>
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+          <span className="truncate">{item.kind.replace("_", " ")}</span>
+          <span className="hidden sm:inline">·</span>
+          <span className="hidden sm:inline">{formatRelativeTime(item.updatedAt)}</span>
           {saving ? (
-            <span className="italic">· Saving…</span>
+            <span className="hidden italic sm:inline">· Saving…</span>
           ) : dirty ? (
-            <span className="italic">· unsaved</span>
+            <span className="hidden italic sm:inline">· unsaved</span>
           ) : (
-            (isNote || isDoc) && <span className="italic text-muted-foreground/70">· Saved</span>
+            (isNote || isDoc) && <span className="hidden italic text-muted-foreground/70 sm:inline">· Saved</span>
           )}
         </div>
 
         {(isNote || isDoc) && (
-          <div className="flex items-center rounded-md border border-border p-0.5">
+          <div className="flex shrink-0 items-center rounded-md border border-border p-0.5">
             <button
               onClick={() => setMode("edit")}
               className={cn(
@@ -522,7 +522,7 @@ export function ItemViewer({
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <Pencil className="mr-1 inline h-3 w-3" /> Edit
+              <Pencil className="mr-1 hidden h-3 w-3 sm:inline" /> Edit
             </button>
             <button
               onClick={() => {
@@ -536,7 +536,7 @@ export function ItemViewer({
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              <Eye className="mr-1 inline h-3 w-3" /> Preview
+              <Eye className="mr-1 hidden h-3 w-3 sm:inline" /> Preview
             </button>
           </div>
         )}
@@ -554,7 +554,7 @@ export function ItemViewer({
           variant="ghost"
           onClick={() => setQueryOpen((v) => !v)}
           title="Ask about this item"
-          className={queryOpen ? "text-primary" : ""}
+          className={cn("hidden sm:inline-flex", queryOpen && "text-primary")}
         >
           <Sparkles className="h-4 w-4" />
         </Button>
@@ -566,6 +566,9 @@ export function ItemViewer({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem className="sm:hidden" onClick={() => setQueryOpen((v) => !v)}>
+              <Sparkles className="mr-2 h-3.5 w-3.5" /> Ask about this item
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setRabbitholeOpen((v) => !v)}>
               <Rabbit className="mr-2 h-3.5 w-3.5" /> Rabbithole
             </DropdownMenuItem>
@@ -704,7 +707,7 @@ export function ItemViewer({
               placeholder="Title"
             />
           ) : (
-            <h1 className="editorial-display text-3xl font-bold tracking-tight">{title}</h1>
+            <h1 className="editorial-display break-words text-3xl font-bold tracking-tight">{title}</h1>
           )}
 
           <Separator className="my-6" />

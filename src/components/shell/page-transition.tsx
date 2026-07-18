@@ -16,7 +16,7 @@ import { usePathname } from "next/navigation";
 export function PageTransition({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   return (
-    <div key={pathname} className="h-full motion-safe:animate-page-in">
+    <div key={pathname} className="h-full min-w-0 w-full overflow-hidden motion-safe:animate-page-in">
       {children}
     </div>
   );

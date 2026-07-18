@@ -31,7 +31,7 @@ export function MobileShell({
   const showContent = scopeKeys.some((k) => sp.has(k));
 
   return (
-    <div className="h-full w-full overflow-hidden">
+    <div className="h-full min-w-0 w-full overflow-hidden">
       {showContent ? children : <div className="h-full overflow-y-auto">{nav}</div>}
     </div>
   );
