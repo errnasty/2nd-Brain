@@ -171,8 +171,8 @@ export function RabbitholeShell({
         </div>
       ) : (
         /* No hole selected: hero + (on smaller screens) the hole list itself */
-        <ScrollArea className="flex-1">
-          <div className="mx-auto max-w-xl px-6 py-10">
+        <ScrollArea className="min-w-0 flex-1">
+          <div className="mx-auto w-full max-w-xl px-6 py-10">
             <div className="mb-6 flex flex-col items-center gap-2 text-center">
               <Rabbit className="h-10 w-10 text-primary/60" />
               <h1 className="editorial-display text-2xl font-bold tracking-tight">Rabbithole</h1>

@@ -286,6 +286,20 @@
 }
 
 /* ── Reader ─────────────────────────────────────────────────────────── */
+
+/* Radix ScrollArea's Viewport wraps children in an internal div that defaults
+   to `min-width: max-content` — i.e. it grows to the content's intrinsic width
+   and ignores the parent's width constraint. On a narrow phone, long prose
+   tokens then push the whole column off-screen to the right. This is the real
+   reason every reader (articles, documents, notes, rabbithole) overflows on
+   mobile regardless of the `min-w-0` / `w-full` guards on the outer shells.
+   Forcing the Viewport itself to constrain its width (and letting inner
+   content wrap via overflow-wrap) closes the last escape hatch. */
+[data-radix-scroll-area-viewport] > div {
+  min-width: 0 !important;
+  width: 100%;
+  max-width: 100%;
+}
 .prose-reader {
   /* Per-article reader override (--reader-font) wins; otherwise inherit the
      app-wide font chosen in Settings (--app-font-body); Georgia as last resort. */

@@ -30,9 +30,16 @@ export function MobileShell({
       : ["folder", "tags", "item", "scope"];
   const showContent = scopeKeys.some((k) => sp.has(k));
 
+  // `key` on the inner pane makes React remount on drill-down (folders→list,
+  // list→reader) so the page-in transition replays — mobile navigation feels
+  // like a deliberate page change instead of an abrupt content swap.
   return (
     <div className="h-full min-w-0 w-full overflow-hidden">
-      {showContent ? children : <div className="h-full overflow-y-auto">{nav}</div>}
+      {showContent ? (
+        <div key="content" className="h-full motion-safe:animate-page-in">{children}</div>
+      ) : (
+        <div key="nav" className="h-full overflow-y-auto motion-safe:animate-page-in">{nav}</div>
+      )}
     </div>
   );
 }

@@ -429,7 +429,7 @@ export function ArticleReader({
   const minutesRemaining = readingMinutes ? Math.max(0, Math.ceil(readingMinutes * (1 - progress))) : null;
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col overflow-hidden" data-reader-theme={prefs.theme}>
+    <section className="flex min-w-0 flex-1 flex-col overflow-hidden motion-safe:animate-page-in" data-reader-theme={prefs.theme}>
       <div className="flex items-center gap-1 border-b border-border px-2 py-2">
         {/* Mobile-only back: returns to the article list (list is hidden on
             mobile while reading; side-by-side on md+ so no button needed). */}

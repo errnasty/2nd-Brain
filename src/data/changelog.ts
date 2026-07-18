@@ -37,14 +37,14 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     id: "2026-07-18-a",
     date: "July 18, 2026",
-    title: "Reading text no longer runs off the right edge on phones",
+    title: "Reading text finally fits the phone screen + smoother page changes",
     tag: "fix",
     summary:
-      "Article, document, and note text was getting cut off on the right of a phone screen because the reading column could grow wider than the display. It now fits the screen and long words or links wrap instead of overflowing. The article reader's crowded icon row also tucks star, bookmark, and ask into the ⋯ menu on small screens.",
+      "The last piece of the mobile text-overflow puzzle: the scroll container under every reader could still grow wider than the phone, so articles, documents, notes, and rabbithole text kept spilling off the right edge. That container is now hard-capped to the screen width. Mobile page transitions also get a small fade/rise so drilling into a folder, article, or hole feels like a deliberate move instead of an abrupt swap.",
     items: [
-      "Articles, documents, notes, and rabbithole text all stay within the screen width on phones.",
-      "Long unbroken words, links, and extracted PDF text now wrap instead of forcing horizontal scroll.",
-      "On phones, the article reader's extra actions (star, read-later, ask) are tucked inside the ⋯ menu instead of crowding the top bar.",
+      "Articles, documents, notes, and rabbithole text now stay fully within the phone screen — no more horizontal clipping.",
+      "Opening an item on mobile plays a short fade-in so the transition feels intentional.",
+      "Respects the system reduce-motion setting — the animation is skipped for users who prefer it off.",
     ],
   },
   {

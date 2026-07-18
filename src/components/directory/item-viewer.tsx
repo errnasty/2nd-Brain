@@ -490,7 +490,7 @@ export function ItemViewer({
   } as const;
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <section className="flex min-w-0 flex-1 flex-col overflow-hidden motion-safe:animate-page-in">
       {/* Header */}
       <div className="flex min-w-0 items-center gap-1 border-b border-border px-3 py-2">
         <Button size="sm" variant="ghost" onClick={onClose} className="lg:hidden -ml-1 gap-1 px-2">
