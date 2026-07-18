@@ -37,16 +37,20 @@ export async function createThinkTankDeckAction(rawTopic: string) {
   }
 
   try {
-    // Library grounding — fail-soft: a retrieval hiccup (no embeddings key,
-    // empty library) just means an ungrounded deck.
-    let related: { directoryItemId: string; title: string }[] = [];
-    try {
-      const hits = await retrieveFromDirectory(user.id, topic, 12);
-      const seen = new Set<string>();
-      related = hits.filter((h) => (seen.has(h.title) ? false : (seen.add(h.title), true)));
-    } catch {
-      // ungrounded deck
-    }
+    // Library grounding + web grounding run in parallel — both are fail-soft,
+    // so a hiccup in either just means an ungrounded deck. Running them
+    // concurrently cuts the pre-AI latency to ~max(ground, web) instead of
+    // the sum.
+    const grounding = (async () => {
+      try {
+        const hits = await retrieveFromDirectory(user.id, topic, 12);
+        const seen = new Set<string>();
+        return hits.filter((h) => (seen.has(h.title) ? false : (seen.add(h.title), true)));
+      } catch {
+        return [] as { directoryItemId: string; title: string }[];
+      }
+    })();
+    const related = await grounding;
 
     const deck = await generateThinkTankDeck(topic, related);
     if (!deck || deck.cards.length === 0) {

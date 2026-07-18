@@ -51,9 +51,14 @@ export function ThinkTankHub({
         router.refresh();
       } else {
         toast.error(r.error);
+        // The action can outlive the client fetch (web search + AI is ~20-30s).
+        // If the deck was actually created but the response was lost, a refresh
+        // reveals it instead of leaving the user staring at an error.
+        router.refresh();
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't build the deck");
+      router.refresh();
     } finally {
       setBuilding(false);
     }
