@@ -15,9 +15,13 @@ export type WebSnippet = {
   text: string;
 };
 
-const MAX_SNIPPETS = 3;
+const MAX_SNIPPETS = 2;
 const MAX_CHARS_PER_SNIPPET = 1800;
-const FETCH_TIMEOUT_MS = 8000;
+// Aggressive timeouts: the whole grounding pass (search + N page fetches) must
+// finish well under the server-action limit so it never pushes the total
+// (grounding + AI generation) past Next.js's "unexpected response" threshold.
+// 4s per fetch × 2 pages = ~8s worst case; the AI call gets the rest.
+const FETCH_TIMEOUT_MS = 4000;
 
 /** Search DuckDuckGo and return the top result URLs + titles. */
 export async function searchWeb(query: string, max = MAX_SNIPPETS): Promise<{ title: string; url: string }[]> {
@@ -75,26 +79,34 @@ export async function fetchPageText(url: string, title: string): Promise<string>
 }
 
 /**
- * One-shot: search + fetch + clean → a compact array of snippets ready to
- * inject into a prompt. Failures are swallowed (returns whatever we got, even
- * an empty array) so callers can degrade to an ungrounded generation.
- */
-export async function groundFromWeb(query: string): Promise<WebSnippet[]> {
-  try {
-    const results = await searchWeb(query);
-    if (results.length === 0) return [];
-    const snippets = await Promise.all(
-      results.map(async (r) => ({
-        title: r.title,
-        url: r.url,
-        text: await fetchPageText(r.url, r.title),
-      })),
-    );
-    return snippets.filter((s) => s.text.length > 0);
-  } catch {
-    return [];
-  }
-}
+ /** One-shot: search + fetch + clean → a compact array of snippets ready to
+  * inject into a prompt. Failures are swallowed (returns whatever we got, even
+  * an empty array) so callers can degrade to an ungrounded generation. The
+  * entire pass is hard-capped at 10s so it can never push a server action past
+  * its time limit. */
+ export async function groundFromWeb(query: string): Promise<WebSnippet[]> {
+   try {
+     const result = await Promise.race([
+       (async () => {
+         const results = await searchWeb(query);
+         if (results.length === 0) return [];
+         const snippets = await Promise.all(
+           results.map(async (r) => ({
+             title: r.title,
+             url: r.url,
+             text: await fetchPageText(r.url, r.title),
+           })),
+         );
+         return snippets.filter((s) => s.text.length > 0);
+       })(),
+       // Hard cap: 10s regardless of how many fetches are in flight.
+       new Promise<WebSnippet[]>((resolve) => setTimeout(() => resolve([]), 10000)),
+     ]);
+     return result;
+   } catch {
+     return [];
+   }
+ }
 
 /** Render snippets into a compact prompt block (a few hundred tokens max). */
 export function formatWebGround(snippets: WebSnippet[]): string {

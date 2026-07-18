@@ -6,6 +6,10 @@ import { getUserSettings } from "@/lib/settings/store";
 import { ThinkTankHub, type DeckSummary } from "@/components/thinktank/thinktank-hub";
 
 export const dynamic = "force-dynamic";
+// Raise the server-action time limit for this route so deck generation (web
+// grounding + AI call, ~30-60s) doesn't trip Next.js's "unexpected response"
+// error. Server actions inherit the route's maxDuration.
+export const maxDuration = 120;
 
 export default async function ThinkTankPage() {
   const { user } = await requireUser();
