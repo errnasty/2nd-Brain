@@ -12,32 +12,30 @@
 
 @layer base {
   :root {
-    /* Warm parchment light palette */
-    --background: 40 25% 97%;
-    --foreground: 24 18% 9%;
-    --card: 40 25% 97%;
-    --card-foreground: 24 18% 9%;
-    --popover: 40 25% 97%;
-    --popover-foreground: 24 18% 9%;
-    --primary: 24 18% 9%;
-    --primary-foreground: 40 25% 97%;
-    --secondary: 40 18% 91%;
-    --secondary-foreground: 24 18% 9%;
-    --muted: 40 18% 91%;
-    --muted-foreground: 28 8% 47%;
-    --accent: 40 18% 91%;
-    --accent-foreground: 24 18% 9%;
+    /* Pure black & white light palette — the editorial default */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 4%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 4%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 4%;
+    --primary: 0 0% 4%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 4%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 42%;
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 4%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 38 14% 86%;
-    --input: 38 14% 86%;
-    --ring: 24 18% 9%;
+    --border: 0 0% 84%;
+    --input: 0 0% 84%;
+    --ring: 0 0% 4%;
     --radius: 0.4rem;
-    /* Warm brass accent — the single highlight color (primary CTAs, active nav).
-       38% L on the 97% L parchment background clears WCAG AA (4.5:1) even for
-       the small bottom-nav labels. */
-    --brand: 30 72% 38%;
-    --brand-foreground: 40 25% 97%;
+    /* Black accent — the single highlight color (primary CTAs, active nav). */
+    --brand: 0 0% 4%;
+    --brand-foreground: 0 0% 100%;
     /* Optical-size display face for headings. Falls back through the body face
        so a missed network load doesn't reflow the page. */
     --app-font-display: "Source Serif 4", var(--app-font-body, Georgia), "Times New Roman", serif;
@@ -455,5 +453,132 @@
   }
   50% {
     opacity: 0.8;
+  }
+}
+
+/* ── Landing page (1A "Front Page" design) animations ──────────────────
+   Hero headline word stagger, rule-grow, pillar hover-invert, button shine,
+   and the zoom-in CTA. All gated behind motion-safe: so prefers-reduced-motion
+   collapses them to an instant visible state. */
+@keyframes landing-rise-lg {
+  from { opacity: 0; transform: translateY(28px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes landing-rule-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes landing-shine {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(200%); }
+}
+@keyframes landing-zoom-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes landing-hero-glow {
+  0%, 100% { opacity: 0.35; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.55; transform: translate(-50%, -50%) scale(1.08); }
+}
+
+/* Hero headline word stagger — each `.lh-line` rises in sequence. */
+.lh-stagger .lh-line {
+  display: block;
+  opacity: 0;
+  transform: translateY(40px);
+}
+.lh-stagger.motion-safe-in .lh-line {
+  animation: landing-rise-lg 0.95s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.lh-stagger.motion-safe-in .lh-line:nth-child(1) { animation-delay: 0.05s; }
+.lh-stagger.motion-safe-in .lh-line:nth-child(2) { animation-delay: 0.18s; }
+.lh-stagger.motion-safe-in .lh-line:nth-child(3) { animation-delay: 0.34s; }
+
+/* Section rule — grows from the left when scrolled into view. */
+.landing-rule {
+  transform-origin: left center;
+  transform: scaleX(0);
+}
+.landing-rule.motion-safe-in {
+  animation: landing-rule-grow 1s cubic-bezier(0.7, 0, 0.2, 1) both;
+  opacity: 1;
+}
+
+/* Pillar card — inverts to black-on-white on hover. */
+.landing-pillar {
+  transition: background 0.35s ease, color 0.35s ease;
+}
+.landing-pillar:hover {
+  background: hsl(var(--foreground));
+  color: hsl(var(--background)) !important;
+}
+.landing-pillar:hover .landing-pillar-title,
+.landing-pillar:hover .landing-pillar-eyebrow,
+.landing-pillar:hover .landing-pillar-prose {
+  color: hsl(var(--background)) !important;
+}
+.landing-pillar .landing-pillar-roman {
+  transition: transform 0.4s cubic-bezier(0.2, 0.7, 0.2, 1);
+  display: inline-block;
+}
+.landing-pillar:hover .landing-pillar-roman {
+  transform: translateX(4px);
+}
+
+/* Primary button — shine sweep on hover + arrow nudge. */
+.landing-btn-primary {
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1), background 0.2s;
+}
+.landing-btn-primary:hover { transform: translateY(-2px); }
+.landing-btn-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, hsl(var(--background) / 0.15), transparent);
+  transform: translateX(-100%);
+}
+.landing-btn-primary:hover::after { animation: landing-shine 0.9s ease; }
+.landing-btn-primary .landing-arr {
+  display: inline-block;
+  transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.landing-btn-primary:hover .landing-arr { transform: translateX(6px); }
+
+/* Secondary button — gentle lift. */
+.landing-btn-secondary {
+  transition: background 0.2s, color 0.2s, transform 0.25s;
+}
+.landing-btn-secondary:hover { transform: translateY(-2px); }
+
+/* Hero soft glow behind the headline. */
+.landing-hero-glow {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  width: 60vmin;
+  height: 60vmin;
+  max-width: 900px;
+  max-height: 900px;
+  border-radius: 50%;
+  background: radial-gradient(circle, hsl(var(--muted-foreground) / 0.25) 0%, transparent 65%);
+  filter: blur(30px);
+  animation: landing-hero-glow 9s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* Comparison row cascade. */
+.landing-cmp-row { transition: background 0.25s ease; }
+.landing-cmp-row:hover { background: hsl(var(--muted) / 0.5); }
+
+@media (prefers-reduced-motion: reduce) {
+  .lh-stagger .lh-line,
+  .landing-rule,
+  .landing-btn-primary::after,
+  .landing-hero-glow {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
   }
 }

@@ -29,10 +29,16 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     id: "2026-07-18-b",
     date: "July 18, 2026",
-    title: "Reader pages now stay within your phone screen",
-    tag: "fix",
+    title: "A new front page + black-and-white default theme",
+    tag: "feature",
     summary:
-      "Document, feed, and Rabbithole pages now keep their reading column within the phone screen, so titles and paragraphs wrap instead of being cut off. Extra document actions now move into the overflow menu on small screens, keeping the top bar usable.",
+      "The landing page is now a full editorial front page — masthead, staggered hero headline, four pillars that invert on hover, product mockups, a comparison table, and a big closing call to action, all with scroll-triggered animations. The default theme is now pure black and white.",
+    items: [
+      "New landing page with a newspaper-style masthead, animated hero, and product screenshots of every part of the app.",
+      "Default color theme is now black and white; the warm brass accent is gone.",
+      "Hover any pillar to invert it, watch section rules grow in as you scroll, and the hero words rise in sequence.",
+      "The whole page reflows cleanly on a phone — no horizontal scroll, grids stack, the comparison table scrolls.",
+    ],
   },
   {
     id: "2026-07-18-a",
