@@ -609,7 +609,7 @@ export function ItemViewer({
       </div>
 
       <ScrollArea className="min-w-0 flex-1">
-        <div ref={bodyRef} className="mx-auto w-full max-w-[68ch] px-6 py-8">
+        <div ref={bodyRef} className="mx-auto w-full max-w-[68ch] break-words px-4 py-6 sm:px-6 sm:py-8">
           {/* Breadcrumb */}
           {full && (
             <nav
