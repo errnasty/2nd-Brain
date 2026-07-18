@@ -424,13 +424,13 @@ export function ArticleList({
       {/* Mobile back */}
       <button
         onClick={() => router.push("/feeds")}
-        className="flex items-center gap-1 px-3 pt-3 text-xs text-muted-foreground hover:text-foreground lg:hidden"
+        className="flex items-center gap-1 px-3 pt-2 text-xs text-muted-foreground hover:text-foreground lg:hidden"
       >
         <ChevronLeft className="h-3.5 w-3.5" /> Folders
       </button>
 
       {/* ── Editorial header ──────────────────────────────────────── */}
-      <header className="border-b border-border px-4 pb-3 pt-4">
+      <header className="border-b border-border px-4 pb-3 pt-2 lg:pt-4">
         <div className="mb-1.5 editorial-eyebrow">
           Feeds · {meta.meta}
         </div>
@@ -476,8 +476,9 @@ export function ArticleList({
         </div>
       </div>
 
-      {/* View tabs + sort */}
-      <div className="flex items-center justify-between px-3 py-3">
+      {/* View tabs + sort — wraps on narrow phones so the tabs don't squish
+          against the sort controls. */}
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
         <div className="flex items-center gap-1 text-sm">
           <ViewLink view="unread" current={view} label="Unread" />
           <ViewLink view="all" current={view} label="All" />

@@ -132,8 +132,8 @@ export function RabbitholeShell({
                 Directory
               </button>
             </div>
-            <ScrollArea className="flex-1">
-              <div ref={bodyRef} className="mx-auto max-w-[68ch] px-4 py-6 sm:px-6 sm:py-8">
+            <ScrollArea className="min-w-0 flex-1">
+              <div ref={bodyRef} className="mx-auto w-full max-w-[68ch] px-4 py-6 sm:px-6 sm:py-8">
                 {root.text.trim() ? (
                   root.markdown ? (
                     <div className="prose-reader break-words">

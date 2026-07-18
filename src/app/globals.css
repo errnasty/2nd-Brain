@@ -292,7 +292,11 @@
   font-family: var(--reader-font, var(--app-font-body, Georgia)), "Times New Roman", serif;
   font-size: var(--reader-font-size, 19px);
   line-height: var(--reader-line-height, 1.85);
-  @apply max-w-[68ch] mx-auto;
+  /* w-full + max-w-[68ch]: on a narrow phone 68ch exceeds the viewport, so
+     the width cap must be relative to the pane, not the character count
+     alone — without w-full the mx-auto container could still let content
+     overflow horizontally and get clipped on the right. */
+  @apply w-full max-w-[68ch] mx-auto;
   /* Long URLs / unbroken tokens (common in imported docs) must wrap instead of
      forcing horizontal overflow — critical on narrow mobile reading panes. */
   overflow-wrap: break-word;

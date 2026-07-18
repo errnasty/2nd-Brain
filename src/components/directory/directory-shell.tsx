@@ -495,7 +495,7 @@ export function DirectoryShell({
         )}
       >
         {/* ── Editorial header ───────────────────────────────────── */}
-        <header className="border-b border-border px-4 pb-3 pt-4">
+        <header className="border-b border-border px-4 pb-3 pt-2 lg:pt-4">
           <div className="mb-1.5 flex items-center gap-1.5 editorial-eyebrow">
             {/* Mobile back */}
             <button
@@ -548,34 +548,36 @@ export function DirectoryShell({
           </div>
         </header>
 
-        <div className="flex items-center justify-between px-3 py-2">
-          <div className="flex items-center rounded-md border border-border p-0.5">
-            <button
-              onClick={() => setView("list")}
-              title="List view"
-              className={cn(
-                "rounded p-1 transition-colors",
-                view === "list"
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <List className="h-3.5 w-3.5" />
-            </button>
-            <button
-              onClick={() => setView("board")}
-              title="Board view (reading pipeline)"
-              className={cn(
-                "rounded p-1 transition-colors",
-                view === "board"
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <LayoutGrid className="h-3.5 w-3.5" />
-            </button>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+          <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-md border border-border p-0.5">
+              <button
+                onClick={() => setView("list")}
+                title="List view"
+                className={cn(
+                  "rounded p-1 transition-colors",
+                  view === "list"
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <List className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setView("board")}
+                title="Board view (reading pipeline)"
+                className={cn(
+                  "rounded p-1 transition-colors",
+                  view === "board"
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <SortControls active={activeSort} />
           </div>
-          <SortControls active={activeSort} />
           <div className="flex items-center gap-0.5">
             {activeFolder && activeFolder !== "unsorted" && (
               <Button

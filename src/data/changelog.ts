@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-a",
+    date: "July 18, 2026",
+    title: "Article text stays in view; reader toolbar folds into a menu on phones",
+    tag: "fix",
+    summary:
+      "On narrow phones, article and document text no longer ran off the right edge — the reading column now fits the screen. The article reader's crowded icon row also collapses the star, bookmark, and ask buttons into the ⋯ menu on small screens, so everything fits without squishing.",
+    items: [
+      "Reading text (articles, documents, rabbithole) no longer gets cut off on the right of a phone screen.",
+      "On phones, the article reader's extra actions (star, read-later, ask) are tucked inside the ⋯ menu instead of crowding the top bar.",
+    ],
+  },
+  {
     id: "2026-07-18",
     date: "July 18, 2026",
     title: "Consistent mobile layout on any screen size",

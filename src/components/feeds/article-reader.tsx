@@ -27,6 +27,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -443,6 +444,7 @@ export function ArticleReader({
           disabled={!prevId}
           onClick={() => prevId && goToArticle(prevId)}
           title="Previous (k)"
+          className="hidden sm:inline-flex"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -452,10 +454,11 @@ export function ArticleReader({
           disabled={!nextId}
           onClick={() => nextId && goToArticle(nextId)}
           title="Next (j)"
+          className="hidden sm:inline-flex"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
-        <Separator orientation="vertical" className="mx-1 h-5" />
+        <Separator orientation="vertical" className="mx-1 hidden h-5 sm:block" />
         <div className="flex flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
           {article?.feedIconUrl ? (
             <Image
@@ -482,7 +485,7 @@ export function ArticleReader({
           onClick={() => setQueryOpen((v) => !v)}
           title="Ask about this article"
           disabled={!article}
-          className={queryOpen ? "text-primary" : ""}
+          className={cn("hidden sm:inline-flex", queryOpen && "text-primary")}
         >
           <Sparkles className="h-4 w-4" />
         </Button>
@@ -492,10 +495,18 @@ export function ArticleReader({
           onClick={toggleReadLater}
           title={article?.readLater ? "Remove from Read Later (b)" : "Read later (b)"}
           disabled={!article}
+          className="hidden sm:inline-flex"
         >
           <Bookmark className={cn("h-4 w-4", article?.readLater && "fill-brand text-brand")} />
         </Button>
-        <Button size="icon" variant="ghost" onClick={toggleStar} title="Star (s)" disabled={!article}>
+        <Button
+          size="icon"
+          variant="ghost"
+          onClick={toggleStar}
+          title="Star (s)"
+          disabled={!article}
+          className="hidden sm:inline-flex"
+        >
           <Star className={article?.starred ? "fill-yellow-500 text-yellow-500" : ""} />
         </Button>
 
@@ -506,6 +517,19 @@ export function ArticleReader({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {/* Mobile-only: these live as standalone icons on desktop (sm+). */}
+            <DropdownMenuItem className="sm:hidden" onClick={() => setQueryOpen((v) => !v)} disabled={!article}>
+              <Sparkles className="mr-2 h-3.5 w-3.5" /> Ask about this article
+            </DropdownMenuItem>
+            <DropdownMenuItem className="sm:hidden" onClick={toggleReadLater} disabled={!article}>
+              <Bookmark className={cn("mr-2 h-3.5 w-3.5", article?.readLater && "fill-brand text-brand")} />
+              {article?.readLater ? "Remove from Read Later" : "Read later"}
+            </DropdownMenuItem>
+            <DropdownMenuItem className="sm:hidden" onClick={toggleStar} disabled={!article}>
+              <Star className={cn("mr-2 h-3.5 w-3.5", article?.starred && "fill-yellow-500 text-yellow-500")} />
+              {article?.starred ? "Unstar" : "Star"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator className="sm:hidden" />
             {ttsSupported && (
               <DropdownMenuItem onClick={toggleListen} disabled={!ttsText && ttsState === "idle"}>
                 {ttsState === "speaking" ? (
@@ -547,7 +571,7 @@ export function ArticleReader({
           style={{ width: `${Math.round(progress * 100)}%`, background: "hsl(var(--brand))" }}
         />
       </div>
-      <ScrollArea ref={scrollRootRef} className="flex-1">
+      <ScrollArea ref={scrollRootRef} className="min-w-0 flex-1">
         <article
           className="prose-reader px-4 py-8"
           style={
