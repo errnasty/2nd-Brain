@@ -52,7 +52,7 @@ export async function runDeckGeneration(
       // ungrounded deck
     }
 
-    const generated = await generateThinkTankDeck(deck.topic, related);
+    const generated = await generateThinkTankDeck(deck.topic, related, deck.detail);
     if (!generated || generated.cards.length === 0) {
       await db
         .update(thinktankDecks)
@@ -96,6 +96,8 @@ export async function runDeckGeneration(
           title: generated.title,
           description: generated.description,
           status: "ready",
+          model: generated.model,
+          tokenCount: generated.tokenCount,
           updatedAt: new Date(),
         })
         .where(eq(thinktankDecks.id, deck.id));
