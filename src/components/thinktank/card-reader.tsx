@@ -19,6 +19,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { isSeveredResponse } from "@/lib/ui/severed";
+import { runBackgroundJob } from "@/lib/ui/background-job";
 import type { ThinkTankCard, ThinkTankDeck } from "@/lib/db/schema";
 import {
   makeFlashcardsFromCardAction,
@@ -144,31 +145,29 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
     }
   }
 
-  // Finish card: build a full curriculum note for the deck's topic.
-  async function buildCurriculum() {
+  // Finish card: build a full curriculum note for the deck's topic, as a
+  // background job (create → kick → poll) so the long AI call can't surface
+  // a false error.
+  function buildCurriculum() {
+    if (buildingCurriculum) return;
     setBuildingCurriculum(true);
-    try {
-      const res = await fetch("/api/curriculum", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ topic: deck.topic }),
-      });
-      const data = await res.json();
-      if (res.ok && data.itemId) {
+    void runBackgroundJob({
+      kind: "curriculum",
+      topic: deck.topic,
+      onDone: (itemId) => {
+        setBuildingCurriculum(false);
         toast.success("Curriculum saved to your Directory");
-        router.push(`/directory?item=${data.itemId}`);
-      } else {
-        toast.error(data.error ?? "Couldn't build the curriculum");
-      }
-    } catch (err) {
-      if (isSeveredResponse(err)) {
-        toast.message("Still building in the background — the curriculum note will appear in your Directory shortly.");
-      } else {
-        toast.error(err instanceof Error ? err.message : "Couldn't build the curriculum");
-      }
-    } finally {
-      setBuildingCurriculum(false);
-    }
+        router.push(`/directory?item=${itemId}`);
+      },
+      onError: (message) => {
+        setBuildingCurriculum(false);
+        toast.error(message);
+      },
+      onStillWorking: () => {
+        setBuildingCurriculum(false);
+        toast.message("Still building — the curriculum note will appear in your Directory shortly.");
+      },
+    });
   }
 
   return (

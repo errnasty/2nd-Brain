@@ -257,6 +257,24 @@ create index if not exists thinktank_cards_deck_idx on thinktank_cards (deck_id,
 create index if not exists thinktank_cards_user_updated_idx on thinktank_cards (user_id, updated_at);
 `;
 
+// Background AI jobs — mirrors cloud migration 0022. Always-run + idempotent.
+// NOT synced (transient bookkeeping; the durable output is the note a job
+// produces), so it is deliberately absent from the sync table arrays above.
+const AI_JOBS_SQL = `
+create table if not exists ai_jobs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  kind text not null,
+  payload jsonb not null default '{}'::jsonb,
+  status text not null default 'pending',
+  result_item_id uuid,
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists ai_jobs_user_created_idx on ai_jobs (user_id, created_at desc);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -356,6 +374,13 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(THINKTANK_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] thinktank tables failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: background AI job bookkeeping (not synced, no triggers).
+  try {
+    await client.exec(AI_JOBS_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] ai_jobs table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

@@ -604,6 +604,38 @@ export const thinktankCards = pgTable(
   }),
 );
 
+// ── Background AI jobs ─────────────────────────────────────────────────
+// Transient bookkeeping for long AI work (curriculum notes, gap research)
+// that runs outside the request the user is waiting on: the client creates a
+// job (fast), kicks a run route whose response is allowed to sever, and polls
+// the job's status — so a serverless timeout can never surface as a false
+// error. NOT synced (like xp_events): jobs are per-device scratch state, and
+// the durable output is the Directory note they produce.
+export type AiJobKind = "curriculum" | "gap_research";
+export type AiJobPayload = { topic: string; folderId?: string | null };
+
+export const aiJobs = pgTable(
+  "ai_jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    kind: text("kind").$type<AiJobKind>().notNull(),
+    payload: jsonb("payload").$type<AiJobPayload>().notNull(),
+    status: text("status").$type<"pending" | "running" | "done" | "error">().default("pending").notNull(),
+    resultItemId: uuid("result_item_id"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("ai_jobs_user_created_idx").on(t.userId, t.createdAt.desc()),
+  }),
+);
+
+export type AiJob = typeof aiJobs.$inferSelect;
+
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;

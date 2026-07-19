@@ -1,18 +1,18 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { buildResearchNote } from "@/lib/ai/research-notes";
+import { createAiJob } from "@/lib/ai-jobs/run";
+import type { AiJobKind } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const KINDS = new Set<AiJobKind>(["curriculum", "gap_research"]);
 
 /**
- * Knowledge-gap research — thin wrapper over buildResearchNote (see
- * src/lib/ai/research-notes.ts). The app itself now goes through the
- * /api/jobs background pattern so long responses can't surface as false
- * errors; this inline route stays for direct/API use.
+ * Create a background AI job (fast, reliable — this response must survive so
+ * the client gets the jobId to poll). The slow work happens in
+ * /api/jobs/[id]/run, whose response is allowed to sever.
  */
 export async function POST(req: Request) {
   let user;
@@ -22,29 +22,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Same budget the old inline routes enforced, applied at job creation.
   const rl = await checkRateLimit(user.id, "analyze", 20, 60);
   if (!rl.allowed) return NextResponse.json({ error: "Rate limited" }, { status: 429 });
 
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return NextResponse.json({ error: "ANTHROPIC_API_KEY not configured" }, { status: 503 });
-  }
-
-  let body: { topic?: string; folderId?: string | null };
+  let body: { kind?: string; topic?: string; folderId?: string | null };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
+  const kind = body.kind as AiJobKind;
+  if (!KINDS.has(kind)) return NextResponse.json({ error: "Unknown job kind" }, { status: 400 });
   const topic = (body.topic ?? "").trim();
   if (!topic) return NextResponse.json({ error: "topic required" }, { status: 400 });
   const folderId = body.folderId && UUID_RE.test(body.folderId) ? body.folderId : null;
 
-  try {
-    const r = await buildResearchNote(user.id, topic, folderId);
-    if (!r.ok) return NextResponse.json({ error: r.error }, { status: 502 });
-    return NextResponse.json({ ok: true, itemId: r.itemId });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  const jobId = await createAiJob(user.id, kind, { topic, folderId });
+  return NextResponse.json({ ok: true, jobId });
 }

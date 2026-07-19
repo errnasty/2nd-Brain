@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-18-i",
+    date: "July 18, 2026",
+    title: "Curriculum and research now build reliably in the background",
+    tag: "improvement",
+    summary:
+      "Building a curriculum or researching a knowledge gap now runs as a tracked background job, the same way ThinkTank decks do. The app watches the job and takes you to the finished note when it lands — you can even close the dialog and the note still arrives in your Directory.",
+    items: [
+      "Long curriculum and research jobs can't show false errors anymore, no matter how long they take.",
+      "Closing the dialog no longer risks losing the result — it finishes in the background.",
+      "If a job genuinely fails, you get the real reason.",
+    ],
+  },
+  {
     id: "2026-07-18-h",
     date: "July 18, 2026",
     title: "Snappier pages, and long AI jobs never cry wolf",
