@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-19",
+    date: "July 19, 2026",
+    title: "Feeds and Directory are much faster with big libraries",
+    tag: "improvement",
+    summary:
+      "The two heaviest screens got dedicated database tuning. Opening Feeds views (All, Hot, Starred) and Directory lists (default, a folder, Unsorted) now uses purpose-built indexes instead of scanning your whole collection — the bigger your library, the bigger the speedup.",
+    items: [
+      "Every Feeds view and Directory list now reads straight from an index built for it.",
+      "Desktop gets the same tuning automatically on next launch.",
+      "Also speeds up desktop-cloud sync for directory items.",
+    ],
+  },
+  {
     id: "2026-07-18-i",
     date: "July 18, 2026",
     title: "Curriculum and research now build reliably in the background",

@@ -286,13 +286,26 @@ create index if not exists directory_flashcards_lapses_idx
   on directory_flashcards (user_id, lapses desc);
 `;
 
-// Feeds-tab perf indexes — mirrors cloud migration 0015. No CONCURRENTLY: PGlite
-// is single-connection and runs these inline. create-if-not-exists = idempotent.
+// Feeds/Directory perf indexes — mirrors cloud migrations 0015 + 0023. No
+// CONCURRENTLY: PGlite is single-connection and runs these inline.
+// create-if-not-exists = idempotent.
 const PERF_INDEX_SQL = `
 create index if not exists articles_feed_status_pub_idx
   on articles (feed_id, read_status, publish_date desc);
 create index if not exists articles_folder_status_pub_idx
   on articles (folder_id, read_status, publish_date desc);
+create index if not exists articles_user_pub_idx
+  on articles (user_id, publish_date desc, id desc);
+create index if not exists articles_user_starred_idx
+  on articles (user_id, publish_date desc)
+  where starred;
+create index if not exists directory_items_user_updated_idx
+  on directory_items (user_id, updated_at desc, id desc);
+create index if not exists directory_items_folder_updated_idx
+  on directory_items (folder_id, updated_at desc);
+create index if not exists directory_items_unsorted_updated_idx
+  on directory_items (user_id, updated_at desc)
+  where folder_id is null;
 `;
 
 /**

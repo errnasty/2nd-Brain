@@ -146,6 +146,13 @@ export const articles = pgTable(
     ),
     folderIdx: index("articles_folder_idx").on(t.folderId),
     publishIdx: index("articles_publish_idx").on(t.publishDate),
+    // Feeds "All"/"Hot" views: per-user list across every read status. The
+    // (user,status,date) index above can't give a cross-status date order.
+    userPubIdx: index("articles_user_pub_idx").on(t.userId, t.publishDate.desc(), t.id.desc()),
+    // Feeds "Starred" view — tiny partial, exact match for its filter+sort.
+    starredIdx: index("articles_user_starred_idx")
+      .on(t.userId, t.publishDate.desc())
+      .where(sql`${t.starred}`),
     readLaterIdx: index("articles_user_readlater_idx")
       .on(t.userId, t.publishDate.desc())
       .where(sql`${t.readLater}`),
@@ -288,6 +295,20 @@ export const directoryItems = pgTable(
       t.readingStatus,
       t.updatedAt,
     ),
+    // Default Directory listing (newest-updated first, id tiebreaker) — the
+    // (user,kind,updated) index above can't give a cross-kind date order.
+    // Also serves the desktop sync pull ("changed since cursor").
+    userUpdatedIdx: index("directory_items_user_updated_idx").on(
+      t.userId,
+      t.updatedAt.desc(),
+      t.id.desc(),
+    ),
+    // Folder view: filter by folder, newest-updated first.
+    folderUpdatedIdx: index("directory_items_folder_updated_idx").on(t.folderId, t.updatedAt.desc()),
+    // Unsorted (inbox) view — partial, exact match for its filter+sort.
+    unsortedUpdatedIdx: index("directory_items_unsorted_updated_idx")
+      .on(t.userId, t.updatedAt.desc())
+      .where(sql`${t.folderId} is null`),
     folderIdx: index("directory_items_folder_idx").on(t.folderId),
     articleIdx: index("directory_items_article_idx").on(t.articleId),
     documentIdx: index("directory_items_document_idx").on(t.documentId),
