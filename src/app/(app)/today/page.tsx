@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { ArrowRight, Brain } from "lucide-react";
+import { ArrowRight, Brain, Lightbulb } from "lucide-react";
 import { DailyBrief } from "@/components/today/daily-brief";
 import { requireUser } from "@/lib/auth";
 import { getDisplayName } from "@/lib/profile/store";
 import { fetchCardStats } from "@/app/(app)/review/actions";
+import { fetchDailyDecksDue, type DailyDeckDue } from "@/lib/thinktank/daily";
 
 /** Best-effort first name: chosen display name, profile/metadata name, else
  *  the email local part. */
@@ -28,9 +29,10 @@ export default async function TodayPage() {
   // Independent reads, in parallel; both fail-soft (a profile hiccup or a
   // pending migration must not break Today). The displayName read is usually
   // a free cache hit — the app layout already fetched it this request.
-  const [nameResult, statsResult] = await Promise.allSettled([
+  const [nameResult, statsResult, decksResult] = await Promise.allSettled([
     getDisplayName(user.id),
     fetchCardStats(user.id),
+    fetchDailyDecksDue(user.id),
   ]);
   const displayName = nameResult.status === "fulfilled" ? nameResult.value : null;
   const name = firstNameOf(user, displayName);
@@ -43,6 +45,7 @@ export default async function TodayPage() {
       statsResult.reason instanceof Error ? statsResult.reason.message : statsResult.reason,
     );
   }
+  const dailyDecks: DailyDeckDue[] = decksResult.status === "fulfilled" ? decksResult.value : [];
   // ~7s/card is a realistic reveal+grade pace; keeps the promise honest.
   const minutes = Math.max(1, Math.round((due * 7) / 60));
 
@@ -72,6 +75,30 @@ export default async function TodayPage() {
             </span>
             <span className="inline-flex items-center gap-1 text-sm font-medium" style={{ color: "hsl(var(--brand))" }}>
               Start review
+              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </Link>
+        )}
+        {/* Daily-paced ThinkTank decks with fresh cards unlocked — same
+            daily-habit surface as the review CTA. */}
+        {dailyDecks.length > 0 && (
+          <Link
+            href={`/thinktank/${dailyDecks[0].id}`}
+            prefetch={true}
+            className="group mb-6 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:border-brand/50 hover:bg-accent/50"
+          >
+            <Lightbulb className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--brand))" }} />
+            <span className="flex-1 text-sm">
+              <span className="font-semibold">
+                {dailyDecks[0].remaining} new idea card{dailyDecks[0].remaining === 1 ? "" : "s"}
+              </span>
+              <span className="text-muted-foreground">
+                {" "}· “{dailyDecks[0].title}”
+                {dailyDecks.length > 1 ? ` and ${dailyDecks.length - 1} more deck${dailyDecks.length > 2 ? "s" : ""}` : ""}
+              </span>
+            </span>
+            <span className="inline-flex items-center gap-1 text-sm font-medium" style={{ color: "hsl(var(--brand))" }}>
+              Keep learning
               <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
             </span>
           </Link>

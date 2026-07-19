@@ -1,6 +1,6 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { tags, thinktankCards, thinktankDecks } from "@/lib/db/schema";
+import { articles, tags, thinktankCards, thinktankDecks } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { getUserSettings } from "@/lib/settings/store";
 import { ThinkTankHub, type DeckSummary } from "@/components/thinktank/thinktank-hub";
@@ -14,7 +14,7 @@ export const maxDuration = 120;
 export default async function ThinkTankPage() {
   const { user } = await requireUser();
 
-  const [decks, interests, recentTags] = await Promise.all([
+  const [decks, interests, recentTags, recentReads] = await Promise.all([
     // Decks with card counts, newest first.
     db
       .select({
@@ -23,6 +23,8 @@ export default async function ThinkTankPage() {
         title: thinktankDecks.title,
         description: thinktankDecks.description,
         status: thinktankDecks.status,
+        pacing: thinktankDecks.pacing,
+        detail: thinktankDecks.detail,
         lastPosition: thinktankDecks.lastPosition,
         createdAt: sql<string>`${thinktankDecks.createdAt}::text`,
         cardCount: sql<number>`(select count(*)::int from ${thinktankCards} c where c.deck_id = ${thinktankDecks.id})`,
@@ -42,11 +44,23 @@ export default async function ThinkTankPage() {
       .orderBy(desc(tags.createdAt))
       .limit(8)
       .catch(() => [] as { name: string }[]),
+    // What the user just read in Feeds — turning a fresh read into a deck is
+    // the most natural jumping-off point. Long headlines make bad chips, so
+    // they're filtered out below.
+    db
+      .select({ title: articles.title })
+      .from(articles)
+      .where(and(eq(articles.userId, user.id), eq(articles.readStatus, "read")))
+      .orderBy(desc(articles.updatedAt))
+      .limit(6)
+      .catch(() => [] as { title: string }[]),
   ]);
 
-  // Interests first, then library tags; dedupe case-insensitively.
+  // Interests first, then library tags, then recent reads; dedupe
+  // case-insensitively.
+  const readTitles = recentReads.map((a) => a.title.trim()).filter((t) => t.length > 0 && t.length <= 60);
   const seen = new Set<string>();
-  const suggestions = [...interests, ...recentTags.map((t) => t.name)]
+  const suggestions = [...interests, ...recentTags.map((t) => t.name), ...readTitles]
     .filter((t) => {
       const k = t.toLowerCase();
       if (seen.has(k)) return false;
