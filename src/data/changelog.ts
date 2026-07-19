@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-19-c",
+    date: "July 19, 2026",
+    title: "Snappier everywhere",
+    tag: "improvement",
+    summary:
+      "The app ships less code up front and shows instant feedback while screens load. The Study hub in particular opens noticeably faster, and opening a deck, the rabbithole, search, settings, or the map now paints immediately instead of pausing on a blank screen.",
+  },
+  {
     id: "2026-07-19-b",
     date: "July 19, 2026",
     title: "ThinkTank levels up: daily decks, quizzes, and more",
