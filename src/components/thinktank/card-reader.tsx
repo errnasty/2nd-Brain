@@ -18,6 +18,8 @@ import { LoadingButton } from "@/components/ui/loading-button";
 import { Markdown } from "@/components/ui/markdown";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { isSeveredResponse } from "@/lib/ui/severed";
+import { runBackgroundJob } from "@/lib/ui/background-job";
 import type { ThinkTankCard, ThinkTankDeck } from "@/lib/db/schema";
 import {
   makeFlashcardsFromCardAction,
@@ -117,6 +119,8 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
       } else {
         toast.error(r.error);
       }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn't save the card");
     } finally {
       setSavingId(null);
     }
@@ -128,32 +132,42 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
       const r = await makeFlashcardsFromCardAction(card.id);
       if (r.ok) toast.success(`${r.count} flashcards added to Study`);
       else toast.error(r.error);
+    } catch (err) {
+      // A severed long response (serverless timeout) isn't a failure — the
+      // generation finishes server-side. Say so instead of alarming the user.
+      if (isSeveredResponse(err)) {
+        toast.message("Still working in the background — your flashcards will appear in Study shortly.");
+      } else {
+        toast.error(err instanceof Error ? err.message : "Couldn't make flashcards");
+      }
     } finally {
       setCardingId(null);
     }
   }
 
-  // Finish card: build a full curriculum note for the deck's topic.
-  async function buildCurriculum() {
+  // Finish card: build a full curriculum note for the deck's topic, as a
+  // background job (create → kick → poll) so the long AI call can't surface
+  // a false error.
+  function buildCurriculum() {
+    if (buildingCurriculum) return;
     setBuildingCurriculum(true);
-    try {
-      const res = await fetch("/api/curriculum", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ topic: deck.topic }),
-      });
-      const data = await res.json();
-      if (res.ok && data.itemId) {
+    void runBackgroundJob({
+      kind: "curriculum",
+      topic: deck.topic,
+      onDone: (itemId) => {
+        setBuildingCurriculum(false);
         toast.success("Curriculum saved to your Directory");
-        router.push(`/directory?item=${data.itemId}`);
-      } else {
-        toast.error(data.error ?? "Couldn't build the curriculum");
-      }
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Couldn't build the curriculum");
-    } finally {
-      setBuildingCurriculum(false);
-    }
+        router.push(`/directory?item=${itemId}`);
+      },
+      onError: (message) => {
+        setBuildingCurriculum(false);
+        toast.error(message);
+      },
+      onStillWorking: () => {
+        setBuildingCurriculum(false);
+        toast.message("Still building — the curriculum note will appear in your Directory shortly.");
+      },
+    });
   }
 
   return (
@@ -208,7 +222,7 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
               {card.sourceRefs.length > 0 && (
                 <div className="mt-5 rounded-lg border border-border bg-card p-3">
                   <div className="pb-1.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                    From your library
+                    Sources
                   </div>
                   {card.sourceRefs.map((r) =>
                     r.itemId ? (
@@ -217,8 +231,18 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
                         href={`/directory?item=${r.itemId}`}
                         className="block truncate py-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                       >
-                        {r.title}
+                        {r.title} <span className="opacity-60">· your library</span>
                       </Link>
+                    ) : r.url ? (
+                      <a
+                        key={`${card.id}-${r.url}`}
+                        href={r.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block truncate py-0.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        {r.title} <span className="opacity-60">· web</span>
+                      </a>
                     ) : (
                       <div key={`${card.id}-${r.title}`} className="truncate py-0.5 text-xs text-muted-foreground">
                         {r.title}

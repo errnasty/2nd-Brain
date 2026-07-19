@@ -27,6 +27,58 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-19",
+    date: "July 19, 2026",
+    title: "Feeds and Directory are much faster with big libraries",
+    tag: "improvement",
+    summary:
+      "The two heaviest screens got dedicated database tuning. Opening Feeds views (All, Hot, Starred) and Directory lists (default, a folder, Unsorted) now uses purpose-built indexes instead of scanning your whole collection — the bigger your library, the bigger the speedup.",
+    items: [
+      "Every Feeds view and Directory list now reads straight from an index built for it.",
+      "Desktop gets the same tuning automatically on next launch.",
+      "Also speeds up desktop-cloud sync for directory items.",
+    ],
+  },
+  {
+    id: "2026-07-18-i",
+    date: "July 18, 2026",
+    title: "Curriculum and research now build reliably in the background",
+    tag: "improvement",
+    summary:
+      "Building a curriculum or researching a knowledge gap now runs as a tracked background job, the same way ThinkTank decks do. The app watches the job and takes you to the finished note when it lands — you can even close the dialog and the note still arrives in your Directory.",
+    items: [
+      "Long curriculum and research jobs can't show false errors anymore, no matter how long they take.",
+      "Closing the dialog no longer risks losing the result — it finishes in the background.",
+      "If a job genuinely fails, you get the real reason.",
+    ],
+  },
+  {
+    id: "2026-07-18-h",
+    date: "July 18, 2026",
+    title: "Snappier pages, and long AI jobs never cry wolf",
+    tag: "improvement",
+    summary:
+      "Pages fetch their data more efficiently — duplicate lookups are gone and independent ones run at the same time — so switching sections feels quicker, especially with several people using the app. And every long-running AI job (curriculum, gap research, saving a slow web page, flashcards) now says \"still working\" instead of showing a false error when it takes a while.",
+    items: [
+      "The app shell, Today, and Settings load with fewer, parallel database reads.",
+      "Curriculum building, gap research, and page saving no longer show an error just because they took long — the result still arrives in your Directory.",
+    ],
+  },
+  {
+    id: "2026-07-18-g",
+    date: "July 18, 2026",
+    title: "ThinkTank decks build reliably — and check their facts",
+    tag: "improvement",
+    summary:
+      "Building a deck no longer shows an error while the deck quietly finishes in the background — you now land on a live progress screen that flips into the reader the moment the cards are ready. And the AI now verifies facts with a quick web search while writing, so cards cite real sources you can open.",
+    items: [
+      "No more false errors on long generations; the app waits and updates itself.",
+      "Cards now show their sources — links from the web and from your own library.",
+      "If a build genuinely fails, you get a clear retry button instead of a dead deck.",
+      "Making flashcards no longer alarms you if it takes a moment — they arrive in Study either way.",
+    ],
+  },
+  {
     id: "2026-07-18-f",
     date: "July 18, 2026",
     title: "ThinkTank: learn any topic in bite-sized idea cards",

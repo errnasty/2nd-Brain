@@ -10,6 +10,7 @@ import { LoadingButton } from "@/components/ui/loading-button";
 import { BusyOverlay } from "@/components/ui/busy-overlay";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { runBackgroundJob } from "@/lib/ui/background-job";
 
 /**
  * Topic deep-dive: ask for a theme, generate a Prereqs→Core→Advanced curriculum
@@ -44,33 +45,41 @@ export function CurriculumDialog({
     const controller = new AbortController();
     abortRef.current = controller;
     const id = toast.loading(`Building a curriculum for "${t}"…`);
-    fetch("/api/curriculum", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ topic: t, folderId: folder && folder !== "unsorted" ? folder : null }),
+    // Background job: create → kick → poll, so a serverless timeout on the
+    // long AI call can never surface as a false error. Closing the dialog
+    // aborts the *watch* only — the note still lands in the Directory.
+    void runBackgroundJob({
+      kind: "curriculum",
+      topic: t,
+      folderId: folder && folder !== "unsorted" ? folder : null,
       signal: controller.signal,
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (controller.signal.aborted) return; // dialog closed — don't navigate
-        if (res.ok && data.itemId) {
-          toast.success("Curriculum saved", { id });
-          onOpenChange(false);
-          setTopic("");
-          router.push(`/directory?item=${data.itemId}`);
-          router.refresh();
-        } else {
-          toast.error(data.error ?? "Failed", { id });
-        }
-      })
-      .catch((e) => {
-        if ((e as Error)?.name === "AbortError") {
-          toast.dismiss(id);
-          return;
-        }
-        toast.error(e instanceof Error ? e.message : "Failed", { id });
-      })
-      .finally(() => setLoading(false));
+      onDone: (itemId) => {
+        setLoading(false);
+        toast.success("Curriculum saved", { id });
+        onOpenChange(false);
+        setTopic("");
+        router.push(`/directory?item=${itemId}`);
+        router.refresh();
+      },
+      onError: (message) => {
+        setLoading(false);
+        toast.error(message, { id });
+      },
+      onStillWorking: () => {
+        setLoading(false);
+        toast.message("Still building — the curriculum note will appear in your Directory shortly.", { id });
+        onOpenChange(false);
+        setTopic("");
+      },
+    });
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        toast.dismiss(id);
+        setLoading(false);
+      },
+      { once: true },
+    );
   }
 
   return (

@@ -260,6 +260,24 @@ create index if not exists thinktank_cards_deck_idx on thinktank_cards (deck_id,
 create index if not exists thinktank_cards_user_updated_idx on thinktank_cards (user_id, updated_at);
 `;
 
+// Background AI jobs — mirrors cloud migration 0022. Always-run + idempotent.
+// NOT synced (transient bookkeeping; the durable output is the note a job
+// produces), so it is deliberately absent from the sync table arrays above.
+const AI_JOBS_SQL = `
+create table if not exists ai_jobs (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  kind text not null,
+  payload jsonb not null default '{}'::jsonb,
+  status text not null default 'pending',
+  result_item_id uuid,
+  error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists ai_jobs_user_created_idx on ai_jobs (user_id, created_at desc);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -271,13 +289,26 @@ create index if not exists directory_flashcards_lapses_idx
   on directory_flashcards (user_id, lapses desc);
 `;
 
-// Feeds-tab perf indexes — mirrors cloud migration 0015. No CONCURRENTLY: PGlite
-// is single-connection and runs these inline. create-if-not-exists = idempotent.
+// Feeds/Directory perf indexes — mirrors cloud migrations 0015 + 0023. No
+// CONCURRENTLY: PGlite is single-connection and runs these inline.
+// create-if-not-exists = idempotent.
 const PERF_INDEX_SQL = `
 create index if not exists articles_feed_status_pub_idx
   on articles (feed_id, read_status, publish_date desc);
 create index if not exists articles_folder_status_pub_idx
   on articles (folder_id, read_status, publish_date desc);
+create index if not exists articles_user_pub_idx
+  on articles (user_id, publish_date desc, id desc);
+create index if not exists articles_user_starred_idx
+  on articles (user_id, publish_date desc)
+  where starred;
+create index if not exists directory_items_user_updated_idx
+  on directory_items (user_id, updated_at desc, id desc);
+create index if not exists directory_items_folder_updated_idx
+  on directory_items (folder_id, updated_at desc);
+create index if not exists directory_items_unsorted_updated_idx
+  on directory_items (user_id, updated_at desc)
+  where folder_id is null;
 `;
 
 /**
@@ -359,6 +390,13 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(THINKTANK_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] thinktank tables failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: background AI job bookkeeping (not synced, no triggers).
+  try {
+    await client.exec(AI_JOBS_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] ai_jobs table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

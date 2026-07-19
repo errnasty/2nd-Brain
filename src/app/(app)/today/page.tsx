@@ -25,20 +25,23 @@ function firstNameOf(
 
 export default async function TodayPage() {
   const { user } = await requireUser();
-  // Fail-soft: a profile-read hiccup must not break Today.
-  let displayName: string | null = null;
-  try {
-    displayName = await getDisplayName(user.id);
-  } catch {
-    // fall back to auth metadata / email
-  }
+  // Independent reads, in parallel; both fail-soft (a profile hiccup or a
+  // pending migration must not break Today). The displayName read is usually
+  // a free cache hit — the app layout already fetched it this request.
+  const [nameResult, statsResult] = await Promise.allSettled([
+    getDisplayName(user.id),
+    fetchCardStats(user.id),
+  ]);
+  const displayName = nameResult.status === "fulfilled" ? nameResult.value : null;
   const name = firstNameOf(user, displayName);
-  // One cheap count query. Fail-soft: a pending migration must not break Today.
   let due = 0;
-  try {
-    ({ due } = await fetchCardStats(user.id));
-  } catch (err) {
-    console.error("TodayPage card stats failed:", err instanceof Error ? err.message : err);
+  if (statsResult.status === "fulfilled") {
+    ({ due } = statsResult.value);
+  } else {
+    console.error(
+      "TodayPage card stats failed:",
+      statsResult.reason instanceof Error ? statsResult.reason.message : statsResult.reason,
+    );
   }
   // ~7s/card is a realistic reveal+grade pace; keeps the promise honest.
   const minutes = Math.max(1, Math.round((due * 7) / 60));

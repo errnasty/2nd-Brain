@@ -17,20 +17,19 @@ import type { UserSettingsData } from "@/lib/db/schema";
 export default async function SettingsPage() {
   const { user } = await requireUser();
   const isDesktop = process.env.APP_RUNTIME === "desktop";
-  // Fail soft: a settings-read failure (transient DB issue, pending migration)
-  // must not take down the whole Settings page — render defaults instead.
+  // Parallel + fail soft: a read failure (transient DB issue, pending
+  // migration) must not take down Settings — render defaults instead. Usually
+  // both are free cache hits from the app layout's reads this request.
   let settings: UserSettingsData = {};
-  try {
-    settings = await getUserSettings(user.id);
-  } catch (err) {
-    console.error("SettingsPage: getUserSettings failed:", err instanceof Error ? err.message : err);
-  }
   let displayName: string | null = null;
-  try {
-    displayName = await getDisplayName(user.id);
-  } catch (err) {
-    console.error("SettingsPage: getDisplayName failed:", err instanceof Error ? err.message : err);
-  }
+  const [settingsResult, nameResult] = await Promise.allSettled([
+    getUserSettings(user.id),
+    getDisplayName(user.id),
+  ]);
+  if (settingsResult.status === "fulfilled") settings = settingsResult.value;
+  else console.error("SettingsPage: getUserSettings failed:", settingsResult.reason);
+  if (nameResult.status === "fulfilled") displayName = nameResult.value;
+  else console.error("SettingsPage: getDisplayName failed:", nameResult.reason);
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto max-w-2xl px-6 py-10">

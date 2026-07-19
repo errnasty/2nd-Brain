@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingButton } from "@/components/ui/loading-button";
 import { Spinner } from "@/components/ui/spinner";
 import { toast } from "sonner";
+import { runBackgroundJob } from "@/lib/ui/background-job";
 
 type Gap = { topic: string; why: string };
 
@@ -79,32 +80,39 @@ export function GapsDialog({
     const controller = new AbortController();
     researchAbortRef.current = controller;
     const id = toast.loading(`Researching "${topic}"…`);
-    fetch("/api/gaps/research", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ topic, folderId: folder && folder !== "unsorted" ? folder : null }),
+    // Background job: create → kick → poll — a serverless timeout on the long
+    // AI call can never surface as a false error. Closing the dialog aborts
+    // the watch only; the note still lands in the Directory.
+    void runBackgroundJob({
+      kind: "gap_research",
+      topic,
+      folderId: folder && folder !== "unsorted" ? folder : null,
       signal: controller.signal,
-    })
-      .then(async (res) => {
-        const data = await res.json();
-        if (controller.signal.aborted) return; // dialog was closed — don't navigate
-        if (res.ok && data.itemId) {
-          toast.success("Saved research note", { id });
-          onOpenChange(false);
-          router.push(`/directory?item=${data.itemId}`);
-          router.refresh();
-        } else {
-          toast.error(data.error ?? "Research failed", { id });
-        }
-      })
-      .catch((e) => {
-        if ((e as Error)?.name === "AbortError") {
-          toast.dismiss(id);
-          return;
-        }
-        toast.error(e instanceof Error ? e.message : "Research failed", { id });
-      })
-      .finally(() => setResearching(null));
+      onDone: (itemId) => {
+        setResearching(null);
+        toast.success("Saved research note", { id });
+        onOpenChange(false);
+        router.push(`/directory?item=${itemId}`);
+        router.refresh();
+      },
+      onError: (message) => {
+        setResearching(null);
+        toast.error(message, { id });
+      },
+      onStillWorking: () => {
+        setResearching(null);
+        toast.message("Still researching — the note will appear in your Directory shortly.", { id });
+        onOpenChange(false);
+      },
+    });
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        toast.dismiss(id);
+        setResearching(null);
+      },
+      { once: true },
+    );
   }
 
   return (

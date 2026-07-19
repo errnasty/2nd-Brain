@@ -1,13 +1,9 @@
 "use server";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import {
-  thinktankCards,
-  thinktankDecks,
-  type ThinkTankRef,
-} from "@/lib/db/schema";
+import { thinktankCards, thinktankDecks } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { aiAvailable } from "@/lib/ai/provider";
@@ -18,17 +14,18 @@ import { createNoteAction } from "@/app/(app)/directory/actions";
 import { createCardsFromTextAction } from "@/app/(app)/review/actions";
 
 /**
- * Build a new deck for a topic: RAG-ground against the user's library, one
- * schema-validated AI call, insert deck + cards. Awaited inline by the client
- * (~10–30s) behind a busy overlay; the deck `status` column is the seam for
- * async generation later.
+ * Start a new deck: a fast insert with status "generating", returned in well
+ * under a second. The slow AI work runs in /api/thinktank/generate, which the
+ * reader kicks and polls — a held-open 10–30s response was getting severed by
+ * the serverless timeout and surfacing as an error even though the deck built
+ * fine.
  */
 export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkTankDetail = "standard") {
   const topic = (rawTopic ?? "").trim().slice(0, 200);
   if (!topic) return { ok: false as const, error: "Enter a topic to learn" };
   const { user } = await requireUser();
 
-  if (!aiAvailable()) {
+  if (!aiAvailable() && !process.env.ANTHROPIC_API_KEY) {
     return { ok: false as const, error: "AI isn't configured — add an API key in Settings" };
   }
   const rl = await checkRateLimit(user.id, "analyze", 20, 60);
@@ -62,6 +59,8 @@ export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkT
       .values({
         userId: user.id,
         topic,
+        title: topic, // placeholder until generation writes the polished title
+        status: "generating",
         title: deck.title,
         description: deck.description,
         status: "ready",
@@ -70,38 +69,28 @@ export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkT
         detail,
       })
       .returning({ id: thinktankDecks.id });
-
-    // Keep the AI's prerequisites → core → advanced ordering.
-    const order = { prerequisites: 0, core: 1, advanced: 2 };
-    const sorted = [...deck.cards].sort((a, b) => order[a.section] - order[b.section]);
-    await db.insert(thinktankCards).values(
-      sorted.map((c, i) => ({
-        userId: user.id,
-        deckId: inserted.id,
-        position: i,
-        section: c.section,
-        title: c.title,
-        body: c.body,
-        sourceRefs: c.refIndexes
-          .filter((n) => n >= 0 && n < related.length)
-          .map((n): ThinkTankRef => ({ itemId: related[n].directoryItemId, title: related[n].title })),
-      })),
-    );
-
-    // Same bonus as building a curriculum — it's the same kind of effort.
-    await awardXp(user.id, {
-      source: "curriculum",
-      refKind: "thinktank_deck",
-      refId: inserted.id,
-    });
-
     revalidatePath("/thinktank");
     return { ok: true as const, deckId: inserted.id };
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Couldn't build the deck";
+    const msg = err instanceof Error ? err.message : "Couldn't start the deck";
     console.error("createThinkTankDeckAction failed:", msg);
     return { ok: false as const, error: msg };
   }
+}
+
+/** Light status probe for the reader's generation poll. */
+export async function getDeckStatusAction(deckId: string) {
+  const { user } = await requireUser();
+  const [row] = await db
+    .select({
+      status: thinktankDecks.status,
+      cardCount: sql<number>`(select count(*)::int from ${thinktankCards} c where c.deck_id = ${thinktankDecks.id})`,
+    })
+    .from(thinktankDecks)
+    .where(and(eq(thinktankDecks.id, deckId), eq(thinktankDecks.userId, user.id)))
+    .limit(1);
+  if (!row) return { ok: false as const };
+  return { ok: true as const, status: row.status, cardCount: row.cardCount };
 }
 
 /** Save one idea card into the Directory as a note (idempotent per card). */
@@ -122,10 +111,15 @@ export async function saveCardToLibraryAction(cardId: string) {
       .where(eq(thinktankDecks.id, card.deckId))
       .limit(1);
 
+    const libraryRefs = card.sourceRefs.filter((r) => r.itemId);
+    const webRefs = card.sourceRefs.filter((r) => !r.itemId && r.url);
     const refs =
-      card.sourceRefs.length > 0
-        ? `\n\n**Related in your library:**\n${card.sourceRefs.map((r) => `- [[${r.title}]]`).join("\n")}`
-        : "";
+      (libraryRefs.length > 0
+        ? `\n\n**Related in your library:**\n${libraryRefs.map((r) => `- [[${r.title}]]`).join("\n")}`
+        : "") +
+      (webRefs.length > 0
+        ? `\n\n**Sources:**\n${webRefs.map((r) => `- [${r.title}](${r.url})`).join("\n")}`
+        : "");
     const r = await createNoteAction({
       title: card.title,
       content: `${card.body}${refs}\n\n— From ThinkTank: ${deck?.topic ?? "a deck"}`,
