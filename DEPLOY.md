@@ -67,8 +67,9 @@ Dashboard → **Project Settings → API**:
 ## 3. Apply the database schema + RLS
 
 The schema lives as versioned, idempotent migrations in `supabase/migrations/`
-(0001–0019: tables, `updated_at` + sync triggers, tsvector search, FSRS,
-gamification, user settings, rabbitholes). Apply them with the Supabase CLI:
+(0001–0024: tables, `updated_at` + sync triggers, tsvector search, FSRS,
+gamification, user settings, rabbitholes, quizzes, ThinkTank, background AI
+jobs, perf indexes). Apply them with the Supabase CLI:
 
 ```powershell
 supabase db push

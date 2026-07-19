@@ -260,7 +260,7 @@ create index if not exists thinktank_cards_deck_idx on thinktank_cards (deck_id,
 create index if not exists thinktank_cards_user_updated_idx on thinktank_cards (user_id, updated_at);
 `;
 
-// Background AI jobs — mirrors cloud migration 0022. Always-run + idempotent.
+// Background AI jobs — mirrors cloud migration 0024. Always-run + idempotent.
 // NOT synced (transient bookkeeping; the durable output is the note a job
 // produces), so it is deliberately absent from the sync table arrays above.
 const AI_JOBS_SQL = `
