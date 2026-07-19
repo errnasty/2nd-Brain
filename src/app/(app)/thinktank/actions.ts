@@ -1,13 +1,18 @@
 "use server";
 
-import { and, eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { thinktankCards, thinktankDecks } from "@/lib/db/schema";
+import { quizzes, thinktankCards, thinktankDecks, type QuizQuestion } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { aiAvailable } from "@/lib/ai/provider";
 import type { ThinkTankDetail } from "@/lib/ai/thinktank";
+import { generateQuiz } from "@/lib/ai/quiz";
+import { DEFAULT_QUIZ_COUNT, DEFAULT_STUDY_DIFFICULTY } from "@/lib/ai/study-options";
+import { getUserSettings } from "@/lib/settings/store";
+import { awardXp } from "@/lib/gamify/award";
 import { createNoteAction } from "@/app/(app)/directory/actions";
 import { createCardsFromTextAction } from "@/app/(app)/review/actions";
 
@@ -18,7 +23,11 @@ import { createCardsFromTextAction } from "@/app/(app)/review/actions";
  * the serverless timeout and surfacing as an error even though the deck built
  * fine.
  */
-export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkTankDetail = "standard") {
+export async function createThinkTankDeckAction(
+  rawTopic: string,
+  detail: ThinkTankDetail = "standard",
+  pacing: "free" | "daily" = "free",
+) {
   const topic = (rawTopic ?? "").trim().slice(0, 200);
   if (!topic) return { ok: false as const, error: "Enter a topic to learn" };
   const { user } = await requireUser();
@@ -40,6 +49,7 @@ export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkT
         title: topic, // placeholder until generation writes the polished title
         status: "generating",
         detail,
+        pacing,
       })
       .returning({ id: thinktankDecks.id });
     revalidatePath("/thinktank");
@@ -128,6 +138,104 @@ export async function makeFlashcardsFromCardAction(cardId: string) {
     const msg = err instanceof Error ? err.message : "Couldn't make flashcards";
     console.error("makeFlashcardsFromCardAction failed:", msg);
     return { ok: false as const, error: msg };
+  }
+}
+
+/** Turn the whole deck into flashcards in one go (finish-card action). */
+export async function makeFlashcardsFromDeckAction(deckId: string) {
+  const { user } = await requireUser();
+  try {
+    const [deck] = await db
+      .select({ title: thinktankDecks.title })
+      .from(thinktankDecks)
+      .where(and(eq(thinktankDecks.id, deckId), eq(thinktankDecks.userId, user.id)))
+      .limit(1);
+    if (!deck) return { ok: false as const, error: "Deck not found" };
+
+    const cards = await db
+      .select({ title: thinktankCards.title, body: thinktankCards.body })
+      .from(thinktankCards)
+      .where(and(eq(thinktankCards.deckId, deckId), eq(thinktankCards.userId, user.id)))
+      .orderBy(asc(thinktankCards.position));
+    if (cards.length === 0) return { ok: false as const, error: "This deck has no cards yet" };
+
+    const text = cards.map((c) => `## ${c.title}\n\n${c.body}`).join("\n\n");
+    return await createCardsFromTextAction({ title: deck.title, text });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Couldn't make flashcards";
+    console.error("makeFlashcardsFromDeckAction failed:", msg);
+    return { ok: false as const, error: msg };
+  }
+}
+
+/** Generate a quiz over the deck's cards (finish-card action). Returns the
+ *  quiz id; the client routes to the Study hub's quiz tab to take it. */
+export async function makeQuizFromDeckAction(deckId: string) {
+  const { user } = await requireUser();
+  try {
+    const [deck] = await db
+      .select({ title: thinktankDecks.title })
+      .from(thinktankDecks)
+      .where(and(eq(thinktankDecks.id, deckId), eq(thinktankDecks.userId, user.id)))
+      .limit(1);
+    if (!deck) return { ok: false as const, error: "Deck not found" };
+
+    const cards = await db
+      .select({ title: thinktankCards.title, body: thinktankCards.body })
+      .from(thinktankCards)
+      .where(and(eq(thinktankCards.deckId, deckId), eq(thinktankCards.userId, user.id)))
+      .orderBy(asc(thinktankCards.position));
+    if (cards.length === 0) return { ok: false as const, error: "This deck has no cards yet" };
+
+    const settings = await getUserSettings(user.id);
+    const text = cards.map((c) => `## ${c.title}\n\n${c.body}`).join("\n\n");
+    const questions = await generateQuiz([{ title: deck.title, text }], {
+      count: settings.quizCount ?? DEFAULT_QUIZ_COUNT,
+      difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+    });
+    if (questions.length === 0) {
+      return {
+        ok: false as const,
+        error: aiAvailable() ? "Couldn't generate a quiz from this deck — try again" : "AI isn't configured — add an API key in Settings",
+      };
+    }
+
+    const withIds: QuizQuestion[] = questions.map((q) => ({ ...q, id: randomUUID() }));
+    const [row] = await db
+      .insert(quizzes)
+      .values({ userId: user.id, title: `Quiz: ${deck.title}`.slice(0, 200), itemIds: [], questions: withIds })
+      .returning({ id: quizzes.id });
+
+    await awardXp(user.id, { source: "quiz_made", refKind: "quiz_made", refId: row.id });
+    revalidatePath("/study");
+    return { ok: true as const, quizId: row.id, count: withIds.length };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Couldn't create the quiz";
+    console.error("makeQuizFromDeckAction failed:", msg);
+    return { ok: false as const, error: msg };
+  }
+}
+
+/** Award finish XP once per deck — called when the reader hits the finish
+ *  card. Idempotent via the xp_events (source, refKind, refId) dedupe. */
+export async function markDeckFinishedAction(deckId: string) {
+  const { user } = await requireUser();
+  try {
+    const [deck] = await db
+      .select({ id: thinktankDecks.id })
+      .from(thinktankDecks)
+      .where(and(eq(thinktankDecks.id, deckId), eq(thinktankDecks.userId, user.id)))
+      .limit(1);
+    if (!deck) return { ok: false as const };
+    const xp = await awardXp(user.id, {
+      source: "deck_finished",
+      refKind: "thinktank_deck_finished",
+      refId: deckId,
+    });
+    return { ok: true as const, xp };
+  } catch {
+    // Fire-and-forget from the client — losing the award is not worth an error.
+    return { ok: false as const };
   }
 }
 

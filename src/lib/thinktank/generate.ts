@@ -40,6 +40,16 @@ export async function runDeckGeneration(
     return { ok: true };
   }
 
+  // A retried deck goes back to "generating" first, so every surface (hub
+  // list, deck page poller) reflects the in-flight rebuild instead of the
+  // stale failure.
+  if (deck.status === "error") {
+    await db
+      .update(thinktankDecks)
+      .set({ status: "generating", updatedAt: new Date() })
+      .where(eq(thinktankDecks.id, deck.id));
+  }
+
   try {
     // Library grounding — fail-soft: a retrieval hiccup (no embeddings key,
     // empty library) just means an ungrounded deck.

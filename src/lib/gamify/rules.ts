@@ -14,7 +14,8 @@ export type XpSource =
   | "research"
   | "curriculum"
   | "quiz_made"
-  | "quiz_completed";
+  | "quiz_completed"
+  | "deck_finished";
 
 /** Base XP per source. card_graded is computed separately (scales with grade);
  *  quiz_completed's caller passes an explicit `amount` scaled by score. */
@@ -31,6 +32,7 @@ export const XP_RULES: Record<XpSource, number> = {
   curriculum: 25,
   quiz_made: 15,
   quiz_completed: 10, // fallback only — callers pass a score-scaled `amount`
+  deck_finished: 20,
 };
 
 /** Human label for the activity feed. */
@@ -47,6 +49,7 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   curriculum: "built a curriculum",
   quiz_made: "made a quiz",
   quiz_completed: "completed a quiz",
+  deck_finished: "finished a ThinkTank deck",
 };
 
 /** A flashcard review scales with recall quality (0–5): 4–16 XP. */
@@ -69,6 +72,7 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   curriculum: null,
   quiz_made: null,
   quiz_completed: "quizzesCompleted",
+  deck_finished: null,
 };
 
 export const DAILY_GOAL = 100;

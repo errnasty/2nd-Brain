@@ -27,6 +27,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-19-b",
+    date: "July 19, 2026",
+    title: "ThinkTank levels up: daily decks, quizzes, and more",
+    tag: "feature",
+    summary:
+      "ThinkTank decks can now drip out a few cards a day so a topic becomes a habit instead of a one-sitting read — and finishing a deck opens a whole toolkit for locking the ideas in.",
+    items: [
+      "New “Daily” pace when building a deck: 5 fresh cards unlock each day, and your Today page nudges you when they're ready.",
+      "Finish a deck and you can quiz yourself on it, turn the whole deck into flashcards in one tap, or rebuild the topic at full depth — plus you now earn XP for finishing.",
+      "“Go deeper” on a card now drops you straight into a rabbithole on that idea (saving the card for you along the way).",
+      "On your phone, tap the left or right edge of a card to flip between cards.",
+      "The deck list now updates itself while a deck is building, shows each deck's depth, and failed decks can be retried right from the list.",
+      "Topic suggestions now include things you've just read in Feeds.",
+    ],
+  },
+  {
     id: "2026-07-19",
     date: "July 19, 2026",
     title: "Feeds and Directory are much faster with big libraries",
