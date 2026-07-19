@@ -234,6 +234,9 @@ create table if not exists thinktank_decks (
   status text not null default 'ready',
   pacing text not null default 'free',
   last_position integer not null default 0,
+  model text,
+  token_count integer,
+  detail text not null default 'standard',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

@@ -38,6 +38,7 @@ export function ThinkTankHub({
   const [topic, setTopic] = useState("");
   const [building, setBuilding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<"brief" | "standard" | "deep">("standard");
 
   // Fast: inserts a "generating" deck and routes to it; the deck page kicks
   // the background build and polls, so nothing here waits on the AI.
@@ -46,15 +47,21 @@ export function ThinkTankHub({
     if (!trimmed || building) return;
     setBuilding(true);
     try {
-      const r = await createThinkTankDeckAction(trimmed);
+      const r = await createThinkTankDeckAction(trimmed, detail);
       if (r.ok) {
         setTopic("");
         router.push(`/thinktank/${r.deckId}`);
       } else {
         toast.error(r.error);
+        // The action can outlive the client fetch (web search + AI is ~20-30s).
+        // If the deck was actually created but the response was lost, a refresh
+        // reveals it instead of leaving the user staring at an error.
+        router.refresh();
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Couldn't start the deck");
+      toast.error(err instanceof Error ? err.message : "Couldn't build the deck");
+      router.refresh();
     } finally {
       setBuilding(false);
     }
@@ -98,6 +105,34 @@ export function ThinkTankHub({
               {!building && <Lightbulb className="h-4 w-4" />}
               Build deck
             </LoadingButton>
+          </div>
+          {/* Detail selector — controls how deep the deck goes (card count +
+              per-card word ceiling). Deeper = more tokens, richer cards. */}
+          <div className="mt-3 flex items-center gap-1.5">
+            <span className="editorial-eyebrow shrink-0">Depth</span>
+            <div className="flex items-center rounded-md border border-border p-0.5">
+              {([
+                { id: "brief", label: "Brief", hint: "6-8 cards · ≤50 words each" },
+                { id: "standard", label: "Standard", hint: "8-12 cards · ≤80 words each" },
+                { id: "deep", label: "Deep", hint: "12-16 cards · ≤140 words each" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  disabled={building}
+                  onClick={() => setDetail(opt.id)}
+                  title={opt.hint}
+                  className={cn(
+                    "rounded px-2.5 py-1 text-xs transition-colors",
+                    detail === opt.id
+                      ? "bg-foreground text-background"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
           {suggestions.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1.5">

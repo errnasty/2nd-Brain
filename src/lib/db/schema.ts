@@ -587,6 +587,13 @@ export const thinktankDecks = pgTable(
     pacing: text("pacing").$type<"free" | "daily">().default("free").notNull(),
     // Reader resume point (index of the last card viewed).
     lastPosition: integer("last_position").default(0).notNull(),
+    // Provenance + cost transparency: which model generated this deck and how
+    // many tokens it consumed. Nullable for decks generated before the column
+    // existed and for hand-created rows.
+    model: text("model"),
+    tokenCount: integer("token_count"),
+    // Depth the user requested — drives card count + per-card word ceiling.
+    detail: text("detail").$type<"brief" | "standard" | "deep">().default("standard").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

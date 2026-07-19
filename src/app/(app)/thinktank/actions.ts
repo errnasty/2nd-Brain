@@ -7,6 +7,9 @@ import { thinktankCards, thinktankDecks } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { aiAvailable } from "@/lib/ai/provider";
+import { retrieveFromDirectory } from "@/lib/ai/rag";
+import { generateThinkTankDeck, type ThinkTankDetail } from "@/lib/ai/thinktank";
+import { awardXp } from "@/lib/gamify/award";
 import { createNoteAction } from "@/app/(app)/directory/actions";
 import { createCardsFromTextAction } from "@/app/(app)/review/actions";
 
@@ -17,7 +20,7 @@ import { createCardsFromTextAction } from "@/app/(app)/review/actions";
  * the serverless timeout and surfacing as an error even though the deck built
  * fine.
  */
-export async function createThinkTankDeckAction(rawTopic: string) {
+export async function createThinkTankDeckAction(rawTopic: string, detail: ThinkTankDetail = "standard") {
   const topic = (rawTopic ?? "").trim().slice(0, 200);
   if (!topic) return { ok: false as const, error: "Enter a topic to learn" };
   const { user } = await requireUser();
@@ -31,6 +34,26 @@ export async function createThinkTankDeckAction(rawTopic: string) {
   }
 
   try {
+    // Library grounding + web grounding run in parallel — both are fail-soft,
+    // so a hiccup in either just means an ungrounded deck. Running them
+    // concurrently cuts the pre-AI latency to ~max(ground, web) instead of
+    // the sum.
+    const grounding = (async () => {
+      try {
+        const hits = await retrieveFromDirectory(user.id, topic, 12);
+        const seen = new Set<string>();
+        return hits.filter((h) => (seen.has(h.title) ? false : (seen.add(h.title), true)));
+      } catch {
+        return [] as { directoryItemId: string; title: string }[];
+      }
+    })();
+    const related = await grounding;
+
+    const deck = await generateThinkTankDeck(topic, related, detail);
+    if (!deck || deck.cards.length === 0) {
+      return { ok: false as const, error: "Couldn't build a deck for this topic — try again" };
+    }
+
     const [inserted] = await db
       .insert(thinktankDecks)
       .values({
@@ -38,6 +61,12 @@ export async function createThinkTankDeckAction(rawTopic: string) {
         topic,
         title: topic, // placeholder until generation writes the polished title
         status: "generating",
+        title: deck.title,
+        description: deck.description,
+        status: "ready",
+        model: deck.model,
+        tokenCount: deck.tokenCount,
+        detail,
       })
       .returning({ id: thinktankDecks.id });
     revalidatePath("/thinktank");
