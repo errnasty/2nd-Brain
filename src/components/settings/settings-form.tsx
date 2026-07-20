@@ -37,6 +37,7 @@ import {
   type PaletteId,
 } from "@/lib/settings";
 import { toast } from "sonner";
+import { updateUserSettingsAction } from "@/lib/settings/actions";
 
 
 // Representative swatch per palette (the CSS vars are scoped to :root/.dark, so
@@ -60,7 +61,7 @@ export function Row({ title, desc, children }: { title: string; desc?: string; c
   );
 }
 
-export function SettingsForm() {
+export function SettingsForm({ serverAiModel = null }: { serverAiModel?: string | null }) {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [fontScale, setFontScaleState] = useState(FONT_SCALE_DEFAULT);
@@ -75,9 +76,18 @@ export function SettingsForm() {
     setFontFamilyState(getFontFamily());
     setPaletteState(getPalette());
     setReduceMotionState(getReduceMotion());
-    const m = getScopedItem(ASK_MODEL_KEY);
-    if (m && CHAT_MODELS.some((x) => x.id === m)) setModel(m);
-  }, []);
+    // Model: the server copy (cross-device, drives background AI) wins; a
+    // legacy local-only pick is backfilled server-side so decks/quizzes/etc.
+    // honor it too.
+    const local = getScopedItem(ASK_MODEL_KEY);
+    if (serverAiModel && CHAT_MODELS.some((x) => x.id === serverAiModel)) {
+      setModel(serverAiModel);
+      if (local !== serverAiModel) setScopedItem(ASK_MODEL_KEY, serverAiModel);
+    } else if (local && CHAT_MODELS.some((x) => x.id === local)) {
+      setModel(local);
+      void updateUserSettingsAction({ aiModel: local }).catch(() => {});
+    }
+  }, [serverAiModel]);
 
   function bumpFont(delta: number) {
     const next = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, fontScale + delta));
@@ -97,7 +107,12 @@ export function SettingsForm() {
 
   function chooseModel(id: string) {
     setModel(id);
+    // Instant client reads (Ask / reader / rabbithole pass the model per
+    // request) + the server copy that background AI (decks, quizzes,
+    // flashcards, tagging…) resolves against. Fire-and-forget: the local
+    // pick must never block on the network.
     setScopedItem(ASK_MODEL_KEY, id);
+    void updateUserSettingsAction({ aiModel: id }).catch(() => {});
   }
 
   function resetAll() {
@@ -241,7 +256,10 @@ export function SettingsForm() {
         <h2 className="pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           AI
         </h2>
-        <Row title="Default Ask model" desc="Used for new questions in the Ask tab.">
+        <Row
+          title="Default AI model"
+          desc="Used for Ask and every AI feature across the app — decks, quizzes, flashcards, summaries, tagging."
+        >
           <div className="flex flex-col items-end gap-1">
             {CHAT_MODELS.map((m) => (
               <button

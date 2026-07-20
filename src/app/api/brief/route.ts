@@ -1,7 +1,8 @@
 import { createHash } from "crypto";
 import { and, eq, gte, desc, sql } from "drizzle-orm";
 import { streamText } from "ai";
-import { aiAvailable, smartModel } from "@/lib/ai/provider";
+import { aiAvailable } from "@/lib/ai/provider";
+import { userSmartModel } from "@/lib/ai/user-model";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -239,7 +240,7 @@ export async function POST(req: Request) {
   // Anthropic prompt caching: cache the large article block so daily reruns (and
   // re-generations within the same conversation window) reuse the same tokens.
   const result = streamText({
-    model: smartModel(),
+    model: await userSmartModel(),
     system: systemPrompt,
     messages: [
       {

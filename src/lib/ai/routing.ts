@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 
 const RouteSchema = z.object({
   folderName: z
@@ -27,7 +28,7 @@ export async function routeToFolder(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: RouteSchema,
       system: `You route articles into one of the user's existing folders.
 

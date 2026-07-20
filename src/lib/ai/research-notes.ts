@@ -1,6 +1,6 @@
 import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { webAnswerOnce, plainAnswerOnce, type WebSource } from "@/lib/ai/web-answer";
-import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { anthropicWebModel } from "@/lib/ai/user-model";
 import { createNoteAction } from "@/app/(app)/directory/actions";
 import { awardXp } from "@/lib/gamify/award";
 
@@ -27,11 +27,12 @@ detail and cite as you go. Keep it tight and skimmable.`;
 
 /** Web-first answer with plain-completion fallback (web tool may be disabled). */
 async function answer(system: string, userContent: string): Promise<{ text: string; sources: WebSource[] }> {
+  const model = await anthropicWebModel();
   try {
-    return await webAnswerOnce({ model: DEFAULT_CHAT_MODEL, system, userContent });
+    return await webAnswerOnce({ model, system, userContent });
   } catch (webErr) {
     console.warn("web search failed, falling back to no-web:", webErr instanceof Error ? webErr.message : webErr);
-    const r = await plainAnswerOnce({ model: DEFAULT_CHAT_MODEL, system, userContent });
+    const r = await plainAnswerOnce({ model, system, userContent });
     return { text: r.text, sources: [] };
   }
 }

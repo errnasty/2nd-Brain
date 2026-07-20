@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-20-c",
+    date: "July 20, 2026",
+    title: "Your model choice now applies everywhere",
+    tag: "improvement",
+    summary:
+      "The model you pick in Settings (including “Auto — best value”) now drives every AI feature in the app — ThinkTank decks, quizzes, flashcards, summaries, tagging, and study plans — not just the Ask tab. Works with Claude direct, OpenRouter, and OpenAI models, and syncs across your devices.",
+  },
+  {
     id: "2026-07-20-b",
     date: "July 20, 2026",
     title: "Deck building works reliably at every depth",

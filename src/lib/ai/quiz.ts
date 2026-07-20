@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel, smartModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel, userSmartModel } from "./user-model";
 import {
   clamp,
   DEFAULT_QUIZ_COUNT,
@@ -66,7 +67,7 @@ export async function generateQuiz(
 
   try {
     const { object } = await generateObject({
-      model: isDesktop ? smartModel() : fastModel(),
+      model: await (isDesktop ? userSmartModel() : userFastModel()),
       schema,
       maxTokens: MAX_OUTPUT_TOKENS,
       system: `You create a quiz that tests understanding of the provided document(s).

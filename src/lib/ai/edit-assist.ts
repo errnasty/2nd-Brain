@@ -1,5 +1,6 @@
 import { generateText } from "ai";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 
 export type EditAssistMode = "rewrite" | "summarize" | "continue";
 
@@ -42,7 +43,7 @@ export async function editAssist(
 
   try {
     const { text } = await generateText({
-      model: fastModel(),
+      model: await userFastModel(),
       system: `You are a writing assistant editing a personal note.
 
 ${MODE_INSTRUCTION[mode]}

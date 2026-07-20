@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "@/lib/ai/provider";
+import { aiAvailable } from "@/lib/ai/provider";
+import { userFastModel } from "@/lib/ai/user-model";
 
 const SkillSchema = z.object({
   // Reuse an existing skill name when the content fits one; else a concise new one.
@@ -25,7 +26,7 @@ export async function classifyItemSkills(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: SkillSchema,
       system: `You assign learning content to ONE skill the user is building.
 

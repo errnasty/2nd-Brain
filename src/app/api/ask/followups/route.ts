@@ -3,7 +3,8 @@ import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage } from "@/lib/ai/budget";
-import { aiAvailable, fastModel } from "@/lib/ai/provider";
+import { aiAvailable } from "@/lib/ai/provider";
+import { userFastModel } from "@/lib/ai/user-model";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -41,7 +42,7 @@ export async function POST(req: Request) {
 
   try {
     const { object, usage } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: Schema,
       system:
         "Given a question and its answer, propose up to 3 natural follow-up questions the user " +

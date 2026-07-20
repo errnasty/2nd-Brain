@@ -1,8 +1,8 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, smartModel, activeProvider } from "./provider";
+import { aiAvailable, activeProvider } from "./provider";
+import { userModelChoice, userSmartModel, anthropicWebModel } from "./user-model";
 import { webAnswerOnce, type WebSource } from "./web-answer";
-import { DEFAULT_CHAT_MODEL } from "./models";
 import { groundFromWeb, formatWebGround } from "./web-search";
 import type { ThinkTankSection } from "@/lib/db/schema";
 
@@ -129,8 +129,9 @@ async function generateViaWebSearch(
   detail: ThinkTankDetail = "standard",
 ): Promise<GeneratedThinkTankDeck | null> {
   const preset = DETAIL_PRESETS[detail];
+  const webModel = await anthropicWebModel();
   const { text, sources: cited } = await webAnswerOnce({
-    model: DEFAULT_CHAT_MODEL,
+    model: webModel,
     system: webSystem(preset),
     userContent: `Topic: ${topic}\n\nLearner's library items (by index):\n${relatedList(related)}`,
     maxTokens: outputBudget(preset),
@@ -148,7 +149,7 @@ async function generateViaWebSearch(
       sources: c.sources.filter((s) => citedUrls.has(s.url) || citedHosts.has(hostOf(s.url))),
     })),
     // webAnswerOnce doesn't surface usage, so provenance is model-only here.
-    model: DEFAULT_CHAT_MODEL,
+    model: webModel,
     tokenCount: null,
   };
 }
@@ -203,15 +204,18 @@ async function generateViaObject(
   }
 
   // Resolve the concrete model id for provenance — the UI shows which model
-  // generated the deck so the user understands cost/quality.
+  // generated the deck so the user understands cost/quality. The user's
+  // Settings choice wins; otherwise the env-configured smart default.
+  const choice = await userModelChoice();
   const modelId =
-    activeProvider() === "openrouter"
+    choice?.id ??
+    (activeProvider() === "openrouter"
       ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
-      : "claude-sonnet-4-6";
+      : "claude-sonnet-4-6");
 
   try {
     const result = await generateObject({
-      model: smartModel(),
+      model: await userSmartModel(),
       schema,
       maxTokens: outputBudget(preset),
       system: `You design Deepstash/Imprint-style micro-learning decks: a topic becomes ${preset.minCards}-${preset.maxCards} self-contained "idea cards" a curious adult can read in under a minute each.
@@ -257,7 +261,11 @@ export async function generateThinkTankDeck(
 ): Promise<GeneratedThinkTankDeck | null> {
   if (!aiAvailable() && !process.env.ANTHROPIC_API_KEY) return null;
 
-  if (process.env.ANTHROPIC_API_KEY) {
+  // The native web_search path is Anthropic-only. When the user's chosen
+  // model is a different provider, honor the choice: go straight to the
+  // fallback (which web-grounds provider-agnostically and runs their model).
+  const choice = await userModelChoice();
+  if (process.env.ANTHROPIC_API_KEY && (!choice || choice.provider === "anthropic")) {
     try {
       const deck = await generateViaWebSearch(topic, related, detail);
       if (deck) return deck;

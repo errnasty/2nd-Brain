@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 
 const TagSchema = z.object({
   tags: z.array(z.string().min(1).max(40)).min(2).max(5),
@@ -23,7 +24,7 @@ export async function generateTags(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: TagSchema,
       system: `You generate 3-5 short, descriptive tags for an article.
 

@@ -2,7 +2,8 @@ import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import type { LanguageModelV1 } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel, smartModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel, userSmartModel } from "./user-model";
 
 // Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
 // bounded output. The desktop app runs the server locally with no such limit,
@@ -11,9 +12,9 @@ import { aiAvailable, fastModel, smartModel } from "./provider";
 const isDesktop = process.env.APP_RUNTIME === "desktop";
 const MAX_OUTPUT_TOKENS = isDesktop ? 8000 : 3500;
 
-function planModel(): LanguageModelV1 {
+async function planModel(): Promise<LanguageModelV1> {
   if (process.env.STUDY_PLAN_MODEL) return anthropic(process.env.STUDY_PLAN_MODEL);
-  return isDesktop ? smartModel() : fastModel();
+  return isDesktop ? userSmartModel() : userFastModel();
 }
 
 // One study session / task. `dayOffset` is days from the start date — the
@@ -89,7 +90,7 @@ Available existing library items (use the exact title in "link" when relevant):
 ${linkList}`;
 
   const { object } = await generateObject({
-    model: planModel(),
+    model: await planModel(),
     schema: StudyPlanSchema,
     system,
     prompt,

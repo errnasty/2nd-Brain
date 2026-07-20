@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 
 /**
  * The model returns a list of commands. Two shapes:
@@ -81,7 +82,7 @@ export async function organizeItems(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: OrganizeResponseSchema,
       system: SYSTEM,
       prompt: `EXISTING FOLDERS: ${folderList}\n\nUNCATEGORIZED ITEMS:\n${itemList}\n\nReturn the commands list.`,

@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 
 const DistillSchema = z.object({
   tldr: z.string().min(1).max(400),
@@ -20,7 +21,7 @@ export async function distill(title: string, content: string): Promise<Distilled
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: DistillSchema,
       system: `You distill a document into its durable essence for fast future recall.
 
