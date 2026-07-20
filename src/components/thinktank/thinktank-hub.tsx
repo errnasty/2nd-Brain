@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { DAILY_CARDS } from "@/lib/thinktank/pacing";
+import { isStalledGeneration } from "@/lib/thinktank/stall";
 import { createThinkTankDeckAction, deleteDeckAction, getDeckStatusAction } from "@/app/(app)/thinktank/actions";
 
 export type DeckSummary = {
@@ -23,6 +24,7 @@ export type DeckSummary = {
   detail: "brief" | "standard" | "deep";
   lastPosition: number;
   createdAt: string;
+  updatedAt: string;
   cardCount: number;
 };
 
@@ -49,8 +51,12 @@ export function ThinkTankHub({
 
   // Decks still building when the page rendered: poll their status so the
   // list flips to ready/failed without the user refreshing or opening them.
+  // Stalled runs (builder died without writing "error") are excluded — their
+  // status can't change until the user retries, so polling them is noise.
   const generatingIds = decks
-    .filter((d) => d.cardCount === 0 && d.status !== "error")
+    .filter(
+      (d) => d.cardCount === 0 && d.status !== "error" && !isStalledGeneration(d.updatedAt),
+    )
     .map((d) => d.id)
     .join(",");
   useEffect(() => {
@@ -222,7 +228,7 @@ export function ThinkTankHub({
                   key={s}
                   onClick={() => build(s)}
                   disabled={building}
-                  className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                  className="max-w-full truncate rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
                 >
                   {s}
                 </button>
@@ -244,7 +250,12 @@ export function ThinkTankHub({
               {decks.map((d) => {
                 const finished = d.cardCount > 0 && d.lastPosition >= d.cardCount - 1;
                 const progress = d.cardCount > 0 ? Math.min(d.lastPosition + 1, d.cardCount) : 0;
-                const failed = d.cardCount === 0 && d.status === "error";
+                // "Stalled" = still says generating but the run's liveness
+                // stamp is minutes old: the builder died without writing
+                // error. Offered the same retry as a failed deck.
+                const stalled =
+                  d.cardCount === 0 && d.status === "generating" && isStalledGeneration(d.updatedAt);
+                const failed = (d.cardCount === 0 && d.status === "error") || stalled;
                 const retrying = retryingId === d.id;
                 return (
                   <div
@@ -259,7 +270,7 @@ export function ThinkTankHub({
                       <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
                         {d.cardCount === 0 ? (
                           failed && !retrying ? (
-                            <span className="text-destructive">Failed</span>
+                            <span className="text-destructive">{stalled ? "Stalled" : "Failed"}</span>
                           ) : (
                             <span className="inline-flex items-center gap-1.5">
                               <Spinner className="h-3 w-3" /> Building…

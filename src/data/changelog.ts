@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-20",
+    date: "July 20, 2026",
+    title: "ThinkTank and Rabbithole work properly on your phone",
+    tag: "fix",
+    summary:
+      "Two big mobile fixes: decks can no longer get stuck on “Building…” forever, and selecting text in a rabbithole on your phone now brings up the dig tools.",
+    items: [
+      "A deck build that silently dies now shows as “Stalled” with a one-tap retry — and opening the deck restarts it automatically. Builds also get twice as long to finish before timing out.",
+      "On phones, selecting text in a rabbithole now opens a bottom bar with the Explain / ELI5 / Example / Go Deeper lenses — adjusting the selection with the drag handles works too.",
+      "Topic suggestions are now a tidy row of six instead of a wall of chips.",
+    ],
+  },
+  {
     id: "2026-07-19-c",
     date: "July 19, 2026",
     title: "Snappier everywhere",

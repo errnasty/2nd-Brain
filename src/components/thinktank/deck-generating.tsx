@@ -7,6 +7,7 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { getDeckStatusAction } from "@/app/(app)/thinktank/actions";
+import { GENERATION_STALL_MS } from "@/lib/thinktank/stall";
 
 /**
  * Shown while a deck's cards are being generated in the background. Kicks
@@ -15,10 +16,23 @@ import { getDeckStatusAction } from "@/app/(app)/thinktank/actions";
  * allowed to fail (that's the serverless-timeout bug this design fixes) —
  * the poll is the source of truth.
  */
-export function DeckGenerating({ deckId, topic, failed }: { deckId: string; topic: string; failed: boolean }) {
+export function DeckGenerating({
+  deckId,
+  topic,
+  failed,
+  startedAt,
+}: {
+  deckId: string;
+  topic: string;
+  failed: boolean;
+  /** When this run was stamped "generating" — drives stall detection. */
+  startedAt?: string;
+}) {
   const router = useRouter();
   const [error, setError] = useState(failed);
-  const [slow, setSlow] = useState(false);
+  // A run that was already old when the page opened starts in the "taking a
+  // little longer" state (the mount kick below restarts it).
+  const [slow, setSlow] = useState(() => !!startedAt && Date.now() - Date.parse(startedAt) > 45_000);
   const kicked = useRef(false);
 
   function kick() {
@@ -48,9 +62,12 @@ export function DeckGenerating({ deckId, topic, failed }: { deckId: string; topi
   }, []);
 
   // Poll until the cards exist, then re-render the server page into the reader.
+  // The poll itself gives up after the stall window: a builder that died
+  // without writing "error" (severed serverless run) must surface as a
+  // retryable failure, not an infinite spinner.
   useEffect(() => {
     if (error) return;
-    const startedAt = Date.now();
+    const pollStart = Date.now();
     const timer = setInterval(async () => {
       try {
         const r = await getDeckStatusAction(deckId);
@@ -65,7 +82,12 @@ export function DeckGenerating({ deckId, topic, failed }: { deckId: string; topi
           setError(true);
           return;
         }
-        if (Date.now() - startedAt > 45_000) setSlow(true);
+        const waited = Date.now() - pollStart;
+        if (waited > 45_000) setSlow(true);
+        if (waited > GENERATION_STALL_MS) {
+          clearInterval(timer);
+          setError(true);
+        }
       } catch {
         // transient poll failure — next tick retries
       }

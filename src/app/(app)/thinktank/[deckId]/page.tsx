@@ -32,7 +32,14 @@ export default async function ThinkTankDeckPage({ params }: { params: Params }) 
 
   // No cards yet: generation is in flight (or failed) — render the poller.
   if (cards.length === 0) {
-    return <DeckGenerating deckId={deck.id} topic={deck.topic} failed={deck.status === "error"} />;
+    return (
+      <DeckGenerating
+        deckId={deck.id}
+        topic={deck.topic}
+        failed={deck.status === "error"}
+        startedAt={deck.updatedAt.toISOString()}
+      />
+    );
   }
 
   return <CardReader deck={deck} cards={cards} />;

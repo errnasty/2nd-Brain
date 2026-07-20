@@ -27,6 +27,7 @@ export default async function ThinkTankPage() {
         detail: thinktankDecks.detail,
         lastPosition: thinktankDecks.lastPosition,
         createdAt: sql<string>`${thinktankDecks.createdAt}::text`,
+        updatedAt: sql<string>`${thinktankDecks.updatedAt}::text`,
         cardCount: sql<number>`(select count(*)::int from ${thinktankCards} c where c.deck_id = ${thinktankDecks.id})`,
       })
       .from(thinktankDecks)
@@ -57,8 +58,13 @@ export default async function ThinkTankPage() {
   ]);
 
   // Interests first, then library tags, then recent reads; dedupe
-  // case-insensitively.
-  const readTitles = recentReads.map((a) => a.title.trim()).filter((t) => t.length > 0 && t.length <= 60);
+  // case-insensitively. Capped at 6 — a wall of chips buries the topic input
+  // on a phone. Read titles are held to headline-chip length (≤48 chars) and
+  // at most 2, so news headlines can't crowd out the user's own interests.
+  const readTitles = recentReads
+    .map((a) => a.title.trim())
+    .filter((t) => t.length > 0 && t.length <= 48)
+    .slice(0, 2);
   const seen = new Set<string>();
   const suggestions = [...interests, ...recentTags.map((t) => t.name), ...readTitles]
     .filter((t) => {
@@ -67,7 +73,7 @@ export default async function ThinkTankPage() {
       seen.add(k);
       return true;
     })
-    .slice(0, 10);
+    .slice(0, 6);
 
   return <ThinkTankHub decks={decks} suggestions={suggestions} />;
 }
