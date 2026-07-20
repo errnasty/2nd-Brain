@@ -1,7 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "@/lib/ai/provider";
-import { userFastModel } from "@/lib/ai/user-model";
+import { withLiteModel } from "@/lib/ai/lite";
 
 const SkillSchema = z.object({
   // Reuse an existing skill name when the content fits one; else a concise new one.
@@ -25,8 +25,9 @@ export async function classifyItemSkills(
   if (!title.trim() && !content.trim()) return null;
 
   try {
-    const { object } = await generateObject({
-      model: await userFastModel(),
+    const { object } = await withLiteModel((model) =>
+      generateObject({
+        model,
       schema: SkillSchema,
       system: `You assign learning content to ONE skill the user is building.
 
@@ -40,7 +41,8 @@ Rules:
 Title: ${title}
 
 Content: ${content.slice(0, 3000)}`,
-    });
+      }),
+    );
     return object;
   } catch (err) {
     console.warn("classifyItemSkills failed:", err instanceof Error ? err.message : err);

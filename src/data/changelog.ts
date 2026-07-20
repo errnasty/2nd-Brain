@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-20-d",
+    date: "July 20, 2026",
+    title: "Housekeeping AI now runs on free models",
+    tag: "improvement",
+    summary:
+      "Auto-tagging, folder routing, auto-organize, and skill classification now run on free OpenRouter models (with automatic fallback to your regular model if they're busy) — the high-volume background chores stop costing you tokens.",
+  },
+  {
     id: "2026-07-20-c",
     date: "July 20, 2026",
     title: "Your model choice now applies everywhere",
