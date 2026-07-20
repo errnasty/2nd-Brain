@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-20-b",
+    date: "July 20, 2026",
+    title: "Deck building works reliably at every depth",
+    tag: "fix",
+    summary:
+      "Standard and Deep decks were running out of room mid-write and failing with “couldn't build a deck”. Decks now get a writing budget sized to their depth, a deck that comes back slightly short or long is kept instead of rejected, and when a build does fail the app tells you the actual reason.",
+  },
+  {
     id: "2026-07-20",
     date: "July 20, 2026",
     title: "ThinkTank and Rabbithole work properly on your phone",

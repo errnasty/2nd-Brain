@@ -30,6 +30,7 @@ export function DeckGenerating({
 }) {
   const router = useRouter();
   const [error, setError] = useState(failed);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // A run that was already old when the page opened starts in the "taking a
   // little longer" state (the mount kick below restarts it).
   const [slow, setSlow] = useState(() => !!startedAt && Date.now() - Date.parse(startedAt) > 45_000);
@@ -37,6 +38,7 @@ export function DeckGenerating({
 
   function kick() {
     setError(false);
+    setErrorMsg(null);
     fetch("/api/thinktank/generate", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -44,8 +46,13 @@ export function DeckGenerating({
     })
       .then(async (res) => {
         // A severed response lands in .catch; an explicit error means the
-        // generation itself failed and the poll would spin forever.
-        if (!res.ok) setError(true);
+        // generation itself failed and the poll would spin forever. Keep the
+        // server's reason — "try again" without the why is a dead end.
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          setErrorMsg(body?.error ?? null);
+          setError(true);
+        }
       })
       .catch(() => {
         // Ignore: the poll below picks up the finished deck.
@@ -114,7 +121,7 @@ export function DeckGenerating({
               <div className="editorial-eyebrow-brand">§ Something went wrong</div>
               <h2 className="editorial-display mt-3 text-xl">Couldn&apos;t build this deck.</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                The generation failed — this is usually temporary. Try again, or pick a broader topic.
+                {errorMsg || "The generation failed — this is usually temporary. Try again, or pick a broader topic."}
               </p>
               <Button variant="brand" size="sm" className="mt-5 gap-1.5" onClick={kick}>
                 <RefreshCw className="h-3.5 w-3.5" />

@@ -125,8 +125,13 @@ export function ThinkTankHub({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ deckId: id }),
     })
-      .then((res) => {
-        if (!res.ok) toast.error("Couldn't rebuild the deck — try again");
+      .then(async (res) => {
+        if (!res.ok) {
+          // Show the server's actual reason (AI not configured, model error…)
+          // — a generic message hides what the user could actually fix.
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          toast.error(body?.error || "Couldn't rebuild the deck — try again");
+        }
         router.refresh();
       })
       .catch(() => {
