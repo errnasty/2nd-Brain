@@ -5,13 +5,27 @@ import { useRouter } from "next/navigation";
 import { BarChart3, Brain, CalendarDays, CheckSquare, HelpCircle, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { localKey, utcKey } from "@/lib/study/calendar";
+import dynamic from "next/dynamic";
+import { Spinner } from "@/components/ui/spinner";
 import { StatsOverview } from "./stats-overview";
-import { CalendarView } from "./calendar-view";
-import { TasksView } from "@/components/tasks/tasks-view";
-import { ReviewView } from "@/components/review/review-view";
-import { QuizTab } from "./quiz-tab";
-import { CardsTab } from "./cards-tab";
-import { SessionRunner } from "./session-runner";
+
+// Only one tab renders at a time, so everything but the default Overview tab
+// is code-split: the /study route chunk stays small and a tab's code is
+// fetched the first time it's opened (then cached). next/dynamic needs its
+// options inline as object literals, hence the repetition.
+function TabLoading() {
+  return (
+    <div className="flex justify-center py-16">
+      <Spinner className="h-5 w-5 text-muted-foreground" />
+    </div>
+  );
+}
+const CalendarView = dynamic(() => import("./calendar-view").then((m) => m.CalendarView), { loading: TabLoading });
+const TasksView = dynamic(() => import("@/components/tasks/tasks-view").then((m) => m.TasksView), { loading: TabLoading });
+const ReviewView = dynamic(() => import("@/components/review/review-view").then((m) => m.ReviewView), { loading: TabLoading });
+const QuizTab = dynamic(() => import("./quiz-tab").then((m) => m.QuizTab), { loading: TabLoading });
+const CardsTab = dynamic(() => import("./cards-tab").then((m) => m.CardsTab), { loading: TabLoading });
+const SessionRunner = dynamic(() => import("./session-runner").then((m) => m.SessionRunner), { loading: TabLoading });
 import { lastLocation } from "@/lib/last-location";
 import type { StudyStats, CalendarEntry } from "@/app/(app)/study/actions";
 import type { TaskRow } from "@/app/(app)/tasks/actions";

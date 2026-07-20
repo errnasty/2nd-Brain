@@ -40,15 +40,15 @@ export async function runDeckGeneration(
     return { ok: true };
   }
 
-  // A retried deck goes back to "generating" first, so every surface (hub
-  // list, deck page poller) reflects the in-flight rebuild instead of the
-  // stale failure.
-  if (deck.status === "error") {
-    await db
-      .update(thinktankDecks)
-      .set({ status: "generating", updatedAt: new Date() })
-      .where(eq(thinktankDecks.id, deck.id));
-  }
+  // Stamp the run's start: retried decks go back to "generating" so every
+  // surface reflects the in-flight rebuild, and the fresh updatedAt is the
+  // liveness signal the stall detection (hub + deck page) keys off — a
+  // "generating" deck whose stamp is minutes old means a builder died
+  // (serverless timeout, killed instance) without writing error.
+  await db
+    .update(thinktankDecks)
+    .set({ status: "generating", updatedAt: new Date() })
+    .where(eq(thinktankDecks.id, deck.id));
 
   try {
     // Library grounding — fail-soft: a retrieval hiccup (no embeddings key,

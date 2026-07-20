@@ -47,13 +47,18 @@ const TAG_META: Record<ChangelogTag, { label: string; icon: React.ReactNode; cla
 export function WhatsNew({
   lastSeen,
   onboardingDone,
+  initialOpen = false,
 }: {
   lastSeen: string | null;
   /** Server-side onboarding flag (authoritative since per-user gating). */
   onboardingDone?: boolean;
+  /** Open immediately on mount showing the full history — used by the lazy
+   *  shell wrapper when the panel is mounted in response to `open-whats-new`
+   *  (the chunk wasn't loaded yet, so the event predates our listener). */
+  initialOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const [showAll, setShowAll] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
+  const [showAll, setShowAll] = useState(initialOpen);
   const unseen = useMemo(() => unseenChangelog(lastSeen), [lastSeen]);
 
   // Auto-open once for unseen entries — but not before the first-run tour is

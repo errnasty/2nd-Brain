@@ -4,7 +4,10 @@ import { aiAvailable } from "@/lib/ai/provider";
 import { runDeckGeneration } from "@/lib/thinktank/generate";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Deep decks with web grounding can run past 60s; a severed run leaves the
+// deck stuck "generating" until the stall detection re-kicks it, so give the
+// builder the same ceiling as the ThinkTank pages.
+export const maxDuration = 120;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

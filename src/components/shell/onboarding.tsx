@@ -132,12 +132,17 @@ export function Onboarding({
   initialDone,
   initialName,
   initialInterests,
+  initialOpen = false,
 }: {
   initialDone: boolean;
   initialName: string | null;
   initialInterests: string[];
+  /** Open the tour immediately on mount — used by the lazy shell wrapper when
+   *  the panel is mounted in response to `open-onboarding` (the chunk wasn't
+   *  loaded yet, so the event predates our listener). */
+  initialOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [i, setI] = useState(0);
   const [name, setName] = useState(initialName ?? "");
   const [interests, setInterests] = useState<string[]>(initialInterests);

@@ -97,8 +97,16 @@ export function Rabbithole({
   );
 
   // Refs so the document-level mouseup listener stays stable across renders.
-  const stateRef = useRef({ enabled, currentId, streaming, open });
-  stateRef.current = { enabled, currentId, streaming, open };
+  const stateRef = useRef({ enabled, currentId, streaming, open, popoverText: popover?.text ?? null });
+  stateRef.current = { enabled, currentId, streaming, open, popoverText: popover?.text ?? null };
+
+  // Touch devices get the lens UI as a fixed bottom sheet (the native
+  // selection callout owns the space next to the selection) and no auto-
+  // focused input (the keyboard would cover the sheet and can dismiss the
+  // selection). Resolved once — pointer class doesn't change mid-session.
+  const [coarse] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches,
+  );
 
   // Load the item's existing hole; reset view state when the item changes.
   useEffect(() => {
@@ -137,65 +145,88 @@ export function Rabbithole({
 
   // Text-selection → popover. One document-level listener; the selection's
   // container decides the branch parent (root body vs the open answer).
-  // Bound to BOTH mouseup and touchend: touch text-selection (long-press drag)
-  // does not emit a mouseup, so without touchend the whole dig interaction is
-  // dead on phones/tablets. The small delay lets the touch selection settle
-  // (iOS finalizes the range + native callout after touchend) before we read it.
+  //
+  // Three signals, because no single event covers every platform:
+  // - mouseup: desktop drag-select.
+  // - touchend: the initial long-press selection on touch (no mouseup fires).
+  // - selectionchange (debounced): adjusting a touch selection via the native
+  //   drag handles emits NO touchend at all — Android in particular finalizes
+  //   the selection silently, which used to leave the dig UI unreachable on
+  //   phones. This path only ever opens/updates the popover; dismissal stays
+  //   with mouseup/touchend (tap elsewhere) and the explicit close button.
   useEffect(() => {
+    function capture(allowClear: boolean) {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+        if (allowClear) setPopover(null);
+        return;
+      }
+      const text = sel.toString().replace(/\s+/g, " ").trim();
+      if (text.length < 3) {
+        if (allowClear) setPopover(null);
+        return;
+      }
+      // Handle-drag updates with unchanged text: keep the popover (and any
+      // half-typed question) as is.
+      if (!allowClear && stateRef.current.popoverText === text) return;
+      const range = sel.getRangeAt(0);
+      const node = range.commonAncestorContainer;
+      const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+      // Textarea/input selections (edit mode) are not dig targets.
+      if (el?.closest("textarea, input")) return;
+
+      const s = stateRef.current;
+      let parentId: string | null;
+      if (panelBodyRef.current?.contains(node)) {
+        if (!s.currentId || s.streaming) return; // can't branch off an unsaved draft
+        parentId = s.currentId;
+      } else if (bodyRef.current?.contains(node)) {
+        if (!s.enabled || s.streaming) return;
+        parentId = null;
+      } else {
+        if (allowClear) setPopover(null);
+        return;
+      }
+
+      const rect = range.getBoundingClientRect();
+      // Clamp the popover (340px wide, ~150px tall) fully inside the viewport
+      // so it never spills off a narrow phone screen. Prefer below the
+      // selection; flip above if there isn't room. (Touch devices ignore x/y
+      // and render a bottom sheet instead.)
+      const halfW = 170;
+      const popH = 150;
+      const below = rect.bottom + 8;
+      const y = below + popH > window.innerHeight ? Math.max(8, rect.top - popH - 8) : below;
+      setPopover({
+        text: text.slice(0, 2000),
+        parentId,
+        x: Math.min(Math.max(rect.left + rect.width / 2, halfW + 8), window.innerWidth - halfW - 8),
+        y,
+      });
+      setQuestion("");
+    }
+
     function onSelectEnd(e: Event) {
       if (popoverRef.current?.contains(e.target as Node)) return;
-      window.setTimeout(() => {
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-          setPopover(null);
-          return;
-        }
-        const text = sel.toString().replace(/\s+/g, " ").trim();
-        if (text.length < 3) {
-          setPopover(null);
-          return;
-        }
-        const range = sel.getRangeAt(0);
-        const node = range.commonAncestorContainer;
-        const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
-        // Textarea/input selections (edit mode) are not dig targets.
-        if (el?.closest("textarea, input")) return;
-
-        const s = stateRef.current;
-        let parentId: string | null;
-        if (panelBodyRef.current?.contains(node)) {
-          if (!s.currentId || s.streaming) return; // can't branch off an unsaved draft
-          parentId = s.currentId;
-        } else if (bodyRef.current?.contains(node)) {
-          if (!s.enabled || s.streaming) return;
-          parentId = null;
-        } else {
-          setPopover(null);
-          return;
-        }
-
-        const rect = range.getBoundingClientRect();
-        // Clamp the popover (340px wide, ~150px tall) fully inside the viewport
-        // so it never spills off a narrow phone screen. Prefer below the
-        // selection; flip above if there isn't room.
-        const halfW = 170;
-        const popH = 150;
-        const below = rect.bottom + 8;
-        const y = below + popH > window.innerHeight ? Math.max(8, rect.top - popH - 8) : below;
-        setPopover({
-          text: text.slice(0, 2000),
-          parentId,
-          x: Math.min(Math.max(rect.left + rect.width / 2, halfW + 8), window.innerWidth - halfW - 8),
-          y,
-        });
-        setQuestion("");
-      }, 10);
+      // The small delay lets the touch selection settle (iOS finalizes the
+      // range + native callout after touchend) before we read it.
+      window.setTimeout(() => capture(true), 10);
     }
+
+    let scTimer: number | undefined;
+    function onSelectionChange() {
+      window.clearTimeout(scTimer);
+      scTimer = window.setTimeout(() => capture(false), 350);
+    }
+
     document.addEventListener("mouseup", onSelectEnd);
     document.addEventListener("touchend", onSelectEnd);
+    document.addEventListener("selectionchange", onSelectionChange);
     return () => {
+      window.clearTimeout(scTimer);
       document.removeEventListener("mouseup", onSelectEnd);
       document.removeEventListener("touchend", onSelectEnd);
+      document.removeEventListener("selectionchange", onSelectionChange);
     };
   }, [bodyRef]);
 
@@ -366,19 +397,36 @@ export function Rabbithole({
       {popover && (
         <div
           ref={popoverRef}
-          className="fixed z-[60] w-[340px] -translate-x-1/2 rounded-lg border border-border bg-popover p-2 shadow-lg"
-          style={{ left: popover.x, top: popover.y }}
+          className={cn(
+            "z-[60] rounded-lg border border-border bg-popover p-2 shadow-lg",
+            coarse
+              ? // Bottom sheet on touch: clears the bottom tab bar (+ safe
+                // area) on phones; sits at the edge where there's no tab bar.
+                "fixed inset-x-2 bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] mx-auto max-w-md lg:bottom-2"
+              : "fixed w-[340px] -translate-x-1/2",
+          )}
+          style={coarse ? undefined : { left: popover.x, top: popover.y }}
         >
           <div className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] uppercase tracking-wide text-muted-foreground">
             <Rabbit className="h-3.5 w-3.5" />
-            Dig into &ldquo;{popover.text.length > 40 ? `${popover.text.slice(0, 40)}…` : popover.text}&rdquo;
+            <span className="min-w-0 flex-1 truncate">
+              Dig into &ldquo;{popover.text.length > 40 ? `${popover.text.slice(0, 40)}…` : popover.text}&rdquo;
+            </span>
+            <button
+              onClick={() => setPopover(null)}
+              className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground"
+              title="Dismiss"
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
           <div className="mb-1.5 flex flex-wrap gap-1">
             {RABBITHOLE_LENSES.map((l) => (
               <button
                 key={l.key}
                 onClick={() => submitPopover(l.key)}
-                className="rounded-full border border-border px-2.5 py-1 text-xs transition-colors hover:bg-accent"
+                className="rounded-full border border-border px-2.5 py-1 text-xs transition-colors hover:bg-accent max-md:px-3.5 max-md:py-1.5 max-md:text-sm"
                 title={l.prompt}
               >
                 {l.label}
@@ -397,7 +445,9 @@ export function Rabbithole({
               }}
               placeholder="Or ask your own question…"
               className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 text-sm max-md:text-base outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              autoFocus
+              // Touch: focusing would pop the keyboard over the sheet (and can
+              // collapse the selection); the lenses are the primary action.
+              autoFocus={!coarse}
             />
             <button
               onClick={() => submitPopover(null)}

@@ -6,8 +6,8 @@ import { MobileNav } from "@/components/shell/mobile-nav";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { QuickCapture } from "@/components/shell/quick-capture";
 import { Confetti } from "@/components/shell/confetti";
-import { Onboarding } from "@/components/shell/onboarding";
-import { WhatsNew } from "@/components/shell/whats-new";
+import { LazyShellExtras } from "@/components/shell/lazy-extras";
+import { unseenChangelog } from "@/data/changelog";
 import { GlobalShortcuts } from "@/components/shell/keyboard-shortcuts";
 import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
 import { PageTransition } from "@/components/shell/page-transition";
@@ -58,8 +58,14 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <CommandPalette />
         <QuickCapture />
         <Confetti />
-        <Onboarding initialDone={onboardingDone} initialName={displayName} initialInterests={interests} />
-        <WhatsNew lastSeen={lastSeenChangelog} onboardingDone={onboardingDone} />
+        <LazyShellExtras
+          needsOnboarding={!onboardingDone}
+          hasUnseenChangelog={unseenChangelog(lastSeenChangelog).length > 0}
+          lastSeenChangelog={lastSeenChangelog}
+          onboardingDone={onboardingDone}
+          displayName={displayName}
+          interests={interests}
+        />
         <GlobalShortcuts />
       </div>
     </AppDialogProvider>
