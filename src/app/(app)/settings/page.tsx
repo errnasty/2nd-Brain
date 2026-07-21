@@ -48,7 +48,7 @@ export default async function SettingsPage() {
           <OpenInDesktop />
         )}
         <ProfileSettings initialName={displayName} initialInterests={settings.interests ?? []} />
-        <SettingsForm />
+        <SettingsForm serverAiModel={settings.aiModel ?? null} />
         <StudyGenerationSettings
           initial={{
             flashcardDifficulty: settings.flashcardDifficulty,

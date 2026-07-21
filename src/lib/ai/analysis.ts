@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 
 // Phase 2 semantic analysis. Each function is ONE structured fast-model call
 // with capped inputs — vector search (the expensive-at-scale part) happens in
@@ -38,7 +39,7 @@ export async function classifyConnections(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: ConnSchema,
       system: `You compare a SOURCE note against CANDIDATE notes from the same personal knowledge base.
 
@@ -86,7 +87,7 @@ export async function detectGaps(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: GapSchema,
       system: `You audit a cluster of notes/articles in someone's knowledge base and identify GAPS — important subtopics, prerequisites, or counter-perspectives that are missing given what's already there.
 

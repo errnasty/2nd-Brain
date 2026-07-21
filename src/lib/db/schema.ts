@@ -760,6 +760,11 @@ export type XpEvent = typeof xpEvents.$inferSelect;
 // One row per user; `settings` is a merged JSONB blob of UI preferences that
 // must persist + sync (board WIP limits, board filters, …). SYNCED to desktop.
 export type UserSettingsData = {
+  // Preferred AI model id (a CHAT_MODELS id) applied to EVERY AI call in the
+  // app — Ask + background generation (decks, quizzes, flashcards, tagging…).
+  // Unset/null = the env-configured provider defaults. Additive jsonb key —
+  // no migration needed.
+  aiModel?: string | null;
   // #10 Directory board WIP limits, keyed by reading-status column id.
   wipLimits?: Record<string, number>;
   // #1 Auto-summarize an article when it's opened in the reader.

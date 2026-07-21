@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { userFastModel } from "./user-model";
 import {
   clamp,
   DEFAULT_FLASHCARD_COUNT,
@@ -45,7 +46,7 @@ export async function generateFlashcards(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema,
       system: `You create spaced-repetition flashcards that test understanding of a document.
 
@@ -81,7 +82,7 @@ export async function rewriteFlashcard(
 
   try {
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: RewriteSchema,
       system: `You fix spaced-repetition flashcards the learner keeps failing.
 

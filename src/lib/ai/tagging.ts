@@ -1,6 +1,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, fastModel } from "./provider";
+import { aiAvailable } from "./provider";
+import { withLiteModel } from "./lite";
 
 const TagSchema = z.object({
   tags: z.array(z.string().min(1).max(40)).min(2).max(5),
@@ -22,8 +23,9 @@ export async function generateTags(
     existingTagNames.length > 0 ? existingTagNames.slice(0, 200).join(", ") : "(none yet)";
 
   try {
-    const { object } = await generateObject({
-      model: fastModel(),
+    const { object } = await withLiteModel((model) =>
+      generateObject({
+        model,
       schema: TagSchema,
       system: `You generate 3-5 short, descriptive tags for an article.
 
@@ -36,7 +38,8 @@ Rules:
 - Strongly prefer existing tags — only invent a new one if no existing tag fits
 - Tags should help the user navigate their knowledge library`,
       prompt: `Title: ${title}\n\n${content.slice(0, 3000)}`,
-    });
+      }),
+    );
     return object.tags.map((t) => t.trim().toLowerCase()).filter(Boolean);
   } catch (err) {
     console.warn("generateTags failed:", err instanceof Error ? err.message : err);

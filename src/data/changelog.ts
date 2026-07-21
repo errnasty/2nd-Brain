@@ -27,6 +27,30 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-20-d",
+    date: "July 20, 2026",
+    title: "Housekeeping AI now runs on free models",
+    tag: "improvement",
+    summary:
+      "Auto-tagging, folder routing, auto-organize, and skill classification now run on free OpenRouter models (with automatic fallback to your regular model if they're busy) — the high-volume background chores stop costing you tokens.",
+  },
+  {
+    id: "2026-07-20-c",
+    date: "July 20, 2026",
+    title: "Your model choice now applies everywhere",
+    tag: "improvement",
+    summary:
+      "The model you pick in Settings (including “Auto — best value”) now drives every AI feature in the app — ThinkTank decks, quizzes, flashcards, summaries, tagging, and study plans — not just the Ask tab. Works with Claude direct, OpenRouter, and OpenAI models, and syncs across your devices.",
+  },
+  {
+    id: "2026-07-20-b",
+    date: "July 20, 2026",
+    title: "Deck building works reliably at every depth",
+    tag: "fix",
+    summary:
+      "Standard and Deep decks were running out of room mid-write and failing with “couldn't build a deck”. Decks now get a writing budget sized to their depth, a deck that comes back slightly short or long is kept instead of rejected, and when a build does fail the app tells you the actual reason.",
+  },
+  {
     id: "2026-07-20",
     date: "July 20, 2026",
     title: "ThinkTank and Rabbithole work properly on your phone",

@@ -1,8 +1,8 @@
 import { generateObject } from "ai";
 import { z } from "zod";
-import { aiAvailable, smartModel, activeProvider } from "./provider";
+import { aiAvailable, activeProvider } from "./provider";
+import { userModelChoice, userSmartModel, anthropicWebModel } from "./user-model";
 import { webAnswerOnce, type WebSource } from "./web-answer";
-import { DEFAULT_CHAT_MODEL } from "./models";
 import { groundFromWeb, formatWebGround } from "./web-search";
 import type { ThinkTankSection } from "@/lib/db/schema";
 
@@ -45,7 +45,7 @@ const DeckSchema = z.object({
       }),
     )
     .min(5)
-    .max(14),
+    .max(18),
 });
 
 // Detail presets: drive the schema's card-count + per-card word ceiling so
@@ -60,20 +60,33 @@ const DETAIL_PRESETS: Record<
   deep: { minCards: 12, maxCards: 16, maxWords: 140, label: "≤140 words/card" },
 };
 
+type DetailPreset = (typeof DETAIL_PRESETS)[ThinkTankDetail];
+
+/**
+ * Output-token budget for a deck of this depth. The old fixed budgets (3500
+ * for the web path, the SDK's 4096 default for generateObject) truncated the
+ * JSON mid-card on standard/deep decks — schema validation then failed and
+ * the whole build died as "couldn't build a deck", every retry. Words→tokens
+ * ≈ ×1.5, tripled for JSON keys/quoting headroom + title/description.
+ */
+function outputBudget(preset: DetailPreset): number {
+  return Math.min(16_000, 1_500 + preset.maxCards * preset.maxWords * 3);
+}
+
 // Shared card-writing rules — kept terse on purpose (system prompt is resent
 // on every generation, so brevity here is a per-deck token saving).
-const CARD_RULES = `Card rules:
-- Order: prerequisites (2-3 cards) → core (4-6) → advanced (2-3).
+const cardRules = (preset: DetailPreset) => `Card rules:
+- ${preset.minCards}-${preset.maxCards} cards, ordered: prerequisites (2-3) → core (the majority) → advanced (2-3).
 - title: the big idea as a punchy headline, not a chapter name.
-- body: ≤80 words of plain markdown. One self-contained, concrete idea — an example or number beats an abstraction. No filler.
+- body: ${preset.label} of plain markdown. One self-contained, concrete idea — an example or number beats an abstraction. No filler.
 - refIndexes: indexes of the learner's library items (listed in the message) a card genuinely builds on. Usually empty, max 3. Never invent indexes.
 - Accuracy over coverage: fewer correct cards beat padded ones.`;
 
-const WEB_SYSTEM = `You design Deepstash/Imprint-style micro-learning decks: a topic becomes 9–12 idea cards a curious adult can each read in under a minute.
+const webSystem = (preset: DetailPreset) => `You design Deepstash/Imprint-style micro-learning decks: a topic becomes ${preset.minCards}-${preset.maxCards} idea cards a curious adult can each read in under a minute.
 
 Use web search (at most 3 searches) to verify the key facts, figures, dates, and names BEFORE writing, so every card is factual. Prefer primary or reputable sources.
 
-${CARD_RULES}
+${cardRules(preset)}
 - sources: per card, up to 2 web sources you actually used for its facts — only URLs your searches returned. Omit when a card needed none.
 
 Output ONLY a JSON object (no prose, no code fence) with this shape:
@@ -113,12 +126,15 @@ function relatedList(related: { title: string }[]): string {
 async function generateViaWebSearch(
   topic: string,
   related: { title: string }[],
+  detail: ThinkTankDetail = "standard",
 ): Promise<GeneratedThinkTankDeck | null> {
+  const preset = DETAIL_PRESETS[detail];
+  const webModel = await anthropicWebModel();
   const { text, sources: cited } = await webAnswerOnce({
-    model: DEFAULT_CHAT_MODEL,
-    system: WEB_SYSTEM,
+    model: webModel,
+    system: webSystem(preset),
     userContent: `Topic: ${topic}\n\nLearner's library items (by index):\n${relatedList(related)}`,
-    maxTokens: 3500,
+    maxTokens: outputBudget(preset),
   });
 
   const parsed = DeckSchema.safeParse(parseJsonObject(text));
@@ -133,7 +149,7 @@ async function generateViaWebSearch(
       sources: c.sources.filter((s) => citedUrls.has(s.url) || citedHosts.has(hostOf(s.url))),
     })),
     // webAnswerOnce doesn't surface usage, so provenance is model-only here.
-    model: DEFAULT_CHAT_MODEL,
+    model: webModel,
     tokenCount: null,
   };
 }
@@ -156,20 +172,24 @@ async function generateViaObject(
 
   const preset = DETAIL_PRESETS[detail];
 
+  // Validation is deliberately looser than the prompt: the prompt asks for
+  // the preset's exact card range/word ceiling, but a model that comes back
+  // one card short or slightly long should yield a usable deck, not a hard
+  // failure the user sees as "couldn't build".
   const schema = z.object({
-    title: z.string().min(2).max(120),
-    description: z.string().min(10).max(400),
+    title: z.string().min(2).max(160),
+    description: z.string().min(10).max(500),
     cards: z
       .array(
         z.object({
           section: SECTION,
-          title: z.string().min(2).max(120),
-          body: z.string().min(30).max(preset.maxWords * 6), // chars, not words
+          title: z.string().min(2).max(160),
+          body: z.string().min(20).max(preset.maxWords * 10), // chars, not words
           refIndexes: z.array(z.number().int().min(0).max(Math.max(0, related.length - 1))).max(3),
         }),
       )
-      .min(preset.minCards)
-      .max(preset.maxCards),
+      .min(5)
+      .max(preset.maxCards + 2),
   });
 
   // Web grounding — fail-soft: a search/reader hiccup just means we generate
@@ -184,16 +204,20 @@ async function generateViaObject(
   }
 
   // Resolve the concrete model id for provenance — the UI shows which model
-  // generated the deck so the user understands cost/quality.
+  // generated the deck so the user understands cost/quality. The user's
+  // Settings choice wins; otherwise the env-configured smart default.
+  const choice = await userModelChoice();
   const modelId =
-    activeProvider() === "openrouter"
+    choice?.id ??
+    (activeProvider() === "openrouter"
       ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
-      : "claude-sonnet-4-6";
+      : "claude-sonnet-4-6");
 
   try {
     const result = await generateObject({
-      model: smartModel(),
+      model: await userSmartModel(),
       schema,
+      maxTokens: outputBudget(preset),
       system: `You design Deepstash/Imprint-style micro-learning decks: a topic becomes ${preset.minCards}-${preset.maxCards} self-contained "idea cards" a curious adult can read in under a minute each.
 
 Rules:
@@ -237,9 +261,13 @@ export async function generateThinkTankDeck(
 ): Promise<GeneratedThinkTankDeck | null> {
   if (!aiAvailable() && !process.env.ANTHROPIC_API_KEY) return null;
 
-  if (process.env.ANTHROPIC_API_KEY) {
+  // The native web_search path is Anthropic-only. When the user's chosen
+  // model is a different provider, honor the choice: go straight to the
+  // fallback (which web-grounds provider-agnostically and runs their model).
+  const choice = await userModelChoice();
+  if (process.env.ANTHROPIC_API_KEY && (!choice || choice.provider === "anthropic")) {
     try {
-      const deck = await generateViaWebSearch(topic, related);
+      const deck = await generateViaWebSearch(topic, related, detail);
       if (deck) return deck;
     } catch (err) {
       console.warn("generateViaWebSearch failed:", err instanceof Error ? err.message : err);
