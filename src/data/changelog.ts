@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-21",
+    date: "July 21, 2026",
+    title: "Today page fits your phone",
+    tag: "fix",
+    summary:
+      "The Regenerate button no longer runs off the edge of the screen on phones, the review reminder is tighter, and the greeting now matches the actual time of day instead of staying stuck on last night's.",
+  },
+  {
     id: "2026-07-20-d",
     date: "July 20, 2026",
     title: "Housekeeping AI now runs on free models",

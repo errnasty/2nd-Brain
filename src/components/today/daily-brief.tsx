@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import {
@@ -446,10 +446,22 @@ export function DailyBrief({ name }: { name?: string }) {
   const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
   const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
 
-  // Editorial masthead — derived from "now" (stable across re-renders within a
-  // tick). Volume number is brief count + 1, giving an "issue No." feel without
-  // a backend. Generated text lives in the meta strip above the title.
-  const now = useMemo(() => new Date(), []);
+  // Editorial masthead — derived from "now". State (not a bare Date) so the
+  // greeting/date can refresh: a PWA left open overnight was still saying
+  // "Good evening" at breakfast. Refreshed when the app returns to the
+  // foreground and when a new brief lands. Volume number is brief count + 1,
+  // giving an "issue No." feel without a backend.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") setNow(new Date());
+    };
+    document.addEventListener("visibilitychange", refresh);
+    return () => document.removeEventListener("visibilitychange", refresh);
+  }, []);
+  useEffect(() => {
+    if (generatedAt) setNow(new Date());
+  }, [generatedAt]);
   const volumeNo = history.length + 1;
   const weekday = now.toLocaleDateString([], { weekday: "long" });
   const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
@@ -505,9 +517,11 @@ export function DailyBrief({ name }: { name?: string }) {
       </header>
 
       {/* ── Action bar ───────────────────────────────────────────── */}
-      <div className="not-prose mb-7 flex items-center justify-between gap-3">
-        <div />
-        <div className="flex items-center gap-1">
+      {/* flex-wrap: on narrow phones the three buttons overflow the viewport
+          otherwise (Regenerate was clipped off-screen); wrapped rows keep
+          everything tappable. */}
+      <div className="not-prose mb-7 flex justify-end">
+        <div className="flex flex-wrap items-center justify-end gap-1">
           {history.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
