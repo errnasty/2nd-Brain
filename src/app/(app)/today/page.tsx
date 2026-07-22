@@ -1,10 +1,9 @@
-import Link from "next/link";
-import { ArrowRight, Brain, Lightbulb } from "lucide-react";
-import { DailyBrief } from "@/components/today/daily-brief";
+import { DailyBrief, type InitialBrief } from "@/components/today/daily-brief";
+import { TodayGlance } from "@/components/today/today-glance";
 import { requireUser } from "@/lib/auth";
 import { getDisplayName } from "@/lib/profile/store";
-import { fetchCardStats } from "@/app/(app)/review/actions";
-import { fetchDailyDecksDue, type DailyDeckDue } from "@/lib/thinktank/daily";
+import { fetchTodayGlance, type TodayGlance as GlanceData } from "@/lib/today/glance";
+import { loadUserBrief } from "@/lib/brief-cache";
 
 /** Best-effort first name: chosen display name, profile/metadata name, else
  *  the email local part. */
@@ -24,30 +23,44 @@ function firstNameOf(
   return first.charAt(0).toUpperCase() + first.slice(1);
 }
 
+const EMPTY_GLANCE: GlanceData = {
+  dueCards: 0,
+  reviewMinutes: 1,
+  dailyDecks: [],
+  deckCards: 0,
+  tasksDueToday: 0,
+  streakDays: 0,
+  dailyXp: 0,
+  dailyGoal: 100,
+};
+
 export default async function TodayPage() {
   const { user } = await requireUser();
-  // Independent reads, in parallel; both fail-soft (a profile hiccup or a
+  // Independent reads, in parallel; each fail-soft (a profile hiccup or a
   // pending migration must not break Today). The displayName read is usually
   // a free cache hit — the app layout already fetched it this request.
-  const [nameResult, statsResult, decksResult] = await Promise.allSettled([
+  const [nameResult, glanceResult, briefResult] = await Promise.allSettled([
     getDisplayName(user.id),
-    fetchCardStats(user.id),
-    fetchDailyDecksDue(user.id),
+    fetchTodayGlance(user.id),
+    loadUserBrief(user.id),
   ]);
   const displayName = nameResult.status === "fulfilled" ? nameResult.value : null;
   const name = firstNameOf(user, displayName);
-  let due = 0;
-  if (statsResult.status === "fulfilled") {
-    ({ due } = statsResult.value);
-  } else {
-    console.error(
-      "TodayPage card stats failed:",
-      statsResult.reason instanceof Error ? statsResult.reason.message : statsResult.reason,
-    );
-  }
-  const dailyDecks: DailyDeckDue[] = decksResult.status === "fulfilled" ? decksResult.value : [];
-  // ~7s/card is a realistic reveal+grade pace; keeps the promise honest.
-  const minutes = Math.max(1, Math.round((due * 7) / 60));
+  const glance = glanceResult.status === "fulfilled" ? glanceResult.value : EMPTY_GLANCE;
+
+  // Hand the stored brief to the client so it paints instantly — no fetch, no
+  // flash — and generates once server-side, not per device. Null when the
+  // user has never generated one (the client streams a fresh brief on mount).
+  const stored = briefResult.status === "fulfilled" ? briefResult.value : null;
+  const initialBrief: InitialBrief | null = stored
+    ? {
+        content: stored.content,
+        sources: stored.sourceMap,
+        usage: stored.usage,
+        generatedAt: stored.generatedAt.toISOString(),
+        fingerprint: stored.fingerprint,
+      }
+    : null;
 
   return (
     <div className="h-full overflow-y-auto">
@@ -59,53 +72,10 @@ export default async function TodayPage() {
             A synthesis of your unread articles from the last 24 hours.
           </p>
         </header>
-        {/* Review-due CTA: Today is the landing page; the review queue lives
-            buried in the Study hub. Surfacing the due count here converts the
-            daily-open habit into a daily-review habit. */}
-        {due > 0 && (
-          <Link
-            href="/study?tab=review"
-            prefetch={true}
-            className="group mb-6 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:border-brand/50 hover:bg-accent/50"
-          >
-            <Brain className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--brand))" }} />
-            <span className="min-w-0 flex-1 text-sm">
-              <span className="font-semibold">{due} card{due === 1 ? "" : "s"} due</span>
-              <span className="text-muted-foreground">
-                {" "}· about {minutes} min<span className="hidden sm:inline"> — keep the streak alive</span>
-              </span>
-            </span>
-            <span className="inline-flex shrink-0 items-center gap-1 text-sm font-medium" style={{ color: "hsl(var(--brand))" }}>
-              Start review
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-            </span>
-          </Link>
-        )}
-        {/* Daily-paced ThinkTank decks with fresh cards unlocked — same
-            daily-habit surface as the review CTA. */}
-        {dailyDecks.length > 0 && (
-          <Link
-            href={`/thinktank/${dailyDecks[0].id}`}
-            prefetch={true}
-            className="group mb-6 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:border-brand/50 hover:bg-accent/50"
-          >
-            <Lightbulb className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--brand))" }} />
-            <span className="flex-1 text-sm">
-              <span className="font-semibold">
-                {dailyDecks[0].remaining} new idea card{dailyDecks[0].remaining === 1 ? "" : "s"}
-              </span>
-              <span className="text-muted-foreground">
-                {" "}· “{dailyDecks[0].title}”
-                {dailyDecks.length > 1 ? ` and ${dailyDecks.length - 1} more deck${dailyDecks.length > 2 ? "s" : ""}` : ""}
-              </span>
-            </span>
-            <span className="inline-flex items-center gap-1 text-sm font-medium" style={{ color: "hsl(var(--brand))" }}>
-              Keep learning
-              <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-            </span>
-          </Link>
-        )}
-        <DailyBrief name={name} />
+        {/* One consolidated daily-rhythm strip (review, deck cards, tasks,
+            streak) replacing the old stacked banner cards. */}
+        <TodayGlance glance={glance} firstDeckId={glance.dailyDecks[0]?.id ?? null} />
+        <DailyBrief name={name} initialBrief={initialBrief} />
       </div>
     </div>
   );

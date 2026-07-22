@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-21-b",
+    date: "July 21, 2026",
+    title: "A smarter, faster Today page",
+    tag: "feature",
+    summary:
+      "Your daily brief now generates once and loads instantly on every device, and the Today page opens with an at-a-glance strip of everything due — reviews, new deck cards, tasks, and your streak.",
+    items: [
+      "Your brief is saved to your account, so opening Today on another device loads it instantly instead of regenerating (and burning tokens) again.",
+      "A new day auto-refreshes the brief in the background — yesterday's stays on screen until the fresh one is ready.",
+      "The [1], [2] references in the brief are now tappable and jump straight to that article.",
+      "One tidy “at a glance” row replaces the stacked banners — due cards, unlocked deck cards, tasks due today, and your streak, in one place. In the evening it switches to a wind-down view that leads with your reviews.",
+      "Briefs are leaner to generate, cutting their token cost roughly in half with no change to what you read.",
+    ],
+  },
+  {
     id: "2026-07-21",
     date: "July 21, 2026",
     title: "Today page fits your phone",
