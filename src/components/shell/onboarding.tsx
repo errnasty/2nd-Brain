@@ -11,11 +11,11 @@ import {
   NotebookPen,
   Palette,
   Rss,
-  Sparkles,
   UserRound,
   Wand2,
   X,
 } from "lucide-react";
+import { BrandMark } from "@/components/shell/brand-mark";
 import { Dialog, DialogOverlay, DialogPortal } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -238,7 +238,7 @@ export function Onboarding({
           <div className="p-6">
             {i === 0 && (
               <>
-                {header("Welcome", <Sparkles className="h-6 w-6" style={brass} />)}
+                {header("Welcome", <BrandMark className="h-5 w-6 text-foreground" />)}
                 <DialogPrimitive.Title className="editorial-display mt-4 text-2xl" style={{ letterSpacing: "-0.018em" }}>
                   Your Second Brain.
                 </DialogPrimitive.Title>

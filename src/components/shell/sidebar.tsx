@@ -3,6 +3,7 @@
 import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { BrandMark } from "@/components/shell/brand-mark";
 import {
   GraduationCap,
   Library,
@@ -80,17 +81,20 @@ export function Sidebar({
   return (
     <aside className="hidden w-60 shrink-0 border-r border-border lg:flex lg:flex-col">
       <div className="px-4 py-5">
-        <div className="flex items-baseline gap-1.5">
-          <span className="text-base font-semibold leading-none tracking-tight">Second Brain</span>
-          {volume != null && (
-            <span
-              className="font-mono text-[10px] uppercase tracking-[0.08em]"
-              style={{ color: "hsl(var(--brand))" }}
-              title="Issue number — increments daily"
-            >
-              № {volume}
-            </span>
-          )}
+        <div className="flex items-center gap-2">
+          <BrandMark className="h-[15px] w-[18px] text-foreground" />
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-base font-semibold leading-none tracking-tight">Second Brain</span>
+            {volume != null && (
+              <span
+                className="font-mono text-[10px] uppercase tracking-[0.08em]"
+                style={{ color: "hsl(var(--brand))" }}
+                title="Issue number — increments daily"
+              >
+                № {volume}
+              </span>
+            )}
+          </div>
         </div>
         {displayName && (
           <div className="mt-1 truncate text-xs font-medium">{displayName}</div>

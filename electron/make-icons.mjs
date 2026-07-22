@@ -34,57 +34,89 @@ const pub = path.join(root, "public");
 const build = path.join(root, "build");
 mkdirSync(build, { recursive: true });
 
-// "Second Brain" mark: dark rounded tile + a small connected-node graph
-// (knowledge graph) over a warm radial glow. Serif "2B" anchors the brand.
-const SVG = `
-<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <radialGradient id="g" cx="38%" cy="30%" r="85%">
-      <stop offset="0%" stop-color="#2a2622"/>
-      <stop offset="55%" stop-color="#141312"/>
-      <stop offset="100%" stop-color="#0a0a0a"/>
-    </radialGradient>
-    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#e8c08a"/>
-      <stop offset="100%" stop-color="#b98a4e"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="512" height="512" rx="112" fill="url(#g)"/>
-  <g stroke="url(#edge)" stroke-width="7" stroke-linecap="round" opacity="0.85">
-    <line x1="150" y1="150" x2="256" y2="118"/>
-    <line x1="256" y1="118" x2="372" y2="168"/>
-    <line x1="150" y1="150" x2="176" y2="300"/>
-    <line x1="372" y1="168" x2="360" y2="320"/>
-    <line x1="176" y1="300" x2="300" y2="378"/>
-    <line x1="360" y1="320" x2="300" y2="378"/>
-    <line x1="176" y1="300" x2="360" y2="320"/>
-  </g>
-  <g fill="#f4e7d2">
-    <circle cx="150" cy="150" r="20"/>
-    <circle cx="256" cy="118" r="15"/>
-    <circle cx="372" cy="168" r="20"/>
-    <circle cx="176" cy="300" r="15"/>
-    <circle cx="360" cy="320" r="17"/>
-    <circle cx="300" cy="378" r="22"/>
-  </g>
-  <text x="256" y="300" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
-        font-size="180" font-weight="700" fill="#f4e7d2" opacity="0.16">2B</text>
-</svg>`;
+// "Second Brain" mark: a layered neural net (perceptron) — knowledge as a
+// network. Black net on a white rounded tile (the finalized brand direction).
+// Two forms, generated from shared node/edge data: the FULL 3×3×2 net for
+// large icons (room for detail), and a simplified 3→1→2 FUNNEL for small
+// sizes (legible down to 16px). The net lives in a 140×120 box, centered into
+// a padded square tile.
+const INK = "#0e0d10";
+const TILE = "#ffffff";
 
-const svgBuf = Buffer.from(SVG);
-const png = (size) => sharp(svgBuf, { density: 384 }).resize(size, size).png();
+// Full net — 3 input, 3 hidden, 2 output, fully connected.
+const FULL = {
+  nodes: [
+    [20, 18], [20, 60], [20, 102],
+    [70, 18], [70, 60], [70, 102],
+    [120, 40], [120, 80],
+  ],
+  edges: [
+    [0, 3], [0, 4], [0, 5], [1, 3], [1, 4], [1, 5], [2, 3], [2, 4], [2, 5],
+    [3, 6], [3, 7], [4, 6], [4, 7], [5, 6], [5, 7],
+  ],
+  nodeR: 9,
+  stroke: 2.4,
+};
 
-// Web manifest icons
-await png(192).toFile(path.join(pub, "icon-192.png"));
-await png(512).toFile(path.join(pub, "icon-512.png"));
-await png(180).toFile(path.join(pub, "apple-touch-icon.png"));
-await sharp(svgBuf, { density: 384 }).resize(32, 32).toFile(path.join(pub, "favicon.png"));
+// Funnel — 3 input → 1 hidden → 2 output. Node 3 (center) is the hub.
+const FUNNEL = {
+  nodes: [
+    [20, 18], [20, 60], [20, 102],
+    [70, 60],
+    [120, 40], [120, 80],
+  ],
+  edges: [[0, 3], [1, 3], [2, 3], [3, 4], [3, 5]],
+  nodeR: 11,
+  hubR: 13,
+  hub: 3,
+  stroke: 5,
+};
 
-// electron-builder: icon.png (mac/linux source, ≥512) + icon.ico (Windows)
-await png(1024).toFile(path.join(build, "icon.png"));
+/** Render a net (edges + nodes) as SVG markup at the given ink color. */
+function net({ nodes, edges, nodeR, hubR, hub, stroke }, color) {
+  const lines = edges
+    .map(([a, b]) => `<line x1="${nodes[a][0]}" y1="${nodes[a][1]}" x2="${nodes[b][0]}" y2="${nodes[b][1]}"/>`)
+    .join("");
+  const circles = nodes
+    .map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="${hub === i ? hubR : nodeR}"/>`)
+    .join("");
+  return `<g stroke="${color}" stroke-width="${stroke}" stroke-linecap="round">${lines}</g><g fill="${color}">${circles}</g>`;
+}
+
+/** White rounded tile, `size` px, with the net centered in a padded box. */
+function tile(size, form) {
+  const rx = Math.round(size * 0.22);
+  // Net box: ~72% of the tile, centered. Aspect 140:120 preserved.
+  const bw = size * 0.72;
+  const bh = bw * (120 / 140);
+  const bx = (size - bw) / 2;
+  const by = (size - bh) / 2;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+    <rect width="${size}" height="${size}" rx="${rx}" fill="${TILE}"/>
+    <svg x="${bx}" y="${by}" width="${bw}" height="${bh}" viewBox="0 0 140 120" preserveAspectRatio="xMidYMid meet">
+      ${net(form, INK)}
+    </svg>
+  </svg>`;
+}
+
+const bigBuf = Buffer.from(tile(512, FULL));
+const smallBuf = Buffer.from(tile(512, FUNNEL));
+const pngFull = (size) => sharp(bigBuf, { density: 384 }).resize(size, size).png();
+const pngMark = (size) => sharp(smallBuf, { density: 384 }).resize(size, size).png();
+
+// Web manifest icons — full net (room for detail).
+await pngFull(192).toFile(path.join(pub, "icon-192.png"));
+await pngFull(512).toFile(path.join(pub, "icon-512.png"));
+await pngFull(180).toFile(path.join(pub, "apple-touch-icon.png"));
+// Favicon — simplified funnel stays legible at 32/16px.
+await pngMark(32).toFile(path.join(pub, "favicon.png"));
+
+// electron-builder: icon.png (mac/linux source, ≥512) + icon.ico (Windows).
+await pngFull(1024).toFile(path.join(build, "icon.png"));
 const icoSizes = [16, 32, 48, 64, 128, 256];
 const icoPngs = [];
-for (const s of icoSizes) icoPngs.push({ size: s, buf: await png(s).toBuffer() });
+// Small sizes use the funnel; larger use the full net.
+for (const s of icoSizes) icoPngs.push({ size: s, buf: await (s <= 48 ? pngMark(s) : pngFull(s)).toBuffer() });
 writeFileSync(path.join(build, "icon.ico"), buildIco(icoPngs));
 
 console.log("icons written → public/{icon-192,icon-512,apple-touch-icon,favicon}.png, build/{icon.png,icon.ico}");
