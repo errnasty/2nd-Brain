@@ -8,12 +8,20 @@ import { articles, feeds } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
-import { getCachedBrief, setCachedBrief } from "@/lib/brief-cache";
+import { getMatchingBrief, saveUserBrief } from "@/lib/brief-cache";
+import type { BriefSourceRef } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const BRIEF_LIMIT = 60;
+// Input-size knobs (env-tunable). Defaults trimmed from the original 60×1500:
+// a triage brief reads the same off leaner inputs, and the old settings sent
+// ~8k prompt tokens per generation. ~40 articles × ~800 body chars roughly
+// halves that with no visible change to the brief.
+const BRIEF_LIMIT = Number(process.env.BRIEF_ARTICLE_LIMIT ?? 40);
+const MAX_BODY_CHARS = Number(process.env.BRIEF_BODY_CHARS ?? 800);
+// Raw full_text cap in SQL — ~5.5× the plain-text budget leaves HTML headroom.
+const RAW_FULLTEXT_CHARS = MAX_BODY_CHARS * 6;
 
 // Widening windows: last 24h, then a week, then most-recent unread — so the
 // brief still works when the user hasn't synced today. Shared by POST (which
@@ -101,8 +109,6 @@ type ArticleForBrief = {
   feedTitle: string;
 };
 
-const MAX_BODY_CHARS = 1500;
-
 function stripHtml(html: string): string {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
@@ -174,10 +180,10 @@ export async function POST(req: Request) {
         title: articles.title,
         url: articles.url,
         excerpt: articles.excerpt,
-        // Cap raw full_text in SQL: only ~1500 plain chars per article reach the
-        // model (after stripHtml), so shipping whole multi-MB article bodies for
-        // 60 rows is pure waste. 9000 raw chars leaves headroom for HTML tags.
-        fullText: sql<string | null>`left(${articles.fullText}, 9000)`.as("full_text"),
+        // Cap raw full_text in SQL: only ~MAX_BODY_CHARS plain chars per article
+        // reach the model (after stripHtml), so shipping whole multi-MB article
+        // bodies is pure waste. RAW_FULLTEXT_CHARS leaves headroom for HTML tags.
+        fullText: sql<string | null>`left(${articles.fullText}, ${RAW_FULLTEXT_CHARS})`.as("full_text"),
         feedTitle: feeds.title,
       })
       .from(articles)
@@ -216,12 +222,12 @@ export async function POST(req: Request) {
     feedTitle: r.feedTitle,
   }));
 
-  // Server-side cache: same unread set + same prompt → reuse the brief and skip
-  // the model entirely (unless the user forced a regenerate).
+  // Server-side cache: same unread set + same prompt → reuse the stored brief
+  // and skip the model entirely (unless the user forced a regenerate). Backed
+  // by the daily_briefs table, so a reload or a second device reuses it too.
   const promptHash = createHash("sha1").update(systemPrompt).digest("base64");
-  const cacheKey = `${user.id}:${briefFingerprint}:${promptHash}`;
   if (!force) {
-    const hit = getCachedBrief(cacheKey);
+    const hit = await getMatchingBrief(user.id, briefFingerprint, promptHash);
     if (hit) {
       const body =
         `${hit.content}` +
@@ -287,8 +293,16 @@ export async function POST(req: Request) {
         };
         void recordAiUsage(user.id, payload.totalTokens);
         controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
-        // Cache the finished brief for reuse on reload / other devices.
-        if (acc.trim()) setCachedBrief(cacheKey, { content: acc, sourceMap, usage: payload });
+        // Persist the finished brief for reuse on reload / other devices.
+        if (acc.trim()) {
+          void saveUserBrief(user.id, {
+            fingerprint: briefFingerprint,
+            promptHash,
+            content: acc,
+            sourceMap: sourceMap as BriefSourceRef[],
+            usage: payload,
+          });
+        }
       } catch (err) {
         if (!req.signal.aborted) {
           try {

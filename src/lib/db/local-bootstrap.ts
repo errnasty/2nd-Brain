@@ -278,6 +278,21 @@ create table if not exists ai_jobs (
 create index if not exists ai_jobs_user_created_idx on ai_jobs (user_id, created_at desc);
 `;
 
+// Daily Brief cache — mirrors cloud migration 0025. One row per user, not
+// synced. Always-run + idempotent.
+const DAILY_BRIEFS_SQL = `
+create table if not exists daily_briefs (
+  user_id uuid primary key references profiles(id) on delete cascade,
+  fingerprint text not null,
+  prompt_hash text not null,
+  content text not null,
+  source_map jsonb not null default '[]'::jsonb,
+  usage jsonb,
+  generated_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -397,6 +412,13 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(AI_JOBS_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] ai_jobs table failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: Daily Brief cache (not synced, no triggers).
+  try {
+    await client.exec(DAILY_BRIEFS_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] daily_briefs table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Markdown } from "@/components/ui/markdown";
+import { Markdown, type Components } from "@/components/ui/markdown";
 import {
   Bookmark,
   Check,
@@ -97,7 +97,22 @@ Identify any articles that appear to be clickbait, standard PR announcements, hi
 
 Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
 
-export function DailyBrief({ name }: { name?: string }) {
+/** Server-stored brief handed to the client for instant paint (no fetch). */
+export type InitialBrief = {
+  content: string;
+  sources: BriefSource[];
+  usage: Usage | null;
+  generatedAt: string;
+  fingerprint: string | null;
+};
+
+export function DailyBrief({
+  name,
+  initialBrief,
+}: {
+  name?: string;
+  initialBrief?: InitialBrief | null;
+}) {
   const router = useRouter();
   const [content, setContent] = useState("");
   const [sources, setSources] = useState<BriefSource[]>([]);
@@ -109,6 +124,9 @@ export function DailyBrief({ name }: { name?: string }) {
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  // Background refresh in progress: the stored brief stays on screen while a
+  // fresh one streams in behind it (new-day auto-regenerate).
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -125,9 +143,13 @@ export function DailyBrief({ name }: { name?: string }) {
   // first brief of the day would generate with the DEFAULT prompt, ignoring a
   // user's saved custom prompt.
   const savedPromptRef = useRef("");
+  // Set during mount hydration when the stored brief is from a prior day, so
+  // the auto-stream effect refreshes it in the background instead of leaving
+  // yesterday's brief up.
+  const backgroundRegenRef = useRef(false);
 
-  // Load saved prompt + cached brief on mount. If a cached brief exists we
-  // show it immediately; otherwise we kick off a fresh stream below.
+  // Load saved prompt + brief on mount. Priority: the server-stored brief
+  // (authoritative, cross-device) → localStorage cache → fresh stream.
   const [hydratedFromCache, setHydratedFromCache] = useState(false);
   useEffect(() => {
     if (hasMounted.current) return;
@@ -140,51 +162,73 @@ export function DailyBrief({ name }: { name?: string }) {
     } catch {
       // ignore
     }
-    try {
-      const raw = localStorage.getItem(BRIEF_CACHE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as {
-          content: string;
-          generatedAt: string;
-          sources?: BriefSource[];
-          usage?: Usage;
-          fingerprint?: string;
-        };
-        if (parsed.content) {
-          const genDate = new Date(parsed.generatedAt);
-          // The brief stays put until the user regenerates — EXCEPT across a day
-          // boundary, where we auto-regenerate. Same day → hydrate from cache.
-          // Prior day → leave hydratedFromCache false so the auto-stream effect
-          // below generates a fresh brief.
-          if (isSameDay(genDate, new Date())) {
-            cacheHydratedRef.current = true;
-            setContent(parsed.content);
-            setSources(parsed.sources ?? []);
-            setUsage(parsed.usage ?? null);
-            setFingerprint(parsed.fingerprint ?? null);
-            setGeneratedAt(genDate);
-            setLoading(false);
-            setHydratedFromCache(true);
+
+    // Hydrate a stored brief (from the server prop, else localStorage) so the
+    // page paints instantly. Returns true when something was shown.
+    function hydrate(
+      b: { content: string; generatedAt: string; sources?: BriefSource[]; usage?: Usage | null; fingerprint?: string | null },
+    ): boolean {
+      if (!b.content) return false;
+      const genDate = new Date(b.generatedAt);
+      cacheHydratedRef.current = true;
+      setContent(b.content);
+      setSources(b.sources ?? []);
+      setUsage(b.usage ?? null);
+      setFingerprint(b.fingerprint ?? null);
+      setGeneratedAt(genDate);
+      setLoading(false);
+      setHydratedFromCache(true);
+      // Prior day → refresh in the background (auto-regenerate on first open of
+      // the day), showing this brief until the new one streams in.
+      if (!isSameDay(genDate, new Date())) backgroundRegenRef.current = true;
+      return true;
+    }
+
+    let shown = false;
+    if (initialBrief) {
+      shown = hydrate(initialBrief);
+    }
+    if (!shown) {
+      try {
+        const raw = localStorage.getItem(BRIEF_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw) as {
+            content: string;
+            generatedAt: string;
+            sources?: BriefSource[];
+            usage?: Usage;
+            fingerprint?: string;
+          };
+          // Same-day local cache → show it; prior-day → leave it so the
+          // auto-stream effect generates fresh (no stored server brief either).
+          if (parsed.content && isSameDay(new Date(parsed.generatedAt), new Date())) {
+            hydrate(parsed);
           }
         }
+      } catch {
+        // ignore parse errors
       }
-    } catch {
-      // ignore parse errors
     }
+
     try {
       const rawHistory = localStorage.getItem(BRIEF_HISTORY_KEY);
       if (rawHistory) setHistory(JSON.parse(rawHistory) as BriefEntry[]);
     } catch {
       // ignore
     }
-  }, []);
+  }, [initialBrief]);
 
-  const stream = useCallback(async (promptOverride?: string, force = false) => {
+  const stream = useCallback(async (promptOverride?: string, force = false, background = false) => {
     setLoading(true);
     setError(null);
-    setContent("");
-    setSources([]);
-    setUsage(null);
+    // Background refresh keeps the stored brief on screen until the fresh one
+    // starts streaming (progressively replaced), instead of flashing a skeleton.
+    if (!background) {
+      setContent("");
+      setSources([]);
+      setUsage(null);
+    }
+    setRefreshing(background);
     setNewArticles(false);
     setReadIds(new Set());
     setSavedIds(new Set());
@@ -296,17 +340,27 @@ export function DailyBrief({ name }: { name?: string }) {
         });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load brief");
+      // A background refresh failing must not blow away the brief already
+      // on screen — just drop the refreshing state.
+      if (!background) setError(err instanceof Error ? err.message : "Failed to load brief");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
-  // Only auto-stream on mount if we don't already have a (same-day) cached brief.
+  // Auto-stream on mount only when nothing was hydrated. When a stored brief WAS
+  // hydrated but it's from a prior day, refresh it in the background instead.
   // The ref check catches the same-commit case where `hydratedFromCache` state
   // hasn't flushed yet; the state check handles later re-runs.
   useEffect(() => {
-    if (cacheHydratedRef.current || hydratedFromCache) return;
+    if (cacheHydratedRef.current || hydratedFromCache) {
+      if (backgroundRegenRef.current) {
+        backgroundRegenRef.current = false;
+        stream(undefined, false, true);
+      }
+      return;
+    }
     stream();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
@@ -446,14 +500,59 @@ export function DailyBrief({ name }: { name?: string }) {
   const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
   const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
 
-  // Editorial masthead — derived from "now" (stable across re-renders within a
-  // tick). Volume number is brief count + 1, giving an "issue No." feel without
-  // a backend. Generated text lives in the meta strip above the title.
-  const now = useMemo(() => new Date(), []);
+  // Editorial masthead — derived from "now". State (not a bare Date) so the
+  // greeting/date can refresh: a PWA left open overnight was still saying
+  // "Good evening" at breakfast. Refreshed when the app returns to the
+  // foreground and when a new brief lands. Volume number is brief count + 1,
+  // giving an "issue No." feel without a backend.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === "visible") setNow(new Date());
+    };
+    document.addEventListener("visibilitychange", refresh);
+    return () => document.removeEventListener("visibilitychange", refresh);
+  }, []);
+  useEffect(() => {
+    if (generatedAt) setNow(new Date());
+  }, [generatedAt]);
   const volumeNo = history.length + 1;
   const weekday = now.toLocaleDateString([], { weekday: "long" });
   const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
   const greeting = greetingFor(now);
+
+  // Turn the model's [n] references into in-app links to the cited article.
+  // Only once streaming has finished (sources arrive with the trailing
+  // sentinel), so partial mid-stream text isn't rewritten or mis-linked.
+  const citedContent =
+    !loading && sources.length > 0
+      ? content.replace(/\[(\d+)\]/g, (m: string, num: string) => {
+          const src = sources.find((s) => s.n === Number(num));
+          return src ? `[${m}](#brief-src-${src.id})` : m;
+        })
+      : content;
+  const briefComponents: Components = {
+    a: ({ href, children }) => {
+      if (href && href.startsWith("#brief-src-")) {
+        const id = href.slice("#brief-src-".length);
+        return (
+          <button
+            type="button"
+            onClick={() => router.push(`/feeds?article=${id}`)}
+            className="mx-0.5 rounded bg-brand/10 px-1 align-baseline font-mono text-[0.82em] text-brand no-underline transition-colors hover:bg-brand/20"
+            title="Open this article"
+          >
+            {children}
+          </button>
+        );
+      }
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {children}
+        </a>
+      );
+    },
+  };
 
   return (
     <article className="mx-auto max-w-[1080px] px-1">
@@ -471,7 +570,7 @@ export function DailyBrief({ name }: { name?: string }) {
         </h1>
         <div className="not-prose mt-3.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />
-          {loading ? (
+          {loading && !refreshing ? (
             <span>Generating today&apos;s brief…</span>
           ) : generatedAt ? (
             <>
@@ -489,7 +588,12 @@ export function DailyBrief({ name }: { name?: string }) {
                   </span>
                 </>
               )}
-              {(isStale || newArticles) && (
+              {refreshing && (
+                <span className="inline-flex items-center gap-1 rounded bg-brand/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-brand">
+                  <Loader2 className="h-2.5 w-2.5 animate-spin" /> Refreshing
+                </span>
+              )}
+              {(isStale || newArticles) && !refreshing && (
                 <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400">
                   {newArticles ? "new articles — regenerate" : "stale — regenerate"}
                 </span>
@@ -505,9 +609,11 @@ export function DailyBrief({ name }: { name?: string }) {
       </header>
 
       {/* ── Action bar ───────────────────────────────────────────── */}
-      <div className="not-prose mb-7 flex items-center justify-between gap-3">
-        <div />
-        <div className="flex items-center gap-1">
+      {/* flex-wrap: on narrow phones the three buttons overflow the viewport
+          otherwise (Regenerate was clipped off-screen); wrapped rows keep
+          everything tappable. */}
+      <div className="not-prose mb-7 flex justify-end">
+        <div className="flex flex-wrap items-center justify-end gap-1">
           {history.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -650,7 +756,7 @@ export function DailyBrief({ name }: { name?: string }) {
       {/* ── Brief body ───────────────────────────────────────────── */}
       {content && (
         <div className="prose-brief max-w-[68ch] text-[1.05rem] leading-[1.65]">
-          <Markdown>{content}</Markdown>
+          <Markdown components={briefComponents}>{citedContent}</Markdown>
           {loading && (
             <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
           )}

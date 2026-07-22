@@ -664,6 +664,26 @@ export const aiJobs = pgTable(
 
 export type AiJob = typeof aiJobs.$inferSelect;
 
+// Daily Brief cache — the latest generated brief per user (one row, upserted).
+// NOT synced (derived/transient, like ai_jobs). See migration 0025.
+export type BriefSourceRef = { n: number; id: string; title: string; url: string; feedTitle: string };
+export type BriefUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
+
+export const dailyBriefs = pgTable("daily_briefs", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => profiles.id, { onDelete: "cascade" }),
+  fingerprint: text("fingerprint").notNull(),
+  promptHash: text("prompt_hash").notNull(),
+  content: text("content").notNull(),
+  sourceMap: jsonb("source_map").$type<BriefSourceRef[]>().notNull().default([]),
+  usage: jsonb("usage").$type<BriefUsage | null>(),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export type DailyBrief = typeof dailyBriefs.$inferSelect;
+
 export type Tag = typeof tags.$inferSelect;
 export type ItemTag = typeof itemTags.$inferSelect;
 export type DirectoryTask = typeof directoryTasks.$inferSelect;
