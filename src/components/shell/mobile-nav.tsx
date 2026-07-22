@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { BrandMark } from "@/components/shell/brand-mark";
 import {
   BookOpen,
   ChevronRight,
@@ -315,7 +316,10 @@ function FolderDrawer({ open, onClose }: { open: boolean; onClose: () => void })
         inert={!open}
       >
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <span className="text-sm font-semibold">Browse</span>
+          <div className="flex items-center gap-2">
+            <BrandMark className="h-[14px] w-[17px] text-foreground" />
+            <span className="text-sm font-semibold">Second Brain</span>
+          </div>
           <button onClick={onClose} className="rounded p-1 text-muted-foreground hover:bg-accent">
             <X className="h-4 w-4" />
           </button>

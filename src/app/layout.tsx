@@ -16,6 +16,15 @@ export const metadata: Metadata = {
   title: "Second Brain",
   description: "Your RSS reader, knowledge base, and AI briefing engine.",
   manifest: "/manifest.webmanifest",
+  icons: {
+    // SVG first (crisp at any size); PNG fallback for browsers without SVG
+    // favicon support. apple-touch-icon for iOS home-screen installs.
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml" },
+      { url: "/favicon.png", type: "image/png", sizes: "32x32" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
+  },
 };
 
 export const viewport: Viewport = {

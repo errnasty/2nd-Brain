@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-22",
+    date: "July 22, 2026",
+    title: "A new logo",
+    tag: "improvement",
+    summary:
+      "Second Brain has a new mark — a small neural network standing for knowledge as a connected web. You'll see it in the sidebar, on the sign-in screen, and as the app icon and browser tab favicon.",
+  },
+  {
     id: "2026-07-21-b",
     date: "July 21, 2026",
     title: "A smarter, faster Today page",

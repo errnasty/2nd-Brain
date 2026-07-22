@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { BrandMark } from "@/components/shell/brand-mark";
 import { toast } from "sonner";
 
 function LoginForm() {
@@ -64,7 +65,10 @@ function LoginForm() {
       <div className="w-full max-w-sm">
         <div className="mb-5 text-center">
           <div className="editorial-eyebrow justify-center">Vol. III · Personal Edition</div>
-          <div className="editorial-display mt-1 text-2xl font-semibold">Second Brain</div>
+          <div className="mt-1.5 flex items-center justify-center gap-2.5">
+            <BrandMark className="h-6 w-[29px] text-foreground" />
+            <div className="editorial-display text-2xl font-semibold">Second Brain</div>
+          </div>
         </div>
       <Card className="w-full">
         <CardHeader>
