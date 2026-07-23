@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-b",
+    date: "July 23, 2026",
+    title: "Ask gives sharper, more honest answers",
+    tag: "improvement",
+    summary:
+      "Ask now understands follow-up questions in context and digs up better sources — and when something genuinely isn't in your library, it says so instead of bluffing.",
+    items: [
+      "Follow-ups like “what about the second one?” now search correctly by resolving what you meant from the conversation.",
+      "Retrieved sources are re-ranked by how well they actually answer your question, so the strongest evidence leads.",
+      "When your library doesn't cover a question, Ask tells you plainly and suggests turning on web search — rather than answering as if it came from your notes.",
+    ],
+  },
+  {
     id: "2026-07-23",
     date: "July 23, 2026",
     title: "Ask now remembers your conversations",
