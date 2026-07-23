@@ -147,3 +147,33 @@ export async function fetchDirectoryPage(
 
   return { items, itemTagsById, hasMore };
 }
+
+export type FolderTreeItem = {
+  id: string;
+  title: string;
+  kind: "saved_article" | "uploaded_document" | "user_note";
+};
+
+/**
+ * Minimal direct-child item list for one folder — just enough to render a
+ * file row in the sidebar tree (VSCode-style expand). Deliberately lighter
+ * than `fetchDirectoryPage` (no preview/tags/pagination): the tree only ever
+ * needs a title, kind, and id per row, and is fetched lazily per folder on
+ * first expand rather than for the whole tree up front.
+ */
+export async function fetchFolderTreeItems(
+  userId: string,
+  folderId: string,
+  limit = 200,
+): Promise<FolderTreeItem[]> {
+  return db
+    .select({
+      id: directoryItems.id,
+      title: directoryItems.title,
+      kind: directoryItems.kind,
+    })
+    .from(directoryItems)
+    .where(and(eq(directoryItems.userId, userId), eq(directoryItems.folderId, folderId)))
+    .orderBy(asc(directoryItems.title))
+    .limit(limit);
+}

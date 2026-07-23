@@ -7,11 +7,14 @@ import {
   ChevronDown,
   ChevronRight,
   Download,
+  FileText,
   FolderClosed,
   Inbox,
   Library,
   Loader2,
   MoreHorizontal,
+  Newspaper,
+  NotebookPen,
   Pencil,
   Plus,
   Trash2,
@@ -31,15 +34,17 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  autoOrganizeDirectoryAction,
   createDirectoryFolderAction,
   deleteDirectoryFolderAction,
+  fetchFolderTreeItemsAction,
   renameDirectoryFolderAction,
 } from "@/app/(app)/directory/actions";
 import type { DirectoryFolder } from "@/lib/db/schema";
+import type { FolderTreeItem } from "@/lib/directory/query";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { DeleteFolderDialog } from "./delete-folder-dialog";
 import { ExportDialog } from "./export-dialog";
+import { AutoOrganizeDialog } from "./auto-organize-dialog";
 
 const UNSORTED = "unsorted";
 const DIR_COLLAPSE_KEY = "directory.collapsed.v1";
@@ -60,7 +65,7 @@ export function DirectoryNav({
   const router = useRouter();
   const params = useSearchParams();
   const promptText = usePromptText();
-  const [pending, startTransition] = useTransition();
+  const [, startTransition] = useTransition();
   // Folder switching transition: keep the current item list on screen during the
   // server round-trip (no skeleton flash) and reflect the click instantly.
   const [navPending, startNav] = useTransition();
@@ -69,6 +74,28 @@ export function DirectoryNav({
   const [newFolderName, setNewFolderName] = useState("");
   const [folderToDelete, setFolderToDelete] = useState<DirectoryFolder | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [organizeOpen, setOrganizeOpen] = useState(false);
+
+  // VSCode-style tree: a folder's files are fetched lazily the first time
+  // it's expanded, not eagerly for the whole tree. Cached by folder id for
+  // the life of this component instance (no invalidation — a manual move/
+  // create elsewhere already triggers a route refresh that remounts this nav).
+  const [folderItems, setFolderItems] = useState<Record<string, FolderTreeItem[]>>({});
+  const [loadingFolderIds, setLoadingFolderIds] = useState<Set<string>>(new Set());
+  function loadFolderItems(folderId: string) {
+    if (folderItems[folderId] || loadingFolderIds.has(folderId)) return;
+    setLoadingFolderIds((prev) => new Set(prev).add(folderId));
+    fetchFolderTreeItemsAction(folderId)
+      .then((items) => setFolderItems((prev) => ({ ...prev, [folderId]: items })))
+      .catch(() => setFolderItems((prev) => ({ ...prev, [folderId]: [] })))
+      .finally(() => {
+        setLoadingFolderIds((prev) => {
+          const next = new Set(prev);
+          next.delete(folderId);
+          return next;
+        });
+      });
+  }
 
   // Collapse state for nested folders, persisted to localStorage.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -93,6 +120,7 @@ export function DirectoryNav({
   }
 
   const activeFolder = optimisticFolder ? optimisticFolder.v : params.get("folder");
+  const activeItem = params.get("item");
 
   useEffect(() => {
     if (!navPending) setOptimisticFolder(null);
@@ -166,27 +194,14 @@ export function DirectoryNav({
     });
   }
 
-  function runAutoOrganize() {
-    startTransition(async () => {
-      try {
-        const r = await autoOrganizeDirectoryAction();
-        if (!r.ok) {
-          toast.error("Auto-organize failed. Try again.");
-          return;
-        }
-        if (r.total === 0) {
-          toast.success("Nothing to organize — every item is already in a folder");
-        } else {
-          const folderMsg =
-            r.foldersCreated.length > 0
-              ? ` · created ${r.foldersCreated.length} folder${r.foldersCreated.length === 1 ? "" : "s"}: ${r.foldersCreated.join(", ")}`
-              : "";
-          toast.success(`Auto-organized ${r.routed} of ${r.total} items${folderMsg}`);
-        }
-      } catch (e) {
-        toast.error(`Auto-organize failed: ${e instanceof Error ? e.message : "error"}`);
-      }
-    });
+  // Open item in the content pane, keeping the item's own folder in the URL
+  // (clicking a file nested under a folder in the tree).
+  function openItem(folderId: string, itemId: string) {
+    const sp = new URLSearchParams();
+    sp.set("folder", folderId);
+    sp.set("item", itemId);
+    setOptimisticFolder({ v: folderId });
+    startNav(() => router.push(`/directory?${sp.toString()}`));
   }
 
   // Folders to render in the list. The deprecated [Inbox] (is_inbox=true)
@@ -214,19 +229,15 @@ export function DirectoryNav({
             size="icon"
             variant="ghost"
             className="h-7 w-7"
-            onClick={runAutoOrganize}
-            disabled={pending}
-            title={pending ? "Auto-organizing…" : "Auto-organize uncategorized items"}
+            onClick={() => setOrganizeOpen(true)}
+            title="Auto-organize uncategorized items"
           >
-            {pending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Wand2 className="h-3.5 w-3.5" />
-            )}
+            <Wand2 className="h-3.5 w-3.5" />
           </Button>
         </div>
       </div>
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
+      <AutoOrganizeDialog open={organizeOpen} onOpenChange={setOrganizeOpen} />
       <Separator />
 
       <ScrollArea className="flex-1">
@@ -295,12 +306,17 @@ export function DirectoryNav({
               depth={0}
               folderCounts={folderCounts}
               activeFolder={activeFolder}
+              activeItem={activeItem}
               collapsed={collapsed}
               onToggleCollapsed={toggleCollapsed}
               onSelect={setFolder}
               onPrefetch={prefetchFolder}
               onRequestDelete={(f) => setFolderToDelete(f)}
               onNewSubfolder={createSubfolder}
+              folderItems={folderItems}
+              loadingFolderIds={loadingFolderIds}
+              onLoadItems={loadFolderItems}
+              onOpenItem={openItem}
             />
           ))}
 
@@ -386,35 +402,64 @@ function buildFolderTree(folders: DirectoryFolder[]): FolderNode[] {
   return roots;
 }
 
+const TREE_KIND_ICON: Record<FolderTreeItem["kind"], React.ReactNode> = {
+  saved_article: <Newspaper className="h-3.5 w-3.5 shrink-0" />,
+  uploaded_document: <FileText className="h-3.5 w-3.5 shrink-0" />,
+  user_note: <NotebookPen className="h-3.5 w-3.5 shrink-0" />,
+};
+
 function FolderTreeNode({
   node,
   depth,
   folderCounts,
   activeFolder,
+  activeItem,
   collapsed,
   onToggleCollapsed,
   onSelect,
   onPrefetch,
   onRequestDelete,
   onNewSubfolder,
+  folderItems,
+  loadingFolderIds,
+  onLoadItems,
+  onOpenItem,
 }: {
   node: FolderNode;
   depth: number;
   folderCounts: Record<string, number>;
   activeFolder: string | null;
+  activeItem: string | null;
   collapsed: Record<string, boolean>;
   onToggleCollapsed: (id: string) => void;
   onSelect: (id: string) => void;
   onPrefetch: (id: string) => void;
   onRequestDelete: (f: DirectoryFolder) => void;
   onNewSubfolder: (parentId: string) => void;
+  folderItems: Record<string, FolderTreeItem[]>;
+  loadingFolderIds: Set<string>;
+  onLoadItems: (folderId: string) => void;
+  onOpenItem: (folderId: string, itemId: string) => void;
 }) {
   const hasChildren = node.children.length > 0;
-  const isCollapsed = collapsed[node.folder.id];
+  const itemCount = folderCounts[node.folder.id] ?? 0;
+  // VSCode-style: a folder is expandable if it has subfolders OR files —
+  // expanding it reveals both, not just subfolders.
+  const expandable = hasChildren || itemCount > 0;
+  const isCollapsed = collapsed[node.folder.id] ?? false;
+  const expanded = expandable && !isCollapsed;
+  const items = folderItems[node.folder.id];
+  const itemsLoading = loadingFolderIds.has(node.folder.id);
+
+  useEffect(() => {
+    if (expanded && itemCount > 0 && !items && !itemsLoading) onLoadItems(node.folder.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded, itemCount, node.folder.id]);
+
   return (
     <div>
       <div className="flex items-center" style={{ paddingLeft: depth * 12 }}>
-        {hasChildren ? (
+        {expandable ? (
           <button
             onClick={() => onToggleCollapsed(node.folder.id)}
             className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
@@ -428,7 +473,7 @@ function FolderTreeNode({
         <div className="min-w-0 flex-1">
           <FolderRow
             folder={node.folder}
-            count={folderCounts[node.folder.id] ?? 0}
+            count={itemCount}
             active={activeFolder === node.folder.id}
             onSelect={() => onSelect(node.folder.id)}
             onHover={() => onPrefetch(node.folder.id)}
@@ -437,7 +482,7 @@ function FolderTreeNode({
           />
         </div>
       </div>
-      {hasChildren && !isCollapsed && (
+      {expanded && (
         <div>
           {node.children.map((child) => (
             <FolderTreeNode
@@ -446,14 +491,45 @@ function FolderTreeNode({
               depth={depth + 1}
               folderCounts={folderCounts}
               activeFolder={activeFolder}
+              activeItem={activeItem}
               collapsed={collapsed}
               onToggleCollapsed={onToggleCollapsed}
               onSelect={onSelect}
               onPrefetch={onPrefetch}
               onRequestDelete={onRequestDelete}
               onNewSubfolder={onNewSubfolder}
+              folderItems={folderItems}
+              loadingFolderIds={loadingFolderIds}
+              onLoadItems={onLoadItems}
+              onOpenItem={onOpenItem}
             />
           ))}
+          {itemCount > 0 &&
+            (itemsLoading || !items ? (
+              <div
+                className="flex items-center gap-1.5 py-1 text-xs italic text-muted-foreground"
+                style={{ paddingLeft: (depth + 1) * 12 + 20 }}
+              >
+                <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+              </div>
+            ) : (
+              items.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => onOpenItem(node.folder.id, item.id)}
+                  style={{ paddingLeft: (depth + 1) * 12 + 20 }}
+                  className={cn(
+                    "flex w-full items-center gap-1.5 rounded-md py-1 pr-2 text-left text-[13px] transition-colors",
+                    activeItem === item.id
+                      ? "bg-accent text-accent-foreground"
+                      : "text-foreground/70 hover:bg-accent hover:text-accent-foreground",
+                  )}
+                >
+                  {TREE_KIND_ICON[item.kind]}
+                  <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                </button>
+              ))
+            ))}
         </div>
       )}
     </div>

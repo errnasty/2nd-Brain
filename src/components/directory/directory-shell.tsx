@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, Upload, X } from "lucide-react";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, FolderClosed, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -75,6 +75,7 @@ export function DirectoryShell({
   itemTagsById,
   hasMore,
   folders,
+  folderCounts = {},
   activeFolder,
   activeTagIds,
   activeSort = "updated",
@@ -84,6 +85,8 @@ export function DirectoryShell({
   itemTagsById: Record<string, string[]>;
   hasMore: boolean;
   folders: DirectoryFolder[];
+  /** Direct-child item counts per folder id — badges on the subfolder tiles. */
+  folderCounts?: Record<string, number>;
   activeFolder: string | null;
   activeTagIds: string[];
   activeSort?: DirectorySort;
@@ -448,12 +451,20 @@ export function DirectoryShell({
 
   const countLabel = `${allItems.length}${pageHasMore ? "+" : ""}`;
   const headerMeta = activeTagIds.length > 0
-    ? "Tag filter"
+    ? "Tagged"
     : activeFolder === "unsorted"
-      ? "Items without a folder"
+      ? "Unsorted"
       : activeFolder
-        ? "Folder pipeline"
-        : "Your knowledge library";
+        ? "Folder"
+        : "All items";
+
+  // Direct subfolders of the active folder, shown as tiles above the item
+  // list so a folder that only contains subfolders (no items of its own)
+  // reads as "browse into these" instead of a confusing "Empty shelf".
+  const childFolders = useMemo(
+    () => (activeFolder && activeFolder !== "unsorted" ? folders.filter((f) => f.parentId === activeFolder) : []),
+    [folders, activeFolder],
+  );
 
   // Inline folder rename from the header (real folders only).
   const canRename = !!activeFolder && activeFolder !== "unsorted" && activeTagIds.length === 0;
@@ -579,44 +590,31 @@ export function DirectoryShell({
             <SortControls active={activeSort} />
           </div>
           <div className="flex items-center gap-0.5">
-            {activeFolder && activeFolder !== "unsorted" && (
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7"
-                onClick={() => router.push(`/study?tab=review&folder=${activeFolder}`)}
-                title="Study this folder (review its due flashcards)"
-              >
-                <Brain className="h-3.5 w-3.5" />
-              </Button>
-            )}
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              onClick={() => setCurriculumOpen(true)}
-              title="Generate curriculum"
-            >
-              <GraduationCap className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              onClick={() => setGapsOpen(true)}
-              title="Find knowledge gaps"
-            >
-              <Lightbulb className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              onClick={() => setSaveUrlOpen(true)}
-              title="Save a page from a URL"
-            >
-              <Link2 className="h-3.5 w-3.5" />
-            </Button>
+            {/* Less-frequent actions collapsed into one menu — keeps the row
+                from wrapping into an icon-soup on narrow/mobile widths. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="ghost" className="h-7 w-7" title="More actions">
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                {activeFolder && activeFolder !== "unsorted" && (
+                  <DropdownMenuItem onClick={() => router.push(`/study?tab=review&folder=${activeFolder}`)}>
+                    <Brain className="mr-2 h-3.5 w-3.5" /> Study this folder
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={() => setCurriculumOpen(true)}>
+                  <GraduationCap className="mr-2 h-3.5 w-3.5" /> Generate curriculum
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setGapsOpen(true)}>
+                  <Lightbulb className="mr-2 h-3.5 w-3.5" /> Find knowledge gaps
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setSaveUrlOpen(true)}>
+                  <Link2 className="mr-2 h-3.5 w-3.5" /> Save a page from a URL
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <UploadButton onPick={onFilesPicked} />
             <Button
               size="icon"
@@ -630,18 +628,39 @@ export function DirectoryShell({
           </div>
         </div>
         <div className="h-px bg-border" />
-        {allItems.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
-            <FileText className="h-8 w-8 text-muted-foreground/40" />
-            <p className="editorial-display text-base">
-              {activeTagIds.length > 0 ? "Nothing matches" : "Empty shelf"}
-            </p>
-            <p className="max-w-xs text-xs italic text-muted-foreground">
-              {activeTagIds.length > 0
-                ? "No items match the selected tags."
-                : "Create a note, upload a PDF, or save articles from your feeds."}
-            </p>
+        {childFolders.length > 0 && (
+          <div className="grid grid-cols-2 gap-2 border-b border-border p-3 sm:grid-cols-3">
+            {childFolders.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => router.push(`/directory?folder=${f.id}`)}
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-brand/40 hover:bg-accent"
+              >
+                <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{f.name}</span>
+                {(folderCounts[f.id] ?? 0) > 0 && (
+                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {folderCounts[f.id]}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
+        )}
+        {allItems.length === 0 ? (
+          childFolders.length > 0 ? null : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+              <FileText className="h-8 w-8 text-muted-foreground/40" />
+              <p className="editorial-display text-base">
+                {activeTagIds.length > 0 ? "Nothing matches" : "Empty shelf"}
+              </p>
+              <p className="max-w-xs text-xs italic text-muted-foreground">
+                {activeTagIds.length > 0
+                  ? "No items match the selected tags."
+                  : "Create a note, upload a PDF, or save articles from your feeds."}
+              </p>
+            </div>
+          )
         ) : (
           <>
             <FilterStrip

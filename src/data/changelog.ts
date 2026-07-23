@@ -27,6 +27,30 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-i",
+    date: "July 23, 2026",
+    title: "Browse folders like a file tree",
+    tag: "feature",
+    summary:
+      "The Directory sidebar now expands folders to show their subfolders and files right in the tree, like a code editor. Opening a folder that only contains subfolders now shows those subfolders as clickable tiles instead of a confusing empty screen.",
+  },
+  {
+    id: "2026-07-23-j",
+    date: "July 23, 2026",
+    title: "A cleaner Directory toolbar",
+    tag: "improvement",
+    summary:
+      "Less-used actions (curriculum, knowledge gaps, save from URL, study folder) are now tucked into a single \"More\" menu, and folder labels are simpler — so the toolbar and headings stay tidy on both desktop and mobile.",
+  },
+  {
+    id: "2026-07-23-k",
+    date: "July 23, 2026",
+    title: "Review auto-organize suggestions before they apply",
+    tag: "improvement",
+    summary:
+      "Auto-organize now shows exactly what it wants to do — including any new folders it wants to create — as a checklist you approve before anything moves, instead of silently reorganizing your library.",
+  },
+  {
     id: "2026-07-23-f",
     date: "July 23, 2026",
     title: "Ask no longer shows a scary error on long answers",
