@@ -31,4 +31,23 @@ describe("agent stream codec", () => {
     const { events } = parseEvents(wire);
     expect(events).toEqual([{ type: "note", message: "ok" }]);
   });
+
+  it("round-trips thinking and proposal events", () => {
+    const events: AgentEvent[] = [
+      { type: "thinking", delta: "Let me check the library first. " },
+      { type: "text", delta: "Here's what I found." },
+      {
+        type: "proposal",
+        proposal: { id: "p1", action: "create_note", title: "Backprop notes", content: "…" },
+      },
+      {
+        type: "proposal",
+        proposal: { id: "p2", action: "delete", itemId: "item-1", itemTitle: "Old draft" },
+      },
+    ];
+    const wire = events.map(encodeEvent).join("");
+    const { events: parsed, rest } = parseEvents(wire);
+    expect(parsed).toEqual(events);
+    expect(rest).toBe("");
+  });
 });

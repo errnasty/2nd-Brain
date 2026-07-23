@@ -27,6 +27,30 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-f",
+    date: "July 23, 2026",
+    title: "Ask no longer shows a scary error on long answers",
+    tag: "fix",
+    summary:
+      "Long answers used to sometimes fail with a generic \"network error\" that threw away everything already written. Ask now starts streaming right away, and if the connection ever does drop mid-answer, whatever was written stays on screen with a Retry option instead of vanishing.",
+  },
+  {
+    id: "2026-07-23-g",
+    date: "July 23, 2026",
+    title: "See what the model is thinking",
+    tag: "feature",
+    summary:
+      "A new \"Show thinking\" option in the Tools menu streams the model's reasoning in a collapsible panel above the answer, for Claude models and several reasoning-capable OpenRouter models.",
+  },
+  {
+    id: "2026-07-23-h",
+    date: "July 23, 2026",
+    title: "Agent mode can now propose changes to your library",
+    tag: "feature",
+    summary:
+      "In Agent mode, the assistant can propose creating or editing notes, adding tasks, tagging, moving items, or deleting something — each shown as an Approve/Discard card so nothing changes in your Directory until you say yes. Deletions always require your explicit approval.",
+  },
+  {
     id: "2026-07-23-e",
     date: "July 23, 2026",
     title: "Ask is faster and more reliable",

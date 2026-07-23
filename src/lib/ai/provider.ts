@@ -1,5 +1,6 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import type { LanguageModelV1 } from "ai";
 
 /**
@@ -58,6 +59,25 @@ export function openrouterClient() {
     });
   }
   return openrouterClientSingleton;
+}
+
+let openrouterThinkingClientSingleton: ReturnType<typeof createOpenRouter> | null = null;
+/**
+ * OpenRouter via the dedicated `@openrouter/ai-sdk-provider` client (not the
+ * OpenAI-compatible one above). Needed specifically for reasoning: the
+ * OpenAI-compatible client can't carry OpenRouter's `reasoning` request field
+ * or parse the `delta.reasoning` chunks it streams back, so it's used only
+ * when the Ask/Agent routes want thinking on a `THINKING_CAPABLE_OPENROUTER`
+ * model (see `models.ts`).
+ */
+export function openrouterThinkingClient() {
+  if (!openrouterThinkingClientSingleton) {
+    openrouterThinkingClientSingleton = createOpenRouter({
+      apiKey: openrouterKey() ?? "",
+      headers: { "X-Title": "Second Brain" },
+    });
+  }
+  return openrouterThinkingClientSingleton;
 }
 
 /** Cheap/fast model for high-volume background work (tagging, cards, distill). */

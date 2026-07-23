@@ -11,12 +11,26 @@ export type AgentSource = {
   similarity: number;
 };
 
+// A proposed Directory write the agent wants to make. Nothing is mutated when
+// this is emitted — the client shows an Approve/Discard card, and Approve
+// POSTs it to /api/agent/apply, which is what actually runs the write.
+export type AgentProposal =
+  | { id: string; action: "create_note"; title: string; content?: string; folderId?: string | null }
+  | { id: string; action: "append_note"; itemId: string; itemTitle: string; text: string }
+  | { id: string; action: "add_task"; itemId: string; itemTitle: string; text: string }
+  | { id: string; action: "move"; itemId: string; itemTitle: string; folderId: string | null; folderName: string }
+  | { id: string; action: "create_folder"; name: string; parentId?: string | null }
+  | { id: string; action: "autotag"; itemId: string; itemTitle: string }
+  | { id: string; action: "delete"; itemId: string; itemTitle: string };
+
 export type AgentEvent =
   | { type: "text"; delta: string }
+  | { type: "thinking"; delta: string }
   | { type: "tool"; id: string; label: string; status: "start" | "done" }
   | { type: "note"; message: string } // e.g. model fell back to a tool-capable one
   | { type: "sources"; sources: AgentSource[] }
   | { type: "usage"; usage: { promptTokens: number; completionTokens: number; totalTokens: number } }
+  | { type: "proposal"; proposal: AgentProposal }
   | { type: "error"; message: string };
 
 /** One event → one NDJSON line. */

@@ -2,8 +2,8 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
 import { requireUser } from "@/lib/auth";
-import { getChatModel, isToolCapable, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { openrouterClient, openrouterKey, aiAvailable } from "@/lib/ai/provider";
+import { getChatModel, isToolCapable, isThinkingCapable, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
+import { openrouterClient, openrouterThinkingClient, openrouterKey, aiAvailable } from "@/lib/ai/provider";
 import { buildDirectoryMap } from "@/lib/ai/rag";
 import { memoryBlock } from "@/lib/ai/memory";
 import { runAgent } from "@/lib/ai/agent/run";
@@ -20,12 +20,19 @@ type Message = { role: "user" | "assistant"; content: string };
 
 const SYSTEM = `You are the user's personal Second Brain agent. You can take multiple steps using tools to answer well.
 
-Tools:
+Read tools:
 - search_library: find relevant items in the user's own notes, articles, and documents (returns [n] citation numbers).
 - read_item: read the full text of items by their [n] numbers before making claims about them.
 - list_directory: see the folder/file structure (titles only).
 - web_search: get current/external facts the library doesn't cover.
 - remember: save a durable fact about the user for future conversations.
+
+Directory write tools — create_note, append_to_note, add_task, move_item, create_folder, tag_item, delete_item:
+- These PROPOSE a change; they never write anything themselves. Each call shows the user an Approve/Discard
+  card, and the change only happens if they approve it. Tell the user what you proposed and that it's
+  awaiting their approval — don't claim something was created/moved/deleted until they've approved it.
+- Use itemIds and titles from search_library/read_item/list_directory results; don't invent them.
+- delete_item is permanent if approved (no undo) — only propose it when the user clearly wants something removed.
 
 How to work:
 - Prefer the user's own library; search it first, and read items before summarizing them.
@@ -34,11 +41,18 @@ How to work:
 - Cite library items inline as [1], [2], … using the numbers from search results.
 - Be honest when something isn't in the library. Be concise; skip preamble.`;
 
-/** Resolve the AI SDK model instance for an id. */
-function instantiate(id: string): { model: LanguageModelV1; provider: string } {
+/** Resolve the AI SDK model instance for an id. `thinking` routes OpenRouter
+ *  models through the dedicated client that can carry OpenRouter's
+ *  `reasoning` field (see provider.ts). */
+function instantiate(id: string, thinking: boolean): { model: LanguageModelV1; provider: string } {
   const m = getChatModel(id);
   if (m.provider === "openai") return { model: openai(m.id), provider: "openai" };
-  if (m.provider === "openrouter") return { model: openrouterClient()(m.id), provider: "openrouter" };
+  if (m.provider === "openrouter") {
+    if (thinking && isThinkingCapable(m.id)) {
+      return { model: openrouterThinkingClient()(m.id), provider: "openrouter" };
+    }
+    return { model: openrouterClient()(m.id), provider: "openrouter" };
+  }
   return { model: anthropic(m.id), provider: "anthropic" };
 }
 
@@ -61,7 +75,7 @@ export async function POST(req: Request) {
     return new Response("No AI provider configured.", { status: 503 });
   }
 
-  let body: { question?: string; history?: Message[]; model?: string };
+  let body: { question?: string; history?: Message[]; model?: string; thinking?: boolean };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -89,7 +103,8 @@ export async function POST(req: Request) {
     note = `${getChatModel(modelId).label} can't run tools — using ${getChatModel(fallback).label} for this.`;
     modelId = fallback;
   }
-  const { model, provider } = instantiate(modelId);
+  const wantsThinking = !!body.thinking && isThinkingCapable(modelId);
+  const { model, provider } = instantiate(modelId, wantsThinking);
   if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) return new Response("ANTHROPIC_API_KEY not configured.", { status: 503 });
   if (provider === "openrouter" && !openrouterKey()) return new Response("OPENROUTER_API_KEY not configured.", { status: 503 });
   if (provider === "openai" && !process.env.OPENAI_API_KEY) return new Response("OPENAI_API_KEY not configured.", { status: 503 });
@@ -133,6 +148,8 @@ export async function POST(req: Request) {
           question,
           history,
           signal: req.signal,
+          thinking: wantsThinking,
+          provider: provider as "anthropic" | "openai" | "openrouter",
           onEvent: (e) => send(encodeEvent(e)),
         });
         void recordAiUsage(userId, usage.totalTokens);
