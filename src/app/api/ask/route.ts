@@ -12,6 +12,8 @@ import {
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 import { getChatModel, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { openrouterClient, openrouterKey } from "@/lib/ai/provider";
+import { rewriteQuery } from "@/lib/ai/retrieval/rewrite";
+import { rerankSources, unionByItem } from "@/lib/ai/retrieval/rerank";
 import { streamWebAnswer } from "@/lib/ai/web-answer";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
@@ -50,8 +52,12 @@ Rules:
 - You may reference the directory map to point the user to relevant files even
   if their text wasn't retrieved, but be explicit that you're inferring from
   the title/location, not the content.
-- If neither the map nor the context can answer, say so plainly and suggest
-  what the user could add to their library.
+- HONESTY ABOUT GROUNDING: if the CONTEXT doesn't actually address the question
+  (weak or irrelevant matches — a GROUNDING note may flag this), say plainly
+  that this doesn't appear to be in the user's library yet. You may still answer
+  from general knowledge, but explicitly flag that it's NOT from their library,
+  and suggest turning on Web search or adding the material. Never dress up a
+  general-knowledge answer as if it came from their notes.
 - Be concise. Skip preamble like "Based on the context provided…".`;
 
 // Web-enabled variant: same priorities, plus permission to search the web to
@@ -133,14 +139,33 @@ export async function POST(req: Request) {
     });
   }
 
+  // Recent conversation, capped — used for the query rewrite AND the prompt
+  // below. The client sends the whole transcript, so keep it bounded here.
+  const MAX_TURN_CHARS = 4000;
+  const history: Message[] = (body.history ?? [])
+    .slice(-6)
+    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }));
+
+  // Conversational query rewrite: resolve follow-up references ("the second
+  // one", "it") into a standalone, keyword-rich search query before retrieval,
+  // and optionally fan out sub-queries. Fail-soft + time-boxed → raw question.
+  let searchQueries = [question];
+  try {
+    const rw = await withTimeout(rewriteQuery(question, history), 5000, "rewrite");
+    if (rw.queries.length > 0) searchQueries = rw.queries;
+  } catch {
+    // fall back to the raw question
+  }
+
   // Kick off the directory map now so its queries overlap retrieval's vector
   // queries instead of running after them (≈40% fewer serial round-trips).
   const mapPromise = buildDirectoryMap(userId).catch(() => "(Directory map unavailable.)");
 
   // ── 1. Retrieve relevant context from the Directory ─────────────
+  // Pull a wider candidate set (20) than we keep — rerank (1c) narrows it.
   let sources: RagSource[] = [];
   try {
-    sources = await withTimeout(retrieveFromDirectory(userId, question, 8), PRESTREAM_TIMEOUT_MS, "retrieval");
+    sources = await withTimeout(retrieveFromDirectory(userId, searchQueries[0], 20), PRESTREAM_TIMEOUT_MS, "retrieval");
   } catch (err) {
     if (err instanceof TimeoutError) {
       return Response.json(
@@ -165,6 +190,21 @@ export async function POST(req: Request) {
     );
   }
 
+  // Multi-query expansion: union in results for any sub-queries the rewrite
+  // produced (dedupe by item, keep best similarity). Fail-soft.
+  if (searchQueries.length > 1) {
+    try {
+      const extra = await withTimeout(
+        Promise.all(searchQueries.slice(1).map((q) => retrieveFromDirectory(userId, q, 10))),
+        PRESTREAM_TIMEOUT_MS,
+        "retrieval-expand",
+      );
+      sources = unionByItem([sources, ...extra]);
+    } catch {
+      // keep the primary results
+    }
+  }
+
   // ── 1b. Auto-heal: columns exist but nothing matched. Likely the
   // embeddings just haven't been generated yet. Backfill inline (bounded),
   // then retry once. Time-boxed so a slow backfill can't hang the request.
@@ -173,7 +213,7 @@ export async function POST(req: Request) {
       const result = await withTimeout(backfillEmbeddings(userId, 60), PRESTREAM_TIMEOUT_MS, "backfill");
       if (result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded > 0) {
         sources = await withTimeout(
-          retrieveFromDirectory(userId, question, 8),
+          retrieveFromDirectory(userId, searchQueries[0], 20),
           PRESTREAM_TIMEOUT_MS,
           "retrieval-retry",
         );
@@ -181,6 +221,17 @@ export async function POST(req: Request) {
     } catch {
       // Backfill/retry failed or timed out — fall through and let the model
       // answer from the directory map alone rather than hanging.
+    }
+  }
+
+  // ── 1c. Rerank the candidate union by answer-relevance and keep the best,
+  // so the strongest evidence leads (vector similarity alone ranks by topical
+  // closeness). Fail-soft + time-boxed → falls back to similarity order.
+  if (sources.length > 8) {
+    try {
+      sources = await withTimeout(rerankSources(question, sources, 10), 6000, "rerank");
+    } catch {
+      sources = sources.slice(0, 10);
     }
   }
 
@@ -259,14 +310,19 @@ export async function POST(req: Request) {
   }));
 
   // ── 3. Build messages with history ─────────────────────────────
-  // Keep recent turns only AND cap each turn's size server-side — the client
-  // sends the whole accumulated transcript, so without this a long conversation
-  // (or a crafted request) inflates the prompt unbounded.
-  const MAX_TURN_CHARS = 4000;
-  const history: Message[] = (body.history ?? [])
-    .slice(-6)
-    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }));
-  const userContent = `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}`;
+  // (history was computed above, before the rewrite, and is reused here.)
+  //
+  // Honest grounding: flag when retrieval found nothing that closely matches,
+  // so the model owns up instead of dressing a general-knowledge answer as if
+  // it came from the user's notes. Structural (folder/attached) matches are
+  // intentional, so they count as grounded regardless of vector score.
+  const bestSim = sources.reduce((m, s) => Math.max(m, s.similarity), 0);
+  const weaklyGrounded =
+    ordered.length === 0 || (bestSim < 0.4 && folderIds.length === 0 && attached.length === 0);
+  const groundingNote = weaklyGrounded
+    ? "\n\n[GROUNDING: retrieval found little in the user's library that closely matches this question — be explicit about weak grounding per the rules.]"
+    : "";
+  const userContent = `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}${groundingNote}`;
   const ragHeader = Buffer.from(JSON.stringify(sourceMap)).toString("base64");
 
   // ── Web-enabled path ────────────────────────────────────────────

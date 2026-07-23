@@ -682,6 +682,80 @@ export const dailyBriefs = pgTable("daily_briefs", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Ask conversation persistence — durable chat threads + messages (previously
+// client-only React state). NOT synced (cloud DB is the web source of truth,
+// like ai_jobs / daily_briefs). See migration 0026.
+export type AskSourceRef = {
+  n: number;
+  directoryItemId: string;
+  title: string;
+  kind: "saved_article" | "uploaded_document" | "user_note";
+  similarity: number;
+};
+export type AskWebSource = { title: string; url: string };
+export type AskUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
+
+export const askThreads = pgTable(
+  "ask_threads",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    title: text("title").default("New conversation").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userUpdatedIdx: index("ask_threads_user_updated_idx").on(t.userId, t.updatedAt.desc()),
+  }),
+);
+
+export const askMessages = pgTable(
+  "ask_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    threadId: uuid("thread_id")
+      .notNull()
+      .references(() => askThreads.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    role: text("role").$type<"user" | "assistant">().notNull(),
+    content: text("content").default("").notNull(),
+    sources: jsonb("sources").$type<AskSourceRef[]>().notNull().default([]),
+    webSources: jsonb("web_sources").$type<AskWebSource[]>().notNull().default([]),
+    usage: jsonb("usage").$type<AskUsage | null>(),
+    model: text("model"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    threadIdx: index("ask_messages_thread_idx").on(t.threadId, t.createdAt),
+  }),
+);
+
+export type AskThread = typeof askThreads.$inferSelect;
+export type AskMessage = typeof askMessages.$inferSelect;
+
+// Ask memory — durable user-scoped facts injected into the assistant's prompt.
+// NOT synced. See migration 0027.
+export const askMemory = pgTable(
+  "ask_memory",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    fact: text("fact").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userIdx: index("ask_memory_user_idx").on(t.userId, t.createdAt.desc()),
+  }),
+);
+
+export type AskMemory = typeof askMemory.$inferSelect;
+
 export type DailyBrief = typeof dailyBriefs.$inferSelect;
 
 export type Tag = typeof tags.$inferSelect;

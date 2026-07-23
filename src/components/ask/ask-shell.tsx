@@ -1,11 +1,12 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Markdown } from "@/components/ui/markdown";
+import { useRouter } from "next/navigation";
+import { CitedMarkdown } from "@/components/ui/cited-markdown";
 import {
   ArrowUp,
   BookmarkPlus,
+  Bot,
   Brain,
   Check,
   CalendarDays,
@@ -17,17 +18,20 @@ import {
   Globe,
   GraduationCap,
   Loader2,
-  MessageCircle,
+  Menu,
   Mic,
   Newspaper,
   NotebookPen,
   Paperclip,
+  Plus,
   RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
+  SlidersHorizontal,
   Square,
   ThumbsDown,
   ThumbsUp,
-  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -48,9 +52,20 @@ import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/strea
 import { generateFlashcardsAction, createFlashcardAction } from "@/app/(app)/review/actions";
 import { searchAttachableItemsAction, type AttachableItem } from "@/app/(app)/ask/actions";
 import { fetchDirectoryItemByIdAction } from "@/app/(app)/directory/actions";
+import {
+  appendMessage,
+  createThread,
+  deleteThread,
+  listThreads,
+  loadThread,
+  renameThread,
+  type ThreadMessage,
+  type ThreadSummary,
+} from "@/app/(app)/ask/thread-actions";
+import { ThreadList } from "@/components/ask/thread-list";
+import { parseEvents } from "@/lib/ai/agent/stream";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
-
 
 type Source = {
   n: number;
@@ -70,6 +85,12 @@ type StudyPlanResult = {
   toISO: string;
 };
 
+type Verification =
+  | "loading"
+  | { verdict: "supported" | "partial" | "unsupported" | "unknown"; issues: string[] };
+
+type AgentStep = { id: string; label: string; done: boolean };
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -79,6 +100,8 @@ type Message = {
   usage?: Usage;
   plan?: StudyPlanResult;
   followups?: string[];
+  verification?: Verification;
+  steps?: AgentStep[];
 };
 
 const SUGGESTIONS = [
@@ -88,7 +111,19 @@ const SUGGESTIONS = [
   "Find anything I have on Singapore semiconductor policy",
 ];
 
-// ── Voice input (#9) — Web Speech API, browser-only, feature-detected ───
+/** Hydrate a persisted message into the client shape. */
+function hydrate(m: ThreadMessage): Message {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    sources: m.sources.length ? m.sources : undefined,
+    webSources: m.webSources.length ? m.webSources : undefined,
+    usage: m.usage ?? undefined,
+  };
+}
+
+// ── Voice input — Web Speech API, browser-only, feature-detected ────────
 type SpeechResultLike = { 0: { transcript: string }; isFinal: boolean };
 type SpeechEventLike = { results: ArrayLike<SpeechResultLike> };
 type SpeechRecognitionLike = {
@@ -120,14 +155,34 @@ function answerToMarkdown(message: Message): string {
   return md;
 }
 
-export function AskShell() {
+export function AskShell({
+  initialThreads,
+  activeThreadId,
+  initialMessages,
+  initialPrefill,
+  initialAttachId,
+}: {
+  initialThreads: ThreadSummary[];
+  activeThreadId: string | null;
+  initialMessages: ThreadMessage[];
+  /** Cross-surface hand-off: /ask?prefill=…&attach=<directoryItemId>. */
+  initialPrefill?: string;
+  initialAttachId?: string;
+}) {
   const router = useRouter();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [threads, setThreads] = useState<ThreadSummary[]>(initialThreads);
+  const [threadId, setThreadId] = useState<string | null>(activeThreadId);
+  const [messages, setMessages] = useState<Message[]>(() => initialMessages.map(hydrate));
+  const [switching, setSwitching] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string>(DEFAULT_CHAT_MODEL);
   const [web, setWeb] = useState(false);
+  const [agentMode, setAgentMode] = useState(false);
+  const [verifyMode, setVerifyMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [studyMode, setStudyMode] = useState(false);
   const [deadline, setDeadline] = useState("");
@@ -149,8 +204,60 @@ export function AskShell() {
     };
   }, []);
 
-  // #9 Dictate into the composer. Toggles a one-shot recognition session and
-  // appends the live transcript onto whatever was already typed.
+  // Refresh the sidebar list from the server (after create/rename/delete).
+  const refreshThreads = useCallback(() => {
+    void listThreads().then(setThreads).catch(() => {});
+  }, []);
+
+  // ── Thread navigation (client-side for instant switching; URL kept in sync
+  // via history.replaceState so a conversation is resumable/shareable). ──
+  const selectThread = useCallback(
+    async (id: string) => {
+      if (id === threadId || streaming) {
+        setDrawerOpen(false);
+        return;
+      }
+      setDrawerOpen(false);
+      setSwitching(true);
+      try {
+        const t = await loadThread(id);
+        if (t) {
+          setThreadId(id);
+          setMessages(t.messages.map(hydrate));
+          window.history.replaceState(null, "", `/ask?thread=${id}`);
+        }
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [threadId, streaming],
+  );
+
+  const newChat = useCallback(() => {
+    if (streaming) return;
+    setDrawerOpen(false);
+    setThreadId(null);
+    setMessages([]);
+    setError(null);
+    window.history.replaceState(null, "", "/ask");
+    inputRef.current?.focus();
+  }, [streaming]);
+
+  const removeThread = useCallback(
+    async (id: string) => {
+      setThreads((prev) => prev.filter((t) => t.id !== id));
+      await deleteThread(id).catch(() => {});
+      if (id === threadId) newChat();
+    },
+    [threadId, newChat],
+  );
+
+  const renameThreadTitle = useCallback((id: string, title: string) => {
+    setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
+    void renameThread(id, title).catch(() => {});
+  }, []);
+
+  // Voice dictation.
   const toggleVoice = useCallback(() => {
     if (listening) {
       recognitionRef.current?.stop();
@@ -182,10 +289,7 @@ export function AskShell() {
     abortRef.current?.abort();
   }, []);
 
-  const openSource = useCallback(
-    (id: string) => router.push(`/directory?item=${id}`),
-    [router],
-  );
+  const openSource = useCallback((id: string) => router.push(`/directory?item=${id}`), [router]);
   const openPath = useCallback((path: string) => router.push(path), [router]);
 
   useEffect(() => {
@@ -193,31 +297,24 @@ export function AskShell() {
     if (saved && CHAT_MODELS.some((m) => m.id === saved)) setModelId(saved);
   }, []);
 
-  // #4 Cross-surface hand-off: /ask?prefill=…&attach=<directoryItemId> lets
-  // other surfaces (e.g. the reader) open Ask with a question pre-typed and an
-  // item pinned as context.
-  const searchParams = useSearchParams();
+  // Cross-surface hand-off: a question pre-typed and/or an item pinned as
+  // context (e.g. the reader's "Ask about this"). Applied once on mount.
   useEffect(() => {
-    const prefill = searchParams.get("prefill");
-    if (prefill) {
-      setInput(prefill);
+    if (initialPrefill) {
+      setInput(initialPrefill);
       inputRef.current?.focus();
     }
-    const attach = searchParams.get("attach");
-    if (attach) {
-      fetchDirectoryItemByIdAction(attach)
+    if (initialAttachId) {
+      fetchDirectoryItemByIdAction(initialAttachId)
         .then((item) => {
           if (item) {
             setContextItems((prev) =>
-              prev.some((p) => p.id === item.id)
-                ? prev
-                : [...prev, { id: item.id, title: item.title, kind: item.kind }],
+              prev.some((p) => p.id === item.id) ? prev : [...prev, { id: item.id, title: item.title, kind: item.kind }],
             );
           }
         })
         .catch(() => {});
     }
-    // Read once on mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -252,7 +349,6 @@ export function AskShell() {
       if (doneLine) {
         const data = JSON.parse(doneLine.slice(5)) as {
           ok: boolean;
-          total?: number;
           articlesEmbedded?: number;
           chunksEmbedded?: number;
           notesEmbedded?: number;
@@ -268,14 +364,10 @@ export function AskShell() {
           ].filter(Boolean);
           const failNote = (data.failed ?? 0) > 0 ? ` · ${data.failed} skipped` : "";
           toast.success(
-            parts.length > 0
-              ? `Indexed ${parts.join(", ")}${failNote}`
-              : "Memory is already up to date",
+            parts.length > 0 ? `Indexed ${parts.join(", ")}${failNote}` : "Memory is already up to date",
             { id: toastId },
           );
-          if (data.errors && data.errors.length > 0) {
-            console.warn("Backfill phase errors:", data.errors);
-          }
+          if (data.errors && data.errors.length > 0) console.warn("Backfill phase errors:", data.errors);
         } else {
           toast.error(data.error ?? "Backfill failed", { id: toastId });
         }
@@ -293,6 +385,22 @@ export function AskShell() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
+  /** Ensure a thread exists before persisting the first turn; returns its id. */
+  const ensureThread = useCallback(
+    async (firstQuestion: string): Promise<string | null> => {
+      if (threadId) return threadId;
+      const r = await createThread();
+      if (!r.ok) return null;
+      setThreadId(r.id);
+      window.history.replaceState(null, "", `/ask?thread=${r.id}`);
+      // Optimistically add to the sidebar (title filled from the first question).
+      const title = firstQuestion.trim().slice(0, 80) || "New conversation";
+      setThreads((prev) => [{ id: r.id, title, updatedAt: new Date().toISOString() }, ...prev]);
+      return r.id;
+    },
+    [threadId],
+  );
+
   const send = useCallback(
     async (question: string) => {
       const trimmed = question.trim();
@@ -300,17 +408,17 @@ export function AskShell() {
       setError(null);
       setInput("");
 
-      const userMessage: Message = {
-        id: crypto.randomUUID(),
-        role: "user",
-        content: trimmed,
-      };
+      const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: trimmed };
       const assistantId = crypto.randomUUID();
       const assistantPlaceholder: Message = { id: assistantId, role: "assistant", content: "" };
       const history = messages.map((m) => ({ role: m.role, content: m.content }));
 
       setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
       setStreaming(true);
+
+      // Persist the user turn immediately (survives a mid-stream failure).
+      const tid = await ensureThread(trimmed);
+      if (tid) void appendMessage({ threadId: tid, role: "user", content: trimmed }).catch(() => {});
 
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -356,9 +464,7 @@ export function AskShell() {
         const flush = () => {
           frameQueued = false;
           const display = displayText(acc);
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)),
-          );
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)));
         };
 
         while (true) {
@@ -391,12 +497,52 @@ export function AskShell() {
             // ignore
           }
         }
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)),
-        );
+        setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)));
 
-        // #5 Fetch suggested follow-ups (non-blocking, fail-soft).
         const finalAnswer = displayText(acc);
+
+        // Opt-in faithfulness check — verify the answer against its cited
+        // library sources (non-blocking, fail-soft).
+        if (verifyMode && sources.length > 0 && finalAnswer.trim()) {
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, verification: "loading" } : m)));
+          void fetch("/api/ask/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ answer: finalAnswer, sourceIds: sources.map((s) => s.directoryItemId) }),
+          })
+            .then((r) => r.json())
+            .then((v: { verdict?: string; issues?: string[] }) => {
+              const verdict = (["supported", "partial", "unsupported"].includes(v.verdict ?? "")
+                ? v.verdict
+                : "unknown") as "supported" | "partial" | "unsupported" | "unknown";
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, verification: { verdict, issues: v.issues ?? [] } } : m,
+                ),
+              );
+            })
+            .catch(() => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, verification: { verdict: "unknown", issues: [] } } : m,
+                ),
+              );
+            });
+        }
+        // Persist the assistant turn + bump this thread to the top of the list.
+        if (tid && finalAnswer.trim()) {
+          void appendMessage({
+            threadId: tid,
+            role: "assistant",
+            content: finalAnswer,
+            sources,
+            webSources,
+            usage: usage ?? null,
+            model: modelId,
+          }).then(() => refreshThreads()).catch(() => {});
+        }
+
+        // Suggested follow-ups (non-blocking, fail-soft).
         if (finalAnswer.trim()) {
           void fetch("/api/ask/followups", {
             method: "POST",
@@ -406,9 +552,7 @@ export function AskShell() {
             .then((r) => r.json())
             .then((d) => {
               if (Array.isArray(d?.followups) && d.followups.length) {
-                setMessages((prev) =>
-                  prev.map((m) => (m.id === assistantId ? { ...m, followups: d.followups } : m)),
-                );
+                setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, followups: d.followups } : m)));
               }
             })
             .catch(() => {});
@@ -422,7 +566,7 @@ export function AskShell() {
         inputRef.current?.focus();
       }
     },
-    [messages, streaming, modelId, web, contextItems],
+    [messages, streaming, modelId, web, verifyMode, contextItems, ensureThread, refreshThreads],
   );
 
   const sendStudyPlan = useCallback(
@@ -466,10 +610,7 @@ export function AskShell() {
           fromISO: data.fromISO ?? "",
           toISO: data.toISO ?? "",
         };
-        setMessages((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), role: "assistant", content: "", plan },
-        ]);
+        setMessages((prev) => [...prev, { id: crypto.randomUUID(), role: "assistant", content: "", plan }]);
         void generateFlashcardsAction(plan.itemId).catch(() => {});
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
@@ -482,52 +623,182 @@ export function AskShell() {
     [streaming, deadline, hoursPerWeek],
   );
 
-  function clearChat() {
-    setMessages([]);
-    setError(null);
-    inputRef.current?.focus();
+  // Agent turn: a multi-step tool loop (/api/agent) streaming NDJSON events —
+  // text deltas + tool-step chips. Persists like a normal turn.
+  const sendAgent = useCallback(
+    async (question: string) => {
+      const trimmed = question.trim();
+      if (!trimmed || streaming) return;
+      setError(null);
+      setInput("");
+      const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: trimmed };
+      const assistantId = crypto.randomUUID();
+      setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "", steps: [] }]);
+      setStreaming(true);
+      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+
+      const tid = await ensureThread(trimmed);
+      if (tid) void appendMessage({ threadId: tid, role: "user", content: trimmed }).catch(() => {});
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const res = await fetch("/api/agent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: trimmed, history, model: modelId }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          setError((await res.text()) || `HTTP ${res.status}`);
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          return;
+        }
+        if (!res.body) throw new Error("No response body");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let text = "";
+        let sources: Source[] = [];
+        let usage: Usage | undefined;
+        const steps: AgentStep[] = [];
+
+        let frameQueued = false;
+        const flush = () => {
+          frameQueued = false;
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: text, steps: [...steps] } : m)));
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const { events, rest } = parseEvents(buf);
+          buf = rest;
+          for (const e of events) {
+            if (e.type === "text") text += e.delta;
+            else if (e.type === "tool") {
+              if (e.status === "start") steps.push({ id: e.id, label: e.label, done: false });
+              else {
+                const s = steps.find((x) => x.id === e.id);
+                if (s) s.done = true;
+              }
+            } else if (e.type === "sources") {
+              sources = e.sources.map((s) => ({
+                n: s.n,
+                directoryItemId: s.directoryItemId,
+                title: s.title,
+                kind: s.kind,
+                similarity: s.similarity,
+              }));
+            } else if (e.type === "usage") usage = e.usage;
+            else if (e.type === "note") toast.message(e.message);
+            else if (e.type === "error") setError(e.message);
+          }
+          if (!frameQueued) {
+            frameQueued = true;
+            requestAnimationFrame(flush);
+          }
+        }
+        flush();
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: text, steps, sources: sources.length ? sources : undefined, usage } : m,
+          ),
+        );
+        if (tid && text.trim()) {
+          void appendMessage({ threadId: tid, role: "assistant", content: text, sources, usage: usage ?? null, model: modelId })
+            .then(() => refreshThreads())
+            .catch(() => {});
+        }
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Request failed");
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      } finally {
+        setStreaming(false);
+        inputRef.current?.focus();
+      }
+    },
+    [messages, streaming, modelId, ensureThread, refreshThreads],
+  );
+
+  function submit() {
+    if (studyMode) sendStudyPlan(input);
+    else if (agentMode) sendAgent(input);
+    else send(input);
   }
 
-  // Conversation title for the header — first user message if there is one.
-  const threadTitle = useMemo(() => {
-    const first = messages.find((m) => m.role === "user")?.content?.trim() ?? "";
-    if (!first) return "New conversation";
-    return first.length > 80 ? `${first.slice(0, 80)}…` : first;
-  }, [messages]);
-
-  const totalCitations = useMemo(() => {
-    let n = 0;
-    for (const m of messages) {
-      if (m.sources) n += m.sources.length;
-      if (m.webSources) n += m.webSources.length;
-    }
-    return n;
-  }, [messages]);
+  const activeToolCount =
+    (web ? 1 : 0) + (agentMode ? 1 : 0) + (studyMode ? 1 : 0) + (verifyMode ? 1 : 0) + (contextItems.length > 0 ? 1 : 0);
 
   return (
-    <div className="mx-auto flex h-full max-w-3xl flex-col">
-      {/* ── Editorial header ──────────────────────────────────────── */}
-      <header className="border-b border-border px-6 pt-5 pb-4">
-        <div className="mb-2 flex items-baseline justify-between gap-3 editorial-eyebrow">
-          <span className="inline-flex items-center gap-1.5">
-            <MessageCircle className="h-3 w-3" /> Conversation
-            {totalCitations > 0 && (
-              <span className="ml-2 normal-case italic" style={{ letterSpacing: 0 }}>
-                · {totalCitations} {totalCitations === 1 ? "source" : "sources"} cited
-              </span>
-            )}
-          </span>
-          <span style={{ color: "hsl(var(--brand))" }}>Grounded in your library</span>
+    <div className="flex h-full min-h-0">
+      {/* Desktop thread sidebar */}
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-border lg:flex">
+        <ThreadList
+          threads={threads}
+          activeId={threadId}
+          onSelect={selectThread}
+          onNew={newChat}
+          onRename={renameThreadTitle}
+          onDelete={removeThread}
+        />
+      </aside>
+
+      {/* Mobile drawer */}
+      <div
+        className={cn(
+          "fixed inset-0 z-40 bg-black/40 transition-opacity lg:hidden",
+          drawerOpen ? "opacity-100" : "pointer-events-none opacity-0",
+        )}
+        onClick={() => setDrawerOpen(false)}
+        aria-hidden
+      />
+      <aside
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col bg-card shadow-xl transition-transform duration-200 lg:hidden",
+          drawerOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+        aria-hidden={!drawerOpen}
+        inert={!drawerOpen}
+      >
+        <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
+          <span className="text-sm font-semibold">Chats</span>
+          <button onClick={() => setDrawerOpen(false)} className="rounded p-1 text-muted-foreground hover:bg-accent" aria-label="Close">
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        <div className="flex items-baseline justify-between gap-3">
-          <h1
-            className="editorial-display m-0 truncate"
-            style={{ fontSize: "clamp(1.25rem, 2.6vw, 1.625rem)" }}
-            title={threadTitle}
+        <div className="min-h-0 flex-1">
+          <ThreadList
+            threads={threads}
+            activeId={threadId}
+            onSelect={selectThread}
+            onNew={newChat}
+            onRename={renameThreadTitle}
+            onDelete={removeThread}
+          />
+        </div>
+      </aside>
+
+      {/* Chat pane */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Header */}
+        <header className="flex items-center gap-2 border-b border-border px-4 py-2.5 sm:px-6">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground lg:hidden"
+            aria-label="Conversations"
           >
-            {threadTitle}
-          </h1>
-          <div className="flex shrink-0 items-center gap-1">
+            <Menu className="h-4 w-4" />
+          </button>
+          <div className="inline-flex items-center gap-1.5 editorial-eyebrow">
+            <Sparkles className="h-3 w-3" style={{ color: "hsl(var(--brand))" }} /> Ask
+          </div>
+          <div className="ml-auto flex items-center gap-1">
             <Button
               size="sm"
               variant="ghost"
@@ -535,249 +806,286 @@ export function AskShell() {
               disabled={refreshing}
               title="Re-index your library so Ask can reference new notes, docs, and articles"
             >
-              {refreshing ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              Refresh memory
+              {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin sm:mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 sm:mr-1.5" />}
+              <span className="hidden sm:inline">Refresh memory</span>
             </Button>
-            {messages.length > 0 && (
-              <Button size="sm" variant="ghost" onClick={clearChat} disabled={streaming}>
-                <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Clear
-              </Button>
-            )}
+            <Button size="sm" variant="ghost" onClick={newChat} disabled={streaming} title="New chat" className="lg:hidden">
+              <Plus className="h-4 w-4" />
+            </Button>
           </div>
-        </div>
-      </header>
+        </header>
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
-        {messages.length === 0 ? (
-          <Empty onPick={(s) => send(s)} />
-        ) : (
-          <div className="space-y-7">
-            {messages.map((m, i) => (
-              <MessageBubble
-                key={m.id}
-                message={m}
-                // The user question this answer responds to — becomes the
-                // flashcard front when the answer is saved as a card.
-                question={
-                  m.role === "assistant" && messages[i - 1]?.role === "user"
-                    ? messages[i - 1].content
-                    : undefined
-                }
-                onOpenSource={openSource}
-                onOpenPath={openPath}
-                onFollowup={send}
-              />
-            ))}
-            {streaming && (
-              <div className="flex items-center gap-2 text-xs italic text-muted-foreground">
-                <span
-                  className="inline-block h-1.5 w-1.5 animate-pulse rounded-full"
-                  style={{ background: "hsl(var(--brand))" }}
-                />
-                Thinking…
+        {/* Messages */}
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
+            {switching ? (
+              <div className="flex items-center justify-center py-20 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin" />
+              </div>
+            ) : messages.length === 0 ? (
+              <Empty onPick={(s) => send(s)} />
+            ) : (
+              <div className="space-y-7">
+                {messages.map((m, i) => (
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    question={
+                      m.role === "assistant" && messages[i - 1]?.role === "user"
+                        ? messages[i - 1].content
+                        : undefined
+                    }
+                    onOpenSource={openSource}
+                    onOpenPath={openPath}
+                    onFollowup={send}
+                  />
+                ))}
+                {streaming && (
+                  <div className="flex items-center gap-2 text-xs italic text-muted-foreground">
+                    <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: "hsl(var(--brand))" }} />
+                    Thinking…
+                  </div>
+                )}
+              </div>
+            )}
+            {error && (
+              <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
+                <p className="font-medium text-destructive">Couldn&apos;t answer</p>
+                <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{error}</p>
               </div>
             )}
           </div>
-        )}
-        {error && (
-          <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm">
-            <p className="font-medium text-destructive">Couldn&apos;t answer</p>
-            <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">{error}</p>
-          </div>
-        )}
-      </div>
-
-      {/* Composer */}
-      <div className="border-t border-border bg-accent/20 px-6 py-4">
-        <div className="mb-2 flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" disabled={streaming}>
-                <Cpu className="h-3.5 w-3.5" />
-                {getChatModel(modelId).label}
-                <ChevronDown className="h-3 w-3 opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="top" className="w-56">
-              <DropdownMenuLabel>Model</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {CHAT_MODELS.map((m) => (
-                <DropdownMenuItem
-                  key={m.id}
-                  onClick={() => chooseModel(m.id)}
-                  className="flex items-center justify-between gap-2"
-                >
-                  <span className="flex flex-col">
-                    <span>{m.label}</span>
-                    {m.hint && <span className="text-[10px] text-muted-foreground">{m.hint}</span>}
-                  </span>
-                  {modelId === m.id && <Check className="h-3.5 w-3.5" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            size="sm"
-            variant={web ? "default" : "outline"}
-            onClick={() => setWeb((w) => !w)}
-            disabled={streaming || studyMode}
-            className="h-7 gap-1.5 text-xs"
-            title={web ? "Web search on" : "Web search off"}
-          >
-            <Globe className="h-3.5 w-3.5" /> Web
-          </Button>
-          <Button
-            size="sm"
-            variant={studyMode ? "brand" : "outline"}
-            onClick={() => setStudyMode((s) => !s)}
-            disabled={streaming}
-            className="h-7 gap-1.5 text-xs"
-            title="Turn your prompt into a dated study plan"
-          >
-            <GraduationCap className="h-3.5 w-3.5" /> Study plan
-          </Button>
-          {voiceSupported && (
-            <Button
-              size="sm"
-              variant={listening ? "brand" : "outline"}
-              onClick={toggleVoice}
-              disabled={streaming}
-              className="h-7 gap-1.5 text-xs"
-              title={listening ? "Stop dictation" : "Dictate your question"}
-            >
-              <Mic className={cn("h-3.5 w-3.5", listening && "animate-pulse")} />
-              {listening ? "Listening…" : "Voice"}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant={attachOpen || contextItems.length > 0 ? "brand" : "outline"}
-            onClick={() => setAttachOpen((v) => !v)}
-            disabled={streaming}
-            className="h-7 gap-1.5 text-xs"
-            title="Attach items as context"
-          >
-            <Paperclip className="h-3.5 w-3.5" /> Context
-            {contextItems.length > 0 && <span className="tabular-nums">· {contextItems.length}</span>}
-          </Button>
         </div>
 
-        {attachOpen && (
-          <AttachContextPanel
-            attachedIds={contextItems.map((c) => c.id)}
-            onAdd={(item) =>
-              setContextItems((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]))
-            }
-            onClose={() => setAttachOpen(false)}
-          />
-        )}
-
-        {contextItems.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {contextItems.map((c) => (
-              <span
-                key={c.id}
-                className="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-[12px]"
-                title={c.title}
-              >
-                <KindIcon kind={c.kind} />
-                <span className="max-w-[180px] truncate">{c.title}</span>
-                <button
-                  onClick={() => setContextItems((prev) => prev.filter((p) => p.id !== c.id))}
-                  className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
-                  title="Remove"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {studyMode && (
-          <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-            <label className="flex items-center gap-1.5">
-              Deadline
-              <input
-                type="date"
-                value={deadline}
-                onChange={(e) => setDeadline(e.target.value)}
-                disabled={streaming}
-                className="h-7 rounded-md border border-border bg-background px-2 text-foreground"
-              />
-            </label>
-            <label className="flex items-center gap-1.5">
-              Hours / week
-              <input
-                type="number"
-                min={1}
-                max={40}
-                value={hoursPerWeek}
-                onChange={(e) => setHoursPerWeek(e.target.value)}
-                disabled={streaming}
-                className="h-7 w-16 rounded-md border border-border bg-background px-2 text-foreground tabular-nums"
-              />
-            </label>
-          </div>
-        )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (studyMode) sendStudyPlan(input);
-            else send(input);
-          }}
-          className="relative"
+        {/* Composer */}
+        <div
+          className="border-t border-border bg-accent/20 px-4 pt-3 sm:px-6"
+          style={{ paddingBottom: "calc(0.75rem + env(safe-area-inset-bottom))" }}
         >
-          <Textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+          <div className="mx-auto max-w-3xl">
+            {attachOpen && (
+              <AttachContextPanel
+                attachedIds={contextItems.map((c) => c.id)}
+                onAdd={(item) =>
+                  setContextItems((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]))
+                }
+                onClose={() => setAttachOpen(false)}
+              />
+            )}
+            {contextItems.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {contextItems.map((c) => (
+                  <span
+                    key={c.id}
+                    className="inline-flex items-center gap-1.5 rounded-full bg-accent px-2.5 py-1 text-[12px]"
+                    title={c.title}
+                  >
+                    <KindIcon kind={c.kind} />
+                    <span className="max-w-[180px] truncate">{c.title}</span>
+                    <button
+                      onClick={() => setContextItems((prev) => prev.filter((p) => p.id !== c.id))}
+                      className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                      title="Remove"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {studyMode && (
+              <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                <label className="flex items-center gap-1.5">
+                  Deadline
+                  <input
+                    type="date"
+                    value={deadline}
+                    onChange={(e) => setDeadline(e.target.value)}
+                    disabled={streaming}
+                    className="h-7 rounded-md border border-border bg-background px-2 text-foreground"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5">
+                  Hours / week
+                  <input
+                    type="number"
+                    min={1}
+                    max={40}
+                    value={hoursPerWeek}
+                    onChange={(e) => setHoursPerWeek(e.target.value)}
+                    disabled={streaming}
+                    className="h-7 w-16 rounded-md border border-border bg-background px-2 text-foreground tabular-nums"
+                  />
+                </label>
+              </div>
+            )}
+
+            <form
+              onSubmit={(e) => {
                 e.preventDefault();
-                if (studyMode) sendStudyPlan(input);
-                else send(input);
-              }
-            }}
-            placeholder={
-              studyMode
-                ? "Describe your study goal… e.g. Master React hooks"
-                : "Ask anything across your Directory…"
-            }
-            className="min-h-[64px] resize-none rounded-xl pr-12 text-[15px]"
-            disabled={streaming}
-          />
-          {streaming ? (
-            <Button
-              type="button"
-              size="icon"
-              variant="brand"
-              className="absolute bottom-2 right-2 h-8 w-8"
-              onClick={stop}
-              title="Stop generating"
+                submit();
+              }}
+              className="relative rounded-2xl border border-border bg-background focus-within:ring-1 focus-within:ring-ring"
             >
-              <Square className="h-3 w-3 fill-current" />
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              size="icon"
-              variant="brand"
-              className="absolute bottom-2 right-2 h-8 w-8"
-              disabled={!input.trim()}
-              title="Send (Enter)"
-            >
-              <ArrowUp className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </form>
-        <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-          Enter to send · Shift+Enter for newline
-        </p>
+              <Textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                placeholder={
+                  studyMode ? "Describe your study goal… e.g. Master React hooks" : "Ask anything across your Directory…"
+                }
+                className="min-h-[56px] resize-none border-0 bg-transparent px-3.5 pt-3 pb-12 text-[15px] shadow-none focus-visible:ring-0"
+                disabled={streaming}
+              />
+              {/* Composer toolbar (inside the input frame) */}
+              <div className="absolute inset-x-2 bottom-2 flex items-center gap-1.5">
+                {/* Model picker */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs text-muted-foreground" disabled={streaming}>
+                      <Cpu className="h-3.5 w-3.5" />
+                      <span className="hidden max-w-[120px] truncate sm:inline">{getChatModel(modelId).label}</span>
+                      <ChevronDown className="h-3 w-3 opacity-60" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" side="top" className="w-56">
+                    <DropdownMenuLabel>Model</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {CHAT_MODELS.map((m) => (
+                      <DropdownMenuItem key={m.id} onClick={() => chooseModel(m.id)} className="flex items-center justify-between gap-2">
+                        <span className="flex flex-col">
+                          <span>{m.label}</span>
+                          {m.hint && <span className="text-[10px] text-muted-foreground">{m.hint}</span>}
+                        </span>
+                        {modelId === m.id && <Check className="h-3.5 w-3.5" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Tools (Web / Study plan / Voice / Context) consolidated so the
+                    composer stays uncluttered on mobile. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant={activeToolCount > 0 ? "brand" : "ghost"}
+                      className="h-7 gap-1 px-2 text-xs"
+                      disabled={streaming}
+                      title="Tools"
+                    >
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Tools</span>
+                      {activeToolCount > 0 && <span className="tabular-nums">· {activeToolCount}</span>}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" side="top" className="w-56">
+                    <DropdownMenuLabel>Tools</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setAgentMode((a) => {
+                          if (!a) setStudyMode(false);
+                          return !a;
+                        });
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Bot className="h-3.5 w-3.5" /> Agent (multi-step)
+                      </span>
+                      {agentMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        if (!studyMode) setWeb((w) => !w);
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Globe className="h-3.5 w-3.5" /> Web search
+                        {agentMode && <span className="text-[10px] text-muted-foreground">(built in)</span>}
+                      </span>
+                      {web && !agentMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setVerifyMode((v) => !v);
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <ShieldCheck className="h-3.5 w-3.5" /> Verify answers
+                      </span>
+                      {verifyMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setStudyMode((s) => !s);
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <GraduationCap className="h-3.5 w-3.5" /> Study plan
+                      </span>
+                      {studyMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setAttachOpen((v) => !v);
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Paperclip className="h-3.5 w-3.5" /> Attach context
+                      </span>
+                      {contextItems.length > 0 && <span className="text-[10px] tabular-nums text-muted-foreground">{contextItems.length}</span>}
+                    </DropdownMenuItem>
+                    {voiceSupported && (
+                      <DropdownMenuItem
+                        onSelect={(e) => {
+                          e.preventDefault();
+                          toggleVoice();
+                        }}
+                        className="justify-between"
+                      >
+                        <span className="inline-flex items-center gap-2">
+                          <Mic className={cn("h-3.5 w-3.5", listening && "animate-pulse")} /> {listening ? "Listening…" : "Voice"}
+                        </span>
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="ml-auto">
+                  {streaming ? (
+                    <Button type="button" size="icon" variant="brand" className="h-8 w-8" onClick={stop} title="Stop generating">
+                      <Square className="h-3 w-3 fill-current" />
+                    </Button>
+                  ) : (
+                    <Button type="submit" size="icon" variant="brand" className="h-8 w-8" disabled={!input.trim()} title="Send (Enter)">
+                      <ArrowUp className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </form>
+            <p className="mt-1.5 text-center font-mono text-[10px] text-muted-foreground">
+              Enter to send · Shift+Enter for newline · grounded in your library
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -785,12 +1093,12 @@ export function AskShell() {
 
 function Empty({ onPick }: { onPick: (s: string) => void }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 px-4 text-center">
+    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-5 px-4 text-center">
       <div className="editorial-eyebrow-brand">§ Start a conversation</div>
       <Sparkles className="h-10 w-10 text-muted-foreground/40" />
       <p className="max-w-md text-sm italic text-muted-foreground">
-        Ask a question and Claude will search your saved articles, notes, and documents — with
-        citations back to the source.
+        Ask a question and Claude will search your saved articles, notes, and documents — with citations back to the
+        source.
       </p>
       <div className="grid w-full max-w-2xl grid-cols-1 gap-2 sm:grid-cols-2">
         {SUGGESTIONS.map((s, i) => (
@@ -799,10 +1107,7 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
             onClick={() => onPick(s)}
             className="group flex items-start gap-2.5 rounded-lg border border-border bg-card p-3 text-left text-sm text-foreground/85 transition-all hover:border-brand/40 hover:bg-accent"
           >
-            <span
-              className="mt-px font-mono text-[10px] font-semibold tabular-nums"
-              style={{ color: "hsl(var(--brand))" }}
-            >
+            <span className="mt-px font-mono text-[10px] font-semibold tabular-nums" style={{ color: "hsl(var(--brand))" }}>
               [{String(i + 1).padStart(2, "0")}]
             </span>
             <span className="flex-1 leading-snug">{s}</span>
@@ -813,7 +1118,7 @@ function Empty({ onPick }: { onPick: (s: string) => void }) {
   );
 }
 
-/** #8 Picker panel: search recent directory items and attach them as context. */
+/** Picker panel: search recent directory items and attach them as context. */
 function AttachContextPanel({
   attachedIds,
   onAdd,
@@ -895,11 +1200,7 @@ function AttachContextPanel({
 const ACTION_BTN =
   "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground transition-colors hover:bg-accent hover:text-foreground";
 
-/**
- * #6 Grounding-strength meter. Blends how many library sources backed the answer
- * with their average similarity into a 5-bar readout (weak → strong). Web-only
- * answers read as "moderate"; an answer with no citations reads as "ungrounded".
- */
+/** Grounding-strength meter — blends source count with average similarity. */
 function GroundingMeter({ message }: { message: Message }) {
   const sources = message.sources ?? [];
   const web = message.webSources ?? [];
@@ -913,15 +1214,13 @@ function GroundingMeter({ message }: { message: Message }) {
       </span>
     );
   }
-  const avgSim = sources.length
-    ? sources.reduce((s, x) => s + x.similarity, 0) / sources.length
-    : 0;
+  const avgSim = sources.length ? sources.reduce((s, x) => s + x.similarity, 0) / sources.length : 0;
   let filled: number;
   if (sources.length === 0) {
     filled = 2; // web-only
   } else {
-    const countPart = (Math.min(sources.length, 4) / 4) * 2; // 0–2
-    const simPart = avgSim * 3; // 0–3
+    const countPart = (Math.min(sources.length, 4) / 4) * 2;
+    const simPart = avgSim * 3;
     filled = Math.max(1, Math.min(5, Math.round(countPart + simPart)));
   }
   const label = filled >= 4 ? "Strong" : filled >= 3 ? "Moderate" : "Weak";
@@ -930,10 +1229,7 @@ function GroundingMeter({ message }: { message: Message }) {
       ? `${label} grounding · ${sources.length} ${sources.length === 1 ? "source" : "sources"} · avg ${Math.round(avgSim * 100)}% match`
       : `${label} grounding · ${web.length} web ${web.length === 1 ? "source" : "sources"}`;
   return (
-    <span
-      className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
-      title={tip}
-    >
+    <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wide text-muted-foreground" title={tip}>
       <span className="flex items-end gap-[2px]" aria-hidden>
         {[0, 1, 2, 3, 4].map((i) => (
           <span
@@ -951,11 +1247,44 @@ function GroundingMeter({ message }: { message: Message }) {
   );
 }
 
-/**
- * #7 Per-message action row: copy as Markdown, save the answer as a note, save
- * it as a flashcard (your own question = the highest-signal card front there
- * is), and a 👍/👎 feedback toggle.
- */
+/** Faithfulness badge — result of the opt-in verify pass against cited sources. */
+function VerificationBadge({ verification }: { verification: Verification }) {
+  const base = "inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wide";
+  if (verification === "loading") {
+    return (
+      <span className={cn(base, "text-muted-foreground")}>
+        <Loader2 className="h-2.5 w-2.5 animate-spin" /> Verifying
+      </span>
+    );
+  }
+  const { verdict, issues } = verification;
+  if (verdict === "supported") {
+    return (
+      <span className={cn(base, "text-brand")} title="Every claim is supported by the cited sources">
+        <ShieldCheck className="h-3 w-3" /> Verified
+      </span>
+    );
+  }
+  if (verdict === "unknown") {
+    return (
+      <span className={cn(base, "text-muted-foreground")} title="Couldn't verify this answer against sources">
+        <ShieldAlert className="h-3 w-3" /> Unverified
+      </span>
+    );
+  }
+  const tip = issues.length ? issues.join("\n• ") : "Some claims go beyond the cited sources";
+  return (
+    <span
+      className={cn(base, verdict === "unsupported" ? "text-destructive" : "text-amber-600 dark:text-amber-400")}
+      title={`• ${tip}`}
+    >
+      <ShieldAlert className="h-3 w-3" /> {verdict === "unsupported" ? "Unsupported" : "Partly supported"}
+      {issues.length > 0 && <span className="tabular-nums">· {issues.length}</span>}
+    </span>
+  );
+}
+
+/** Per-message action row: copy, save as note, save as flashcard, feedback. */
 function MessageActions({ message, question }: { message: Message; question?: string }) {
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -998,7 +1327,6 @@ function MessageActions({ message, question }: { message: Message; question?: st
   async function saveAsNote() {
     if (saving || saved) return;
     setSaving(true);
-    // Title = first non-empty line of the answer, trimmed of markdown heading marks.
     const firstLine =
       (message.content ?? "")
         .split("\n")
@@ -1079,7 +1407,7 @@ const MessageBubble = memo(function MessageBubble({
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-accent px-4 py-2.5 text-[14.5px] leading-snug">
+        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/10 px-4 py-2.5 text-[14.5px] leading-snug">
           {message.content}
         </div>
       </div>
@@ -1120,19 +1448,40 @@ const MessageBubble = memo(function MessageBubble({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <div className="editorial-eyebrow-brand inline-flex items-center gap-2">
-          <Sparkles className="h-3 w-3" /> § Answer
-          {message.sources && message.sources.length > 0 && (
-            <span className="text-muted-foreground" style={{ letterSpacing: 0, textTransform: "none" }}>
-              <span className="opacity-50">·</span> grounded in {message.sources.length} {message.sources.length === 1 ? "source" : "sources"}
-            </span>
-          )}
+        <div className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <Sparkles className="h-3 w-3" style={{ color: "hsl(var(--brand))" }} /> Answer
         </div>
-        {message.content && <GroundingMeter message={message} />}
+        <div className="flex items-center gap-3">
+          {message.verification && <VerificationBadge verification={message.verification} />}
+          {message.content && <GroundingMeter message={message} />}
+        </div>
       </div>
-      <div className="prose-reader max-w-[70ch] text-[15px] leading-[1.7]">
+      {message.steps && message.steps.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {message.steps.map((s) => (
+            <div key={s.id} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              {s.done ? (
+                <Check className="h-3 w-3 shrink-0" style={{ color: "hsl(var(--brand))" }} />
+              ) : (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              )}
+              <span className="truncate">{s.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="prose-reader max-w-none text-[15px] leading-[1.7]">
         {message.content ? (
-          <Markdown>{message.content}</Markdown>
+          <CitedMarkdown
+            citations={(message.sources ?? []).map((s) => ({
+              n: s.n,
+              href: `/directory?item=${s.directoryItemId}`,
+              title: s.title,
+            }))}
+            onNavigate={onOpenPath}
+          >
+            {message.content}
+          </CitedMarkdown>
         ) : (
           <span className="text-muted-foreground italic">…</span>
         )}
@@ -1143,8 +1492,7 @@ const MessageBubble = memo(function MessageBubble({
             Tokens consumed: {message.usage.totalTokens.toLocaleString()}
           </span>
           <span className="opacity-60">
-            ({message.usage.promptTokens.toLocaleString()} in ·{" "}
-            {message.usage.completionTokens.toLocaleString()} out)
+            ({message.usage.promptTokens.toLocaleString()} in · {message.usage.completionTokens.toLocaleString()} out)
           </span>
         </div>
       )}
@@ -1175,12 +1523,7 @@ const MessageBubble = memo(function MessageBubble({
             <Globe className="h-3 w-3" /> § Web sources
           </div>
           {message.webSources.map((s) => (
-            <SourceRow
-              key={s.url}
-              icon={<Globe className="h-3 w-3 shrink-0 text-muted-foreground" />}
-              title={s.title}
-              href={s.url}
-            />
+            <SourceRow key={s.url} icon={<Globe className="h-3 w-3 shrink-0 text-muted-foreground" />} title={s.title} href={s.url} />
           ))}
         </div>
       )}

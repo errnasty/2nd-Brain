@@ -27,6 +27,57 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-d",
+    date: "July 23, 2026",
+    title: "Ask can now work in multiple steps",
+    tag: "feature",
+    summary:
+      "A new Agent mode lets Ask take several steps to answer harder questions — searching your library, opening specific items, and checking the web as needed — and it can remember lasting facts about you across conversations.",
+    items: [
+      "Turn on “Agent (multi-step)” in the Tools menu for questions that need digging — comparing across documents, following a trail, or blending your notes with fresh web facts. You'll see each step as it works.",
+      "The agent can remember durable facts you tell it (like what you're studying) and use them in future chats.",
+      "If your selected model can't run tools, the agent automatically uses a capable one for that answer.",
+    ],
+  },
+  {
+    id: "2026-07-23-c",
+    date: "July 23, 2026",
+    title: "Ask answers you can trust",
+    tag: "improvement",
+    summary:
+      "The [1], [2] references in an Ask answer are now tappable and jump straight to the note or article they came from. And a new “Verify answers” option double-checks the answer against your sources and flags anything they don't actually support.",
+    items: [
+      "Tap any citation in an answer to open the exact source it's drawn from.",
+      "Turn on “Verify answers” (in the Tools menu) to get a badge on each answer — verified, partly supported, or unsupported — with the specific claims your sources don't back.",
+    ],
+  },
+  {
+    id: "2026-07-23-b",
+    date: "July 23, 2026",
+    title: "Ask gives sharper, more honest answers",
+    tag: "improvement",
+    summary:
+      "Ask now understands follow-up questions in context and digs up better sources — and when something genuinely isn't in your library, it says so instead of bluffing.",
+    items: [
+      "Follow-ups like “what about the second one?” now search correctly by resolving what you meant from the conversation.",
+      "Retrieved sources are re-ranked by how well they actually answer your question, so the strongest evidence leads.",
+      "When your library doesn't cover a question, Ask tells you plainly and suggests turning on web search — rather than answering as if it came from your notes.",
+    ],
+  },
+  {
+    id: "2026-07-23",
+    date: "July 23, 2026",
+    title: "Ask now remembers your conversations",
+    tag: "feature",
+    summary:
+      "Ask has been rebuilt into a proper assistant: your conversations are saved, so you can leave and come back to them, and they follow you across your devices. It's the first step of a bigger Ask overhaul.",
+    items: [
+      "A conversation sidebar (and a slide-in drawer on mobile) with all your past chats — rename, delete, and jump back into any of them.",
+      "“New chat” starts a fresh thread; refreshing the page no longer loses your conversation.",
+      "A cleaner, roomier chat layout on both desktop and phone, with the extra tools (web search, study plan, voice, attach) tucked into one tidy menu so the composer stays uncluttered.",
+    ],
+  },
+  {
     id: "2026-07-22",
     date: "July 22, 2026",
     title: "A new logo",

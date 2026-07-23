@@ -293,6 +293,43 @@ create table if not exists daily_briefs (
 );
 `;
 
+// Ask conversation threads + messages — mirrors cloud migration 0026. Not
+// synced. Always-run + idempotent.
+const ASK_THREADS_SQL = `
+create table if not exists ask_threads (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  title text not null default 'New conversation',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists ask_threads_user_updated_idx on ask_threads (user_id, updated_at desc);
+create table if not exists ask_messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid not null references ask_threads(id) on delete cascade,
+  user_id uuid not null references profiles(id) on delete cascade,
+  role text not null,
+  content text not null default '',
+  sources jsonb not null default '[]'::jsonb,
+  web_sources jsonb not null default '[]'::jsonb,
+  usage jsonb,
+  model text,
+  created_at timestamptz not null default now()
+);
+create index if not exists ask_messages_thread_idx on ask_messages (thread_id, created_at);
+`;
+
+// Ask memory — mirrors cloud migration 0027. Not synced. Always-run + idempotent.
+const ASK_MEMORY_SQL = `
+create table if not exists ask_memory (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  fact text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists ask_memory_user_idx on ask_memory (user_id, created_at desc);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -419,6 +456,20 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(DAILY_BRIEFS_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] daily_briefs table failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: Ask conversation threads + messages (not synced, no triggers).
+  try {
+    await client.exec(ASK_THREADS_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] ask_threads tables failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: Ask memory (not synced, no triggers).
+  try {
+    await client.exec(ASK_MEMORY_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] ask_memory table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and
