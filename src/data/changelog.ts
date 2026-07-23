@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-o",
+    date: "July 23, 2026",
+    title: "Directory bug fixes and reliability improvements",
+    tag: "fix",
+    summary:
+      "Fixed a case where deleting a folder with subfolders inside could leave them stranded instead of properly reorganizing, dragging items onto a subfolder tile that also appeared in the sidebar, keyboard navigation skipping past hidden filtered items, and auto-organize silently skipping a group of items when its suggested folder name already existed.",
+    items: [
+      "Deleting a folder now correctly handles its subfolders (moved up or removed together, depending on your choice) instead of leaving them stranded.",
+      "Drag-and-drop onto a folder now works reliably whether you drop on the sidebar or on a folder tile.",
+      "Up/down keyboard navigation in the item list now respects your active filters.",
+      "Recently-viewed items are now tracked no matter where you opened them from.",
+      "Auto-organize now tells you if any items couldn't be filed, instead of silently skipping them.",
+    ],
+  },
+  {
     id: "2026-07-23-n",
     date: "July 23, 2026",
     title: "Create folders right where you're browsing",

@@ -29,10 +29,19 @@ function realErrors(errors: string[]): string[] {
   );
 }
 
-test("unauthenticated / redirects to /login", async ({ page }) => {
-  await page.goto("/");
+test("unauthenticated /today redirects to /login", async ({ page }) => {
+  // "/" is intentionally public (the marketing landing page — see the
+  // isAuthRoute comment in src/lib/supabase/middleware.ts), so exercise the
+  // redirect against an actual protected route instead.
+  await page.goto("/today");
   await page.waitForURL("**/login**");
   expect(new URL(page.url()).pathname).toBe("/login");
+});
+
+test("unauthenticated / shows the marketing landing page (no redirect)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/");
 });
 
 test("/login hydrates and renders the form (no CSP/hydration errors)", async ({ page }) => {

@@ -73,17 +73,26 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (!target.startsWith("folder:")) return;
+    // Drop targets come in two flavors that both mean "move into this
+    // folder": the sidebar tree's "folder:<id>" and the content-pane tile's
+    // "folder-tile:<id>" (kept distinct from the sidebar's id so dnd-kit
+    // doesn't collide the two when the same folder is visible in both places
+    // at once — see the ChildFolderTile comment in directory-shell.tsx).
+    const isTileTarget = target.startsWith("folder-tile:");
+    if (!target.startsWith("folder:") && !isTileTarget) return;
+    const targetPrefix = isTileTarget ? "folder-tile:" : "folder:";
 
-    // Two kinds of drag sources:
-    //   "folder-drag:<id>" — a folder is being dragged (to nest under another)
-    //   "<itemUUID>"       — an item is being dragged (to move into a folder)
-    const isFolderDrag = activeId.startsWith("folder-drag:");
+    // Drag sources, similarly doubled up:
+    //   "folder-drag:<id>" / "folder-tile-drag:<id>" — a folder is being
+    //     dragged (to nest under another), from the sidebar or a tile.
+    //   "<itemUUID>"                                  — an item drag.
+    const isFolderDrag = activeId.startsWith("folder-drag:") || activeId.startsWith("folder-tile-drag:");
     const folderTargetId: string | null =
-      target === "folder:unsorted" ? null : target.slice("folder:".length);
+      target === `${targetPrefix}unsorted` ? null : target.slice(targetPrefix.length);
 
     if (isFolderDrag) {
-      const folderId = activeId.slice("folder-drag:".length);
+      const dragPrefix = activeId.startsWith("folder-tile-drag:") ? "folder-tile-drag:" : "folder-drag:";
+      const folderId = activeId.slice(dragPrefix.length);
       if (folderId === folderTargetId) return;
       startTransition(async () => {
         const r = await moveDirectoryFolderToParentAction(folderId, folderTargetId);
@@ -132,7 +141,9 @@ export function DirectoryDndShell({ children }: { children: ReactNode }) {
           (which previously aborted the drag), and gives obvious "I'm moving this"
           feedback instead of the source just going opacity-40 in place. */}
       <DragOverlay dropAnimation={null}>
-        {activeItemId && !activeItemId.startsWith("folder-drag:") ? (
+        {activeItemId &&
+        !activeItemId.startsWith("folder-drag:") &&
+        !activeItemId.startsWith("folder-tile-drag:") ? (
           <div className="pointer-events-none flex items-center gap-2 rounded-md border border-primary/40 bg-background px-3 py-2 text-sm shadow-lg">
             <GripVertical className="h-3.5 w-3.5 text-muted-foreground" />
             Moving item…
