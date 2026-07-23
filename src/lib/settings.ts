@@ -111,13 +111,23 @@ export function setScopedItem(base: string, value: string) {
 // is the built-in default (no attribute override needed) — a pre-paint inline
 // script in the root layout sets the attribute before first paint to avoid a
 // palette flash, mirroring how next-themes handles the light/dark class.
-export type PaletteId = "parchment" | "mono" | "ocean" | "forest";
+export type PaletteId =
+  | "parchment"
+  | "mono"
+  | "ocean"
+  | "forest"
+  | "soft-beach"
+  | "purple90s"
+  | "bright-power";
 
 export const PALETTE_OPTIONS: { id: PaletteId; label: string }[] = [
   { id: "parchment", label: "Parchment" },
   { id: "mono", label: "Black & white" },
   { id: "ocean", label: "Ocean" },
   { id: "forest", label: "Forest" },
+  { id: "soft-beach", label: "Soft Beach" },
+  { id: "purple90s", label: "Purple 90's" },
+  { id: "bright-power", label: "Bright Power" },
 ];
 
 export const PALETTE_DEFAULT: PaletteId = "parchment";

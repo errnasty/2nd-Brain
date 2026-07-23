@@ -211,6 +211,141 @@
     --brand: 145 50% 58%;
     --brand-foreground: 0 0% 0%;
   }
+
+  /* Soft Beach — sandy neutrals, seafoam-teal accent (light) */
+  :root[data-palette="soft-beach"] {
+    --background: 40 45% 97%;
+    --foreground: 200 18% 15%;
+    --card: 40 45% 97%;
+    --card-foreground: 200 18% 15%;
+    --popover: 40 45% 97%;
+    --popover-foreground: 200 18% 15%;
+    --primary: 200 18% 15%;
+    --primary-foreground: 40 45% 97%;
+    --secondary: 38 38% 92%;
+    --secondary-foreground: 200 18% 15%;
+    --muted: 38 38% 92%;
+    --muted-foreground: 200 10% 42%;
+    --accent: 172 32% 90%;
+    --accent-foreground: 200 18% 15%;
+    --border: 36 28% 86%;
+    --input: 36 28% 86%;
+    --ring: 175 55% 40%;
+    --brand: 175 55% 40%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Soft Beach (dark) */
+  .dark[data-palette="soft-beach"] {
+    --background: 0 0% 0%;
+    --foreground: 40 20% 90%;
+    --card: 0 0% 0%;
+    --card-foreground: 40 20% 90%;
+    --popover: 200 18% 7%;
+    --popover-foreground: 40 20% 90%;
+    --primary: 40 20% 90%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 200 12% 14%;
+    --secondary-foreground: 40 20% 90%;
+    --muted: 200 12% 14%;
+    --muted-foreground: 40 8% 58%;
+    --accent: 175 16% 16%;
+    --accent-foreground: 40 20% 90%;
+    --border: 200 12% 17%;
+    --input: 200 12% 17%;
+    --ring: 175 55% 55%;
+    --brand: 175 55% 55%;
+    --brand-foreground: 0 0% 0%;
+  }
+
+  /* Purple 90's — retro violet accent, lavender neutrals (light) */
+  :root[data-palette="purple90s"] {
+    --background: 280 28% 98%;
+    --foreground: 280 32% 14%;
+    --card: 280 28% 98%;
+    --card-foreground: 280 32% 14%;
+    --popover: 280 28% 98%;
+    --popover-foreground: 280 32% 14%;
+    --primary: 280 32% 14%;
+    --primary-foreground: 280 28% 98%;
+    --secondary: 276 26% 93%;
+    --secondary-foreground: 280 32% 14%;
+    --muted: 276 26% 93%;
+    --muted-foreground: 280 12% 45%;
+    --accent: 286 42% 92%;
+    --accent-foreground: 280 32% 14%;
+    --border: 280 22% 87%;
+    --input: 280 22% 87%;
+    --ring: 275 70% 50%;
+    --brand: 275 70% 50%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Purple 90's (dark) */
+  .dark[data-palette="purple90s"] {
+    --background: 0 0% 0%;
+    --foreground: 280 16% 90%;
+    --card: 0 0% 0%;
+    --card-foreground: 280 16% 90%;
+    --popover: 280 32% 8%;
+    --popover-foreground: 280 16% 90%;
+    --primary: 280 16% 90%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 280 22% 15%;
+    --secondary-foreground: 280 16% 90%;
+    --muted: 280 22% 15%;
+    --muted-foreground: 280 10% 60%;
+    --accent: 280 26% 18%;
+    --accent-foreground: 280 16% 90%;
+    --border: 280 22% 19%;
+    --input: 280 22% 19%;
+    --ring: 280 85% 72%;
+    --brand: 280 85% 72%;
+    --brand-foreground: 0 0% 0%;
+  }
+
+  /* Bright Power — bold red-orange accent on a clean, high-contrast base (light) */
+  :root[data-palette="bright-power"] {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 8%;
+    --primary: 0 0% 8%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 95%;
+    --secondary-foreground: 0 0% 8%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 10 90% 94%;
+    --accent-foreground: 0 0% 8%;
+    --border: 0 0% 87%;
+    --input: 0 0% 87%;
+    --ring: 8 85% 52%;
+    --brand: 8 85% 52%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Bright Power (dark) */
+  .dark[data-palette="bright-power"] {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 92%;
+    --card: 0 0% 0%;
+    --card-foreground: 0 0% 92%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 92%;
+    --primary: 0 0% 92%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 14%;
+    --secondary-foreground: 0 0% 92%;
+    --muted: 0 0% 14%;
+    --muted-foreground: 0 0% 58%;
+    --accent: 8 30% 16%;
+    --accent-foreground: 0 0% 92%;
+    --border: 0 0% 17%;
+    --input: 0 0% 17%;
+    --ring: 8 90% 62%;
+    --brand: 8 90% 62%;
+    --brand-foreground: 0 0% 0%;
+  }
 }
 
 @layer base {

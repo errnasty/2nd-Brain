@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-p",
+    date: "July 23, 2026",
+    title: "Three new colour themes, and a tidier theme picker",
+    tag: "feature",
+    summary:
+      "Added Soft Beach, Purple 90's, and Bright Power to the colour theme options in Settings. The theme picker is now a compact dropdown instead of a row of buttons, so it fits comfortably on mobile screens too.",
+  },
+  {
     id: "2026-07-23-o",
     date: "July 23, 2026",
     title: "Directory bug fixes and reliability improvements",

@@ -47,6 +47,9 @@ const PALETTE_SWATCH: Record<PaletteId, string> = {
   mono: "linear-gradient(135deg, #f4f4f4 0 50%, #111 50% 100%)",
   ocean: "hsl(214 90% 48%)",
   forest: "hsl(148 55% 38%)",
+  "soft-beach": "hsl(175 55% 40%)",
+  purple90s: "hsl(275 70% 50%)",
+  "bright-power": "hsl(8 85% 52%)",
 };
 
 export function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
@@ -169,28 +172,46 @@ export function SettingsForm({ serverAiModel = null }: { serverAiModel?: string 
         <Separator />
 
         <Row title="Colour theme" desc="Applies in both light and dark mode.">
-          <div className="flex flex-wrap items-center justify-end gap-1 rounded-md border border-border p-0.5">
-            {PALETTE_OPTIONS.map((p) => {
-              const active = palette === p.id;
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => choosePalette(p.id)}
-                  className={cn(
-                    "flex items-center gap-1.5 rounded px-2.5 py-1 text-xs transition-colors",
-                    active ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
+          {/* A dropdown (not an inline button bar) so this scales past a
+              handful of palettes without overflowing on mobile widths —
+              matches the "Reading font" picker below. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="h-8 min-w-[9rem] justify-between gap-2">
+                <span className="flex items-center gap-1.5">
                   <span
                     className="inline-block h-3 w-3 shrink-0 rounded-full border border-border"
-                    style={{ background: PALETTE_SWATCH[p.id] }}
+                    style={{ background: PALETTE_SWATCH[palette] }}
                     aria-hidden
                   />
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
+                  {PALETTE_OPTIONS.find((p) => p.id === palette)?.label}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              {PALETTE_OPTIONS.map((p) => {
+                const active = palette === p.id;
+                return (
+                  <DropdownMenuItem
+                    key={p.id}
+                    onClick={() => choosePalette(p.id)}
+                    className="flex items-center justify-between gap-2"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span
+                        className="inline-block h-3 w-3 shrink-0 rounded-full border border-border"
+                        style={{ background: PALETTE_SWATCH[p.id] }}
+                        aria-hidden
+                      />
+                      {p.label}
+                    </span>
+                    {active && <Check className="h-3.5 w-3.5 shrink-0" />}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </Row>
 
         <Separator />
