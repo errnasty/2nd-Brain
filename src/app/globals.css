@@ -211,6 +211,165 @@
     --brand: 145 50% 58%;
     --brand-foreground: 0 0% 0%;
   }
+
+  /* Soft Beach — sandy neutrals, seafoam-teal accent (light) */
+  /* Soft Beach — derived from the literal 5-colour reference palette
+     ("Minimal Colors, Soft Beach" by Duminda Perera): Bright Blue #51e2f5,
+     Blue Green #9df9ef, Dusty White #edf756, Pink Sand #ffa8b6, Dark Sand
+     #a28089 (all shown as-is in the theme picker — see PALETTE_OPTIONS in
+     lib/settings.ts). Bright Blue anchors brand/ring/accent, Blue Green
+     anchors the background/foreground hue, Pink Sand anchors secondary,
+     and Dark Sand anchors the muted-foreground/border/popover hue. Dusty
+     White (a vivid yellow-green, despite the name) isn't pushed into a
+     text/surface role — at that saturation it would hurt legibility — so
+     it stays visible only in the picker's swatch, true to the source.
+     Light: */
+  :root[data-palette="soft-beach"] {
+    --background: 174 40% 97%;
+    --foreground: 344 20% 16%;
+    --card: 174 40% 97%;
+    --card-foreground: 344 20% 16%;
+    --popover: 174 40% 97%;
+    --popover-foreground: 344 20% 16%;
+    --primary: 344 20% 16%;
+    --primary-foreground: 174 40% 97%;
+    --secondary: 350 55% 94%;
+    --secondary-foreground: 344 20% 16%;
+    --muted: 174 30% 93%;
+    --muted-foreground: 344 10% 45%;
+    --accent: 187 55% 92%;
+    --accent-foreground: 344 20% 16%;
+    --border: 344 15% 85%;
+    --input: 344 15% 85%;
+    --ring: 187 80% 48%;
+    --brand: 187 80% 48%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Soft Beach (dark) */
+  .dark[data-palette="soft-beach"] {
+    --background: 0 0% 0%;
+    --foreground: 174 25% 90%;
+    --card: 0 0% 0%;
+    --card-foreground: 174 25% 90%;
+    --popover: 344 15% 7%;
+    --popover-foreground: 174 25% 90%;
+    --primary: 174 25% 90%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 350 15% 14%;
+    --secondary-foreground: 174 25% 90%;
+    --muted: 350 15% 14%;
+    --muted-foreground: 344 8% 58%;
+    --accent: 187 20% 16%;
+    --accent-foreground: 174 25% 90%;
+    --border: 344 15% 17%;
+    --input: 344 15% 17%;
+    --ring: 187 89% 64%;
+    --brand: 187 89% 64%;
+    --brand-foreground: 0 0% 0%;
+  }
+
+  /* Purple 90's — derived from the literal 5-colour reference palette
+     ("Minimal Colors – Purple 90's Color Scheme", Purple Blue / Slate White,
+     by Duminda Perera): Ice Cold #a0d2eb, Freeze Purple #e5eaf5, Medium
+     Purple #d0bdf4, Purple Pain #8458b3, Heavy Purple #a28089 (shown as-is
+     in the theme picker). Purple Pain anchors brand/ring/primary ink, Freeze
+     Purple anchors background, Ice Cold + Medium Purple anchor the two
+     secondary/muted/accent tints, and Heavy Purple anchors muted-foreground
+     and border. Light: */
+  :root[data-palette="purple90s"] {
+    --background: 221 45% 97%;
+    --foreground: 269 25% 16%;
+    --card: 221 45% 97%;
+    --card-foreground: 269 25% 16%;
+    --popover: 221 45% 97%;
+    --popover-foreground: 269 25% 16%;
+    --primary: 269 25% 16%;
+    --primary-foreground: 221 45% 97%;
+    --secondary: 200 40% 94%;
+    --secondary-foreground: 269 25% 16%;
+    --muted: 200 40% 94%;
+    --muted-foreground: 344 10% 45%;
+    --accent: 261 50% 92%;
+    --accent-foreground: 269 25% 16%;
+    --border: 344 15% 85%;
+    --input: 344 15% 85%;
+    --ring: 269 45% 50%;
+    --brand: 269 45% 50%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Purple 90's (dark) */
+  .dark[data-palette="purple90s"] {
+    --background: 0 0% 0%;
+    --foreground: 261 20% 90%;
+    --card: 0 0% 0%;
+    --card-foreground: 261 20% 90%;
+    --popover: 269 20% 8%;
+    --popover-foreground: 261 20% 90%;
+    --primary: 261 20% 90%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 231 15% 14%;
+    --secondary-foreground: 261 20% 90%;
+    --muted: 231 15% 14%;
+    --muted-foreground: 344 8% 58%;
+    --accent: 269 20% 18%;
+    --accent-foreground: 261 20% 90%;
+    --border: 344 15% 19%;
+    --input: 344 15% 19%;
+    --ring: 269 55% 68%;
+    --brand: 269 55% 68%;
+    --brand-foreground: 0 0% 0%;
+  }
+
+  /* Bright Power — derived from the literal 5-colour reference palette
+     ("Bright Power", by Duminda Perera): Yass Queen #ff1d58, Sister Sister
+     #f75990, Crown Yellow #fff685, Blue Light #00ddff, Brutal Blue #0049b7
+     (shown as-is in the theme picker). Brutal Blue anchors brand/ring (best
+     contrast for a solid CTA); Crown Yellow, Sister Sister, and Blue Light
+     tint the secondary/muted/accent surfaces respectively, on a clean
+     high-contrast neutral base. Light: */
+  :root[data-palette="bright-power"] {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 8%;
+    --primary: 0 0% 8%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 56 70% 94%;
+    --secondary-foreground: 0 0% 8%;
+    --muted: 339 55% 95%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 188 65% 93%;
+    --accent-foreground: 0 0% 8%;
+    --border: 0 0% 87%;
+    --input: 0 0% 87%;
+    --ring: 216 100% 38%;
+    --brand: 216 100% 38%;
+    --brand-foreground: 0 0% 100%;
+  }
+  /* Bright Power (dark) */
+  .dark[data-palette="bright-power"] {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 92%;
+    --card: 0 0% 0%;
+    --card-foreground: 0 0% 92%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 92%;
+    --primary: 0 0% 92%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 340 12% 14%;
+    --secondary-foreground: 0 0% 92%;
+    --muted: 340 12% 14%;
+    --muted-foreground: 0 0% 58%;
+    --accent: 188 25% 16%;
+    --accent-foreground: 0 0% 92%;
+    --border: 0 0% 17%;
+    --input: 0 0% 17%;
+    --ring: 216 95% 62%;
+    --brand: 216 95% 62%;
+    --brand-foreground: 0 0% 0%;
+  }
 }
 
 @layer base {

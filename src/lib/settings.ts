@@ -111,13 +111,41 @@ export function setScopedItem(base: string, value: string) {
 // is the built-in default (no attribute override needed) — a pre-paint inline
 // script in the root layout sets the attribute before first paint to avoid a
 // palette flash, mirroring how next-themes handles the light/dark class.
-export type PaletteId = "parchment" | "mono" | "ocean" | "forest";
+export type PaletteId =
+  | "parchment"
+  | "mono"
+  | "ocean"
+  | "forest"
+  | "soft-beach"
+  | "purple90s"
+  | "bright-power";
 
-export const PALETTE_OPTIONS: { id: PaletteId; label: string }[] = [
+export const PALETTE_OPTIONS: { id: PaletteId; label: string; swatches?: string[] }[] = [
   { id: "parchment", label: "Parchment" },
   { id: "mono", label: "Black & white" },
   { id: "ocean", label: "Ocean" },
   { id: "forest", label: "Forest" },
+  {
+    id: "soft-beach",
+    label: "Soft Beach",
+    // Literal 5-colour reference palette ("Minimal Colors, Soft Beach" by
+    // Duminda Perera) — shown as-is in the picker so more than one colour is
+    // visible per theme, not just the single derived --brand accent.
+    swatches: ["#51e2f5", "#9df9ef", "#edf756", "#ffa8b6", "#a28089"],
+  },
+  {
+    id: "purple90s",
+    label: "Purple 90's",
+    // "Minimal Colors – Purple 90's Color Scheme" (Purple Blue, Slate White)
+    // by Duminda Perera.
+    swatches: ["#a0d2eb", "#e5eaf5", "#d0bdf4", "#8458b3", "#a28089"],
+  },
+  {
+    id: "bright-power",
+    label: "Bright Power",
+    // "Bright Power" by Duminda Perera.
+    swatches: ["#ff1d58", "#f75990", "#fff685", "#00ddff", "#0049b7"],
+  },
 ];
 
 export const PALETTE_DEFAULT: PaletteId = "parchment";
