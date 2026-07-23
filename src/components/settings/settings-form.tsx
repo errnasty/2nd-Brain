@@ -42,15 +42,40 @@ import { updateUserSettingsAction } from "@/lib/settings/actions";
 
 // Representative swatch per palette (the CSS vars are scoped to :root/.dark, so
 // a swatch can't read them here — these mirror each palette's --brand accent).
+// Only used as a fallback for palettes without a literal `swatches` list (see
+// PALETTE_OPTIONS) — those render every named colour instead of one dot.
 const PALETTE_SWATCH: Record<PaletteId, string> = {
   parchment: "hsl(30 72% 45%)",
   mono: "linear-gradient(135deg, #f4f4f4 0 50%, #111 50% 100%)",
   ocean: "hsl(214 90% 48%)",
   forest: "hsl(148 55% 38%)",
-  "soft-beach": "hsl(175 55% 40%)",
-  purple90s: "hsl(275 70% 50%)",
-  "bright-power": "hsl(8 85% 52%)",
+  "soft-beach": "hsl(187 80% 48%)",
+  purple90s: "hsl(269 45% 50%)",
+  "bright-power": "hsl(216 100% 38%)",
 };
+
+/** A single dot for palettes with just one representative accent, or a small
+ *  multi-colour strip for palettes with a literal reference palette (e.g.
+ *  "Soft Beach") — so picking a theme shows more than one colour where the
+ *  source palette actually has more than one. */
+function PaletteSwatch({ id, swatches }: { id: PaletteId; swatches?: string[] }) {
+  if (swatches && swatches.length > 1) {
+    return (
+      <span className="flex h-3 w-7 shrink-0 overflow-hidden rounded-full border border-border">
+        {swatches.map((hex, i) => (
+          <span key={i} className="h-full flex-1" style={{ background: hex }} />
+        ))}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-block h-3 w-3 shrink-0 rounded-full border border-border"
+      style={{ background: PALETTE_SWATCH[id] }}
+      aria-hidden
+    />
+  );
+}
 
 export function Row({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
   return (
@@ -179,11 +204,7 @@ export function SettingsForm({ serverAiModel = null }: { serverAiModel?: string 
             <DropdownMenuTrigger asChild>
               <Button size="sm" variant="outline" className="h-8 min-w-[9rem] justify-between gap-2">
                 <span className="flex items-center gap-1.5">
-                  <span
-                    className="inline-block h-3 w-3 shrink-0 rounded-full border border-border"
-                    style={{ background: PALETTE_SWATCH[palette] }}
-                    aria-hidden
-                  />
+                  <PaletteSwatch id={palette} swatches={PALETTE_OPTIONS.find((p) => p.id === palette)?.swatches} />
                   {PALETTE_OPTIONS.find((p) => p.id === palette)?.label}
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 opacity-60" />
@@ -199,11 +220,7 @@ export function SettingsForm({ serverAiModel = null }: { serverAiModel?: string 
                     className="flex items-center justify-between gap-2"
                   >
                     <span className="flex items-center gap-2">
-                      <span
-                        className="inline-block h-3 w-3 shrink-0 rounded-full border border-border"
-                        style={{ background: PALETTE_SWATCH[p.id] }}
-                        aria-hidden
-                      />
+                      <PaletteSwatch id={p.id} swatches={p.swatches} />
                       {p.label}
                     </span>
                     {active && <Check className="h-3.5 w-3.5 shrink-0" />}

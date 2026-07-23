@@ -32,7 +32,7 @@ export const CHANGELOG: ChangelogEntry[] = [
     title: "Three new colour themes, and a tidier theme picker",
     tag: "feature",
     summary:
-      "Added Soft Beach, Purple 90's, and Bright Power to the colour theme options in Settings. The theme picker is now a compact dropdown instead of a row of buttons, so it fits comfortably on mobile screens too.",
+      "Added Soft Beach, Purple 90's, and Bright Power to the colour theme options in Settings — each one now shows its actual reference colours right in the picker, not just a single dot. The picker is also a compact dropdown instead of a row of buttons, so it fits comfortably on mobile screens too.",
   },
   {
     id: "2026-07-23-o",
