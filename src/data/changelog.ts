@@ -27,6 +27,30 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-n",
+    date: "July 23, 2026",
+    title: "Create folders right where you're browsing",
+    tag: "feature",
+    summary:
+      "You can now add a new subfolder directly from inside the folder you're viewing, or with a quick hover button in the sidebar tree — no need to jump back to the top-level folder list.",
+  },
+  {
+    id: "2026-07-23-m",
+    date: "July 23, 2026",
+    title: "Breadcrumbs, drag-to-nest, and bulk folder actions",
+    tag: "feature",
+    summary:
+      "The Directory now shows a breadcrumb trail so you always know where you are, and you can drag folder tiles onto each other to nest them. Select multiple folders at once to move or delete them together.",
+  },
+  {
+    id: "2026-07-23-l",
+    date: "July 23, 2026",
+    title: "Recently viewed, filtering, and saved views in the sidebar",
+    tag: "feature",
+    summary:
+      "The Directory sidebar now keeps a short list of recently opened folders and notes, lets you filter the folder tree by typing, and lets you save a combination of tags as a named view you can jump back to.",
+  },
+  {
     id: "2026-07-23-i",
     date: "July 23, 2026",
     title: "Browse folders like a file tree",

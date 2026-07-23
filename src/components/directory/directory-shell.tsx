@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useDraggable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, FolderClosed, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
+import { useDraggable, useDroppable } from "@dnd-kit/core";
+import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -22,6 +22,7 @@ import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   bulkDeleteDirectoryItemsAction,
   bulkMoveDirectoryItemsAction,
+  createDirectoryFolderAction,
   createNoteAction,
   fetchDirectoryItemByIdAction,
   loadMoreDirectoryItemsAction,
@@ -38,8 +39,10 @@ import {
 import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
 import { toast } from "sonner";
+import { usePromptText } from "@/components/ui/app-dialogs";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
+import { FolderBulkActionBar } from "./folder-bulk-action-bar";
 import { DirectoryBoard } from "./directory-board";
 import { GapsDialog } from "./gaps-dialog";
 import { CurriculumDialog } from "./curriculum-dialog";
@@ -93,6 +96,7 @@ export function DirectoryShell({
   wipLimits?: Record<string, number>;
 }) {
   const router = useRouter();
+  const promptText = usePromptText();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // The item just created via "New note" — ItemViewer opens it straight into
   // edit mode with the title selected, so typing replaces "Untitled note"
@@ -188,6 +192,7 @@ export function DirectoryShell({
   const activeTagsKey = activeTagIds.join(",");
   useEffect(() => {
     setCheckedIds(new Set());
+    setCheckedFolderIds(new Set());
   }, [activeFolder, activeTagsKey]);
 
   const toggleChecked = useCallback((id: string) => {
@@ -200,6 +205,18 @@ export function DirectoryShell({
   }, []);
 
   const clearSelection = useCallback(() => setCheckedIds(new Set()), []);
+
+  // Bulk selection over the child-folder tiles (separate from item selection).
+  const [checkedFolderIds, setCheckedFolderIds] = useState<Set<string>>(new Set());
+  const toggleFolderChecked = useCallback((id: string) => {
+    setCheckedFolderIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearFolderSelection = useCallback(() => setCheckedFolderIds(new Set()), []);
 
   const urlItem = useSearchParams().get("item");
   useEffect(() => {
@@ -465,6 +482,35 @@ export function DirectoryShell({
     () => (activeFolder && activeFolder !== "unsorted" ? folders.filter((f) => f.parentId === activeFolder) : []),
     [folders, activeFolder],
   );
+  const showTileRow = !!activeFolder && activeFolder !== "unsorted";
+
+  async function createChildFolder() {
+    if (!activeFolder || activeFolder === "unsorted") return;
+    const name = (await promptText({ title: "New folder", placeholder: "Folder name" }))?.trim();
+    if (!name) return;
+    startTransition(async () => {
+      const r = await createDirectoryFolderAction(name, activeFolder);
+      if (r.ok) {
+        toast.success(`Folder "${name}" created`);
+        router.refresh();
+      } else {
+        toast.error(r.error);
+      }
+    });
+  }
+
+  // Ancestor chain for the current folder (breadcrumb), root-first.
+  const folderPath = useMemo(() => {
+    if (!activeFolder || activeFolder === "unsorted") return [];
+    const byId = new Map(folders.map((f) => [f.id, f]));
+    const path: DirectoryFolder[] = [];
+    let cur = byId.get(activeFolder);
+    while (cur) {
+      path.unshift(cur);
+      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+    }
+    return path;
+  }, [folders, activeFolder]);
 
   // Inline folder rename from the header (real folders only).
   const canRename = !!activeFolder && activeFolder !== "unsorted" && activeTagIds.length === 0;
@@ -507,16 +553,35 @@ export function DirectoryShell({
       >
         {/* ── Editorial header ───────────────────────────────────── */}
         <header className="border-b border-border px-4 pb-3 pt-2 lg:pt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 editorial-eyebrow">
+          <div className="mb-1.5 flex items-center gap-1.5 overflow-x-auto editorial-eyebrow">
             {/* Mobile back */}
             <button
               onClick={() => router.push("/directory")}
-              className="-ml-0.5 hover:text-foreground lg:hidden"
+              className="-ml-0.5 shrink-0 hover:text-foreground lg:hidden"
               title="Folders"
             >
               <ChevronLeft className="h-3 w-3" />
             </button>
-            <span>Directory · {headerMeta}</span>
+            {folderPath.length > 0 ? (
+              <nav className="flex min-w-0 items-center gap-1">
+                <button onClick={() => router.push("/directory")} className="shrink-0 hover:text-foreground">
+                  Directory
+                </button>
+                {folderPath.slice(0, -1).map((f) => (
+                  <span key={f.id} className="flex shrink-0 items-center gap-1">
+                    <span className="opacity-50">/</span>
+                    <button
+                      onClick={() => router.push(`/directory?folder=${f.id}`)}
+                      className="max-w-[10rem] truncate hover:text-foreground"
+                    >
+                      {f.name}
+                    </button>
+                  </span>
+                ))}
+              </nav>
+            ) : (
+              <span>Directory · {headerMeta}</span>
+            )}
           </div>
           <div className="flex items-baseline justify-between gap-3">
             {renaming ? (
@@ -628,23 +693,20 @@ export function DirectoryShell({
           </div>
         </div>
         <div className="h-px bg-border" />
-        {childFolders.length > 0 && (
+        {showTileRow && (
           <div className="grid grid-cols-2 gap-2 border-b border-border p-3 sm:grid-cols-3">
             {childFolders.map((f) => (
-              <button
+              <ChildFolderTile
                 key={f.id}
-                onClick={() => router.push(`/directory?folder=${f.id}`)}
-                className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-brand/40 hover:bg-accent"
-              >
-                <FolderClosed className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{f.name}</span>
-                {(folderCounts[f.id] ?? 0) > 0 && (
-                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-                    {folderCounts[f.id]}
-                  </span>
-                )}
-              </button>
+                folder={f}
+                count={folderCounts[f.id] ?? 0}
+                checked={checkedFolderIds.has(f.id)}
+                selectionActive={checkedFolderIds.size > 0}
+                onOpen={() => router.push(`/directory?folder=${f.id}`)}
+                onToggleCheck={() => toggleFolderChecked(f.id)}
+              />
             ))}
+            <NewFolderTile onCreate={createChildFolder} />
           </div>
         )}
         {allItems.length === 0 ? (
@@ -730,6 +792,15 @@ export function DirectoryShell({
         onClear={clearSelection}
         onDelete={deleteItemsWithUndo}
         onMove={moveItemsWithUndo}
+      />
+
+      <FolderBulkActionBar
+        selectedIds={Array.from(checkedFolderIds)}
+        folders={folders}
+        folderCounts={folderCounts}
+        itemSelectionActive={checkedIds.size > 0}
+        onClear={clearFolderSelection}
+        onChanged={() => router.refresh()}
       />
 
       <GapsDialog
@@ -1048,6 +1119,90 @@ function DraggableItemRow({
         <ItemRowMenuItems prims={CONTEXT_MENU_PRIMITIVES} {...menuProps} />
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+/** A child-folder tile in the content pane: click to browse in, drag the
+ *  folder icon to nest it elsewhere (or drop items/other folders onto it),
+ *  and a hover/selection checkbox for bulk actions. Reuses the same
+ *  `folder-drag:<id>` / `folder:<id>` dnd-kit id conventions as the sidebar's
+ *  FolderRow, so it works with the existing DirectoryDndShell drop handling. */
+function ChildFolderTile({
+  folder,
+  count,
+  checked,
+  selectionActive,
+  onOpen,
+  onToggleCheck,
+}: {
+  folder: DirectoryFolder;
+  count: number;
+  checked: boolean;
+  selectionActive: boolean;
+  onOpen: () => void;
+  onToggleCheck: () => void;
+}) {
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `folder:${folder.id}` });
+  const {
+    attributes: dragAttrs,
+    listeners: dragListeners,
+    setNodeRef: setDragRef,
+    isDragging,
+  } = useDraggable({ id: `folder-drag:${folder.id}` });
+
+  function setNodeRef(node: HTMLDivElement | null) {
+    setDropRef(node);
+    setDragRef(node);
+  }
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        "group flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2.5 transition-colors hover:border-brand/40 hover:bg-accent",
+        isOver && "ring-2 ring-primary",
+        isDragging && "opacity-40",
+      )}
+    >
+      <div
+        className={cn(
+          "shrink-0 transition-opacity",
+          checked || selectionActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+        )}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Checkbox checked={checked} onCheckedChange={onToggleCheck} aria-label={`Select ${folder.name}`} />
+      </div>
+      <span
+        {...dragAttrs}
+        {...dragListeners}
+        className="cursor-grab shrink-0 active:cursor-grabbing"
+        onClick={(e) => e.preventDefault()}
+        aria-label="Drag to nest folder"
+      >
+        <FolderClosed className="h-4 w-4 text-muted-foreground" />
+      </span>
+      <button onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{folder.name}</span>
+        {count > 0 && (
+          <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">{count}</span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+/** Dashed "+ New folder" tile — creates a subfolder nested directly inside
+ *  the folder currently being browsed, no sidebar round-trip needed. */
+function NewFolderTile({ onCreate }: { onCreate: () => void }) {
+  return (
+    <button
+      onClick={onCreate}
+      className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-border px-3 py-2.5 text-muted-foreground transition-colors hover:border-brand/40 hover:bg-accent hover:text-foreground"
+    >
+      <FolderPlus className="h-4 w-4 shrink-0" />
+      <span className="text-[13px] font-medium">New folder</span>
+    </button>
   );
 }
 
