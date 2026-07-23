@@ -49,19 +49,23 @@ export function buildAgentTools(userId: string, sink: SourceSink) {
         "Search the user's own library (notes, saved articles, uploaded documents) for items relevant to a query. Returns matches each prefixed with a [n] citation number you can cite and pass to read_item.",
       parameters: z.object({ query: z.string().min(1).describe("What to search for") }),
       execute: async ({ query }) => {
-        const hits = await retrieveFromDirectory(userId, query, 8);
-        if (hits.length === 0) return "No matching items in the user's library.";
-        return hits
-          .map((h) => {
-            const n = sink.cite({
-              directoryItemId: h.directoryItemId,
-              title: h.title,
-              kind: h.kind,
-              similarity: h.similarity,
-            });
-            return `[${n}] (${h.kind}) ${h.title}\n${(h.snippet ?? "").slice(0, 300)}`;
-          })
-          .join("\n\n");
+        try {
+          const hits = await retrieveFromDirectory(userId, query, 8);
+          if (hits.length === 0) return "No matching items in the user's library.";
+          return hits
+            .map((h) => {
+              const n = sink.cite({
+                directoryItemId: h.directoryItemId,
+                title: h.title,
+                kind: h.kind,
+                similarity: h.similarity,
+              });
+              return `[${n}] (${h.kind}) ${h.title}\n${(h.snippet ?? "").slice(0, 300)}`;
+            })
+            .join("\n\n");
+        } catch {
+          return "Library search is unavailable right now.";
+        }
       },
     }),
     read_item: tool({
@@ -71,16 +75,26 @@ export function buildAgentTools(userId: string, sink: SourceSink) {
       execute: async ({ citations }) => {
         const ids = sink.idsFor(citations);
         if (ids.length === 0) return "Those citation numbers aren't known yet — run search_library first.";
-        const contents = await fetchItemContents(userId, ids);
-        if (contents.length === 0) return "Couldn't read those items.";
-        return contents.map((c) => `[${c.title}]\n${c.content.slice(0, 3000)}`).join("\n\n---\n\n");
+        try {
+          const contents = await fetchItemContents(userId, ids);
+          if (contents.length === 0) return "Couldn't read those items.";
+          return contents.map((c) => `[${c.title}]\n${c.content.slice(0, 3000)}`).join("\n\n---\n\n");
+        } catch {
+          return "Couldn't read those items right now.";
+        }
       },
     }),
     list_directory: tool({
       description:
         "List the folder/file structure of the user's library (titles and locations only, no content). Use to see what exists and where.",
       parameters: z.object({}),
-      execute: async () => (await buildDirectoryMap(userId)).slice(0, 4000),
+      execute: async () => {
+        try {
+          return (await buildDirectoryMap(userId)).slice(0, 4000);
+        } catch {
+          return "The library structure is unavailable right now.";
+        }
+      },
     }),
     web_search: tool({
       description:

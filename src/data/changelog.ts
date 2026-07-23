@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-e",
+    date: "July 23, 2026",
+    title: "Ask is faster and more reliable",
+    tag: "fix",
+    summary:
+      "A round of Ask fixes: asking a question right after creating a study plan no longer errors, the assistant now remembers facts in normal chats (not just Agent mode), Agent mode works whichever provider you use, and answers stream more smoothly.",
+    items: [
+      "Fixed an error that could occur on your next question after a study plan was created.",
+      "Suggestions and follow-up chips now respect the mode you're in (Agent / Study plan).",
+      "Remembered facts are used in ordinary Ask chats too, not only Agent mode.",
+      "Faster: skips unnecessary work on self-contained questions and overlaps setup steps.",
+    ],
+  },
+  {
     id: "2026-07-23-d",
     date: "July 23, 2026",
     title: "Ask can now work in multiple steps",

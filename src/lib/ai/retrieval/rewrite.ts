@@ -9,6 +9,17 @@ const RewriteSchema = z.object({
 
 export type RewrittenQuery = { queries: string[] };
 
+// Referential terms that need the conversation to resolve ("the second one",
+// "explain it", "those"). Their ABSENCE in a reasonably long question means it's
+// already self-contained, so we can skip the rewrite model call entirely.
+const REFERENTIAL =
+  /\b(it|its|it's|that|those|these|they|them|their|this|he|him|his|she|her|hers|the (?:first|second|third|fourth|last|former|latter|one|other|previous|above))\b/i;
+
+export function looksSelfContained(question: string): boolean {
+  const words = question.trim().split(/\s+/).filter(Boolean);
+  return words.length >= 8 && !REFERENTIAL.test(question);
+}
+
 /**
  * Rewrite a conversational question into standalone search queries.
  *
@@ -28,7 +39,9 @@ export async function rewriteQuery(
   history: { role: "user" | "assistant"; content: string }[],
 ): Promise<RewrittenQuery> {
   const raw: RewrittenQuery = { queries: [question] };
-  if (!aiAvailable() || history.length === 0) return raw;
+  // Skip the model call when there's nothing to resolve: no history, or a
+  // question that's already long and free of referential terms.
+  if (!aiAvailable() || history.length === 0 || looksSelfContained(question)) return raw;
   try {
     const convo = history
       .slice(-6)
