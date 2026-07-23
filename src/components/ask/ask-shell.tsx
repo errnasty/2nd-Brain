@@ -219,6 +219,7 @@ export function AskShell({
       }
       setDrawerOpen(false);
       setSwitching(true);
+      setError(null);
       try {
         const t = await loadThread(id);
         if (t) {
@@ -382,7 +383,14 @@ export function AskShell({
   }, [refreshing]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    const el = scrollRef.current;
+    if (!el) return;
+    // Only auto-scroll when the user is already near the bottom, so streaming
+    // updates don't yank the view while they read earlier text. Instant, not
+    // smooth — animating a smooth scroll on every streamed frame is janky.
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 140) {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [messages]);
 
   /** Ensure a thread exists before persisting the first turn; returns its id. */
@@ -726,10 +734,19 @@ export function AskShell({
     [messages, streaming, modelId, ensureThread, refreshThreads],
   );
 
+  // Single dispatcher so suggestions, follow-ups, and the composer all honor
+  // the active mode (study plan / agent / plain ask).
+  const run = useCallback(
+    (text: string) => {
+      if (studyMode) sendStudyPlan(text);
+      else if (agentMode) sendAgent(text);
+      else send(text);
+    },
+    [studyMode, agentMode, sendStudyPlan, sendAgent, send],
+  );
+
   function submit() {
-    if (studyMode) sendStudyPlan(input);
-    else if (agentMode) sendAgent(input);
-    else send(input);
+    run(input);
   }
 
   const activeToolCount =
@@ -823,7 +840,7 @@ export function AskShell({
                 <Loader2 className="h-5 w-5 animate-spin" />
               </div>
             ) : messages.length === 0 ? (
-              <Empty onPick={(s) => send(s)} />
+              <Empty onPick={run} />
             ) : (
               <div className="space-y-7">
                 {messages.map((m, i) => (
@@ -837,7 +854,7 @@ export function AskShell({
                     }
                     onOpenSource={openSource}
                     onOpenPath={openPath}
-                    onFollowup={send}
+                    onFollowup={run}
                   />
                 ))}
                 {streaming && (
@@ -1031,7 +1048,10 @@ export function AskShell({
                     <DropdownMenuItem
                       onSelect={(e) => {
                         e.preventDefault();
-                        setStudyMode((s) => !s);
+                        setStudyMode((s) => {
+                          if (!s) setAgentMode(false);
+                          return !s;
+                        });
                       }}
                       className="justify-between"
                     >

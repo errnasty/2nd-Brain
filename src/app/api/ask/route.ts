@@ -14,6 +14,7 @@ import { getChatModel, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { openrouterClient, openrouterKey } from "@/lib/ai/provider";
 import { rewriteQuery } from "@/lib/ai/retrieval/rewrite";
 import { rerankSources, unionByItem } from "@/lib/ai/retrieval/rerank";
+import { memoryBlock } from "@/lib/ai/memory";
 import { streamWebAnswer } from "@/lib/ai/web-answer";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
@@ -141,10 +142,22 @@ export async function POST(req: Request) {
 
   // Recent conversation, capped — used for the query rewrite AND the prompt
   // below. The client sends the whole transcript, so keep it bounded here.
+  // Drop empty-content turns (e.g. a study-plan card, which is an assistant
+  // message with no text) — providers reject empty content blocks. Then trim
+  // any leading assistant turn so the history starts with a user message
+  // (Anthropic requires the first message to be the user).
   const MAX_TURN_CHARS = 4000;
   const history: Message[] = (body.history ?? [])
-    .slice(-6)
-    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }));
+    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }))
+    .filter((m) => m.content.trim().length > 0)
+    .slice(-6);
+  while (history.length > 0 && history[0].role === "assistant") history.shift();
+
+  // Kick off query-INDEPENDENT work (directory map + remembered facts) now, so
+  // it overlaps the rewrite's model call and the vector queries below instead
+  // of running serially after them.
+  const mapPromise = buildDirectoryMap(userId).catch(() => "(Directory map unavailable.)");
+  const memoryPromise = memoryBlock(userId).catch(() => "");
 
   // Conversational query rewrite: resolve follow-up references ("the second
   // one", "it") into a standalone, keyword-rich search query before retrieval,
@@ -156,10 +169,6 @@ export async function POST(req: Request) {
   } catch {
     // fall back to the raw question
   }
-
-  // Kick off the directory map now so its queries overlap retrieval's vector
-  // queries instead of running after them (≈40% fewer serial round-trips).
-  const mapPromise = buildDirectoryMap(userId).catch(() => "(Directory map unavailable.)");
 
   // ── 1. Retrieve relevant context from the Directory ─────────────
   // Pull a wider candidate set (20) than we keep — rerank (1c) narrows it.
@@ -325,6 +334,10 @@ export async function POST(req: Request) {
   const userContent = `DIRECTORY MAP:\n${directoryMap}\n\nQUESTION:\n${question}\n\nCONTEXT:\n${contextBlock}${groundingNote}`;
   const ragHeader = Buffer.from(JSON.stringify(sourceMap)).toString("base64");
 
+  // Remembered facts (started in parallel above) so the assistant recalls what
+  // it's learned about the user across conversations. Fail-soft → "".
+  const memory = await memoryPromise;
+
   // ── Web-enabled path ────────────────────────────────────────────
   // Anthropic native web_search. Directory context (above) stays the priority
   // source; web fills gaps. This path returns a sentinel-framed stream (answer
@@ -334,7 +347,7 @@ export async function POST(req: Request) {
     const webModelId = chosen.provider === "anthropic" ? chosen.id : DEFAULT_CHAT_MODEL;
     const webStream = streamWebAnswer({
       model: webModelId,
-      system: SYSTEM_WEB,
+      system: SYSTEM_WEB + memory,
       userContent,
       history: history.map((m) => ({ role: m.role, content: m.content })),
       signal: req.signal,
@@ -354,7 +367,7 @@ export async function POST(req: Request) {
 
   const result = streamText({
     model,
-    system: SYSTEM,
+    system: SYSTEM + memory,
     messages,
     temperature: 0.3,
     // Stop generating (and stop paying for tokens) the moment the client

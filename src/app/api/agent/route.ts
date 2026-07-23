@@ -71,25 +71,37 @@ export async function POST(req: Request) {
   if (!validated.ok) return new Response(validated.error, { status: validated.status });
   const question = validated.question;
 
-  // Tool-capable model, else fall back to the default (Sonnet) and tell the UI.
+  // Tool-capable model, else fall back to a tool-capable one on an available
+  // provider (works for OpenRouter-only or OpenAI-only setups too) and tell the UI.
   let note: string | null = null;
   let modelId = body.model ?? DEFAULT_CHAT_MODEL;
   if (!isToolCapable(modelId)) {
-    if (!process.env.ANTHROPIC_API_KEY) {
-      return new Response(`${getChatModel(modelId).label} can't run the agent, and no Claude key is configured for fallback.`, { status: 503 });
+    const fallback = process.env.ANTHROPIC_API_KEY
+      ? DEFAULT_CHAT_MODEL // claude-sonnet-4-6 (direct)
+      : openrouterKey()
+        ? "anthropic/claude-sonnet-4.6"
+        : process.env.OPENAI_API_KEY
+          ? "gpt-4o"
+          : null;
+    if (!fallback) {
+      return new Response(`${getChatModel(modelId).label} can't run the agent, and no tool-capable model is configured for fallback.`, { status: 503 });
     }
-    note = `${getChatModel(modelId).label} can't run tools — using ${getChatModel(DEFAULT_CHAT_MODEL).label} for this.`;
-    modelId = DEFAULT_CHAT_MODEL;
+    note = `${getChatModel(modelId).label} can't run tools — using ${getChatModel(fallback).label} for this.`;
+    modelId = fallback;
   }
   const { model, provider } = instantiate(modelId);
   if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) return new Response("ANTHROPIC_API_KEY not configured.", { status: 503 });
   if (provider === "openrouter" && !openrouterKey()) return new Response("OPENROUTER_API_KEY not configured.", { status: 503 });
   if (provider === "openai" && !process.env.OPENAI_API_KEY) return new Response("OPENAI_API_KEY not configured.", { status: 503 });
 
+  // Drop empty-content turns (providers reject empty content blocks) and trim
+  // any leading assistant turn so history starts with a user message.
   const MAX_TURN_CHARS = 4000;
   const history: Message[] = (body.history ?? [])
-    .slice(-6)
-    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }));
+    .map((m) => ({ role: m.role, content: (m.content ?? "").slice(0, MAX_TURN_CHARS) }))
+    .filter((m) => m.content.trim().length > 0)
+    .slice(-6);
+  while (history.length > 0 && history[0].role === "assistant") history.shift();
 
   // Directory map + remembered facts give the agent a starting sense of the
   // library and the user (both fail-soft).
@@ -97,7 +109,10 @@ export async function POST(req: Request) {
     buildDirectoryMap(userId).catch(() => ""),
     memoryBlock(userId).catch(() => ""),
   ]);
-  const system = `${SYSTEM}${memory}\n\nThe user's library structure:\n${map || "(unavailable)"}`;
+  // Give the agent a compact starting sense of the library; it can call
+  // list_directory for the full structure. Truncated to bound prompt tokens.
+  const mapPreview = map ? map.slice(0, 2500) + (map.length > 2500 ? "\n… (call list_directory for more)" : "") : "(unavailable)";
+  const system = `${SYSTEM}${memory}\n\nThe user's library structure (preview):\n${mapPreview}`;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
