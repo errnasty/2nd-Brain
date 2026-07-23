@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-c",
+    date: "July 23, 2026",
+    title: "Ask answers you can trust",
+    tag: "improvement",
+    summary:
+      "The [1], [2] references in an Ask answer are now tappable and jump straight to the note or article they came from. And a new “Verify answers” option double-checks the answer against your sources and flags anything they don't actually support.",
+    items: [
+      "Tap any citation in an answer to open the exact source it's drawn from.",
+      "Turn on “Verify answers” (in the Tools menu) to get a badge on each answer — verified, partly supported, or unsupported — with the specific claims your sources don't back.",
+    ],
+  },
+  {
     id: "2026-07-23-b",
     date: "July 23, 2026",
     title: "Ask gives sharper, more honest answers",

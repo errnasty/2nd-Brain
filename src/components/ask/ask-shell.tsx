@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Markdown } from "@/components/ui/markdown";
+import { CitedMarkdown } from "@/components/ui/cited-markdown";
 import {
   ArrowUp,
   BookmarkPlus,
@@ -24,6 +24,8 @@ import {
   Paperclip,
   Plus,
   RefreshCw,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   SlidersHorizontal,
   Square,
@@ -81,6 +83,10 @@ type StudyPlanResult = {
   toISO: string;
 };
 
+type Verification =
+  | "loading"
+  | { verdict: "supported" | "partial" | "unsupported" | "unknown"; issues: string[] };
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -90,6 +96,7 @@ type Message = {
   usage?: Usage;
   plan?: StudyPlanResult;
   followups?: string[];
+  verification?: Verification;
 };
 
 const SUGGESTIONS = [
@@ -169,6 +176,7 @@ export function AskShell({
   const [error, setError] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string>(DEFAULT_CHAT_MODEL);
   const [web, setWeb] = useState(false);
+  const [verifyMode, setVerifyMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [studyMode, setStudyMode] = useState(false);
   const [deadline, setDeadline] = useState("");
@@ -486,6 +494,35 @@ export function AskShell({
         setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)));
 
         const finalAnswer = displayText(acc);
+
+        // Opt-in faithfulness check — verify the answer against its cited
+        // library sources (non-blocking, fail-soft).
+        if (verifyMode && sources.length > 0 && finalAnswer.trim()) {
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, verification: "loading" } : m)));
+          void fetch("/api/ask/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ answer: finalAnswer, sourceIds: sources.map((s) => s.directoryItemId) }),
+          })
+            .then((r) => r.json())
+            .then((v: { verdict?: string; issues?: string[] }) => {
+              const verdict = (["supported", "partial", "unsupported"].includes(v.verdict ?? "")
+                ? v.verdict
+                : "unknown") as "supported" | "partial" | "unsupported" | "unknown";
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, verification: { verdict, issues: v.issues ?? [] } } : m,
+                ),
+              );
+            })
+            .catch(() => {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId ? { ...m, verification: { verdict: "unknown", issues: [] } } : m,
+                ),
+              );
+            });
+        }
         // Persist the assistant turn + bump this thread to the top of the list.
         if (tid && finalAnswer.trim()) {
           void appendMessage({
@@ -523,7 +560,7 @@ export function AskShell({
         inputRef.current?.focus();
       }
     },
-    [messages, streaming, modelId, web, contextItems, ensureThread, refreshThreads],
+    [messages, streaming, modelId, web, verifyMode, contextItems, ensureThread, refreshThreads],
   );
 
   const sendStudyPlan = useCallback(
@@ -585,7 +622,8 @@ export function AskShell({
     else send(input);
   }
 
-  const activeToolCount = (web ? 1 : 0) + (studyMode ? 1 : 0) + (contextItems.length > 0 ? 1 : 0);
+  const activeToolCount =
+    (web ? 1 : 0) + (studyMode ? 1 : 0) + (verifyMode ? 1 : 0) + (contextItems.length > 0 ? 1 : 0);
 
   return (
     <div className="flex h-full min-h-0">
@@ -855,6 +893,18 @@ export function AskShell({
                     <DropdownMenuItem
                       onSelect={(e) => {
                         e.preventDefault();
+                        setVerifyMode((v) => !v);
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <ShieldCheck className="h-3.5 w-3.5" /> Verify answers
+                      </span>
+                      {verifyMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
                         setStudyMode((s) => !s);
                       }}
                       className="justify-between"
@@ -1071,6 +1121,43 @@ function GroundingMeter({ message }: { message: Message }) {
   );
 }
 
+/** Faithfulness badge — result of the opt-in verify pass against cited sources. */
+function VerificationBadge({ verification }: { verification: Verification }) {
+  const base = "inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wide";
+  if (verification === "loading") {
+    return (
+      <span className={cn(base, "text-muted-foreground")}>
+        <Loader2 className="h-2.5 w-2.5 animate-spin" /> Verifying
+      </span>
+    );
+  }
+  const { verdict, issues } = verification;
+  if (verdict === "supported") {
+    return (
+      <span className={cn(base, "text-brand")} title="Every claim is supported by the cited sources">
+        <ShieldCheck className="h-3 w-3" /> Verified
+      </span>
+    );
+  }
+  if (verdict === "unknown") {
+    return (
+      <span className={cn(base, "text-muted-foreground")} title="Couldn't verify this answer against sources">
+        <ShieldAlert className="h-3 w-3" /> Unverified
+      </span>
+    );
+  }
+  const tip = issues.length ? issues.join("\n• ") : "Some claims go beyond the cited sources";
+  return (
+    <span
+      className={cn(base, verdict === "unsupported" ? "text-destructive" : "text-amber-600 dark:text-amber-400")}
+      title={`• ${tip}`}
+    >
+      <ShieldAlert className="h-3 w-3" /> {verdict === "unsupported" ? "Unsupported" : "Partly supported"}
+      {issues.length > 0 && <span className="tabular-nums">· {issues.length}</span>}
+    </span>
+  );
+}
+
 /** Per-message action row: copy, save as note, save as flashcard, feedback. */
 function MessageActions({ message, question }: { message: Message; question?: string }) {
   const [copied, setCopied] = useState(false);
@@ -1238,10 +1325,26 @@ const MessageBubble = memo(function MessageBubble({
         <div className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           <Sparkles className="h-3 w-3" style={{ color: "hsl(var(--brand))" }} /> Answer
         </div>
-        {message.content && <GroundingMeter message={message} />}
+        <div className="flex items-center gap-3">
+          {message.verification && <VerificationBadge verification={message.verification} />}
+          {message.content && <GroundingMeter message={message} />}
+        </div>
       </div>
       <div className="prose-reader max-w-none text-[15px] leading-[1.7]">
-        {message.content ? <Markdown>{message.content}</Markdown> : <span className="text-muted-foreground italic">…</span>}
+        {message.content ? (
+          <CitedMarkdown
+            citations={(message.sources ?? []).map((s) => ({
+              n: s.n,
+              href: `/directory?item=${s.directoryItemId}`,
+              title: s.title,
+            }))}
+            onNavigate={onOpenPath}
+          >
+            {message.content}
+          </CitedMarkdown>
+        ) : (
+          <span className="text-muted-foreground italic">…</span>
+        )}
       </div>
       {message.usage && message.usage.totalTokens > 0 && (
         <div className="flex items-center gap-1.5 font-mono text-[10px] tabular-nums text-muted-foreground">

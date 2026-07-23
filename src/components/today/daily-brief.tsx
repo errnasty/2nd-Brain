@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Markdown, type Components } from "@/components/ui/markdown";
+import { CitedMarkdown, type Citation } from "@/components/ui/cited-markdown";
 import {
   Bookmark,
   Check,
@@ -521,38 +521,11 @@ export function DailyBrief({
   const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
   const greeting = greetingFor(now);
 
-  // Turn the model's [n] references into in-app links to the cited article.
-  // Only once streaming has finished (sources arrive with the trailing
-  // sentinel), so partial mid-stream text isn't rewritten or mis-linked.
-  const citedContent =
-    !loading && sources.length > 0
-      ? content.replace(/\[(\d+)\]/g, (m: string, num: string) => {
-          const src = sources.find((s) => s.n === Number(num));
-          return src ? `[${m}](#brief-src-${src.id})` : m;
-        })
-      : content;
-  const briefComponents: Components = {
-    a: ({ href, children }) => {
-      if (href && href.startsWith("#brief-src-")) {
-        const id = href.slice("#brief-src-".length);
-        return (
-          <button
-            type="button"
-            onClick={() => router.push(`/feeds?article=${id}`)}
-            className="mx-0.5 rounded bg-brand/10 px-1 align-baseline font-mono text-[0.82em] text-brand no-underline transition-colors hover:bg-brand/20"
-            title="Open this article"
-          >
-            {children}
-          </button>
-        );
-      }
-      return (
-        <a href={href} target="_blank" rel="noopener noreferrer">
-          {children}
-        </a>
-      );
-    },
-  };
+  // Turn the model's [n] references into tappable inline citations. Only once
+  // streaming has finished (sources arrive with the trailing sentinel), so
+  // partial mid-stream text isn't rewritten or mis-linked.
+  const citations: Citation[] =
+    !loading ? sources.map((s) => ({ n: s.n, href: `/feeds?article=${s.id}`, title: s.title })) : [];
 
   return (
     <article className="mx-auto max-w-[1080px] px-1">
@@ -756,7 +729,9 @@ export function DailyBrief({
       {/* ── Brief body ───────────────────────────────────────────── */}
       {content && (
         <div className="prose-brief max-w-[68ch] text-[1.05rem] leading-[1.65]">
-          <Markdown components={briefComponents}>{citedContent}</Markdown>
+          <CitedMarkdown citations={citations} onNavigate={(href) => router.push(href)}>
+            {content}
+          </CitedMarkdown>
           {loading && (
             <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
           )}
