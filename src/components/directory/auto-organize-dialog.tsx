@@ -72,6 +72,11 @@ export function AutoOrganizeDialog({ open, onOpenChange }: { open: boolean; onOp
           ? ` · created ${r.foldersCreated.length} folder${r.foldersCreated.length === 1 ? "" : "s"}: ${r.foldersCreated.join(", ")}`
           : "";
       toast.success(`Organized ${r.routed} item${r.routed === 1 ? "" : "s"}${folderMsg}`);
+      if (r.skipped > 0) {
+        toast.error(
+          `Couldn't organize ${r.skipped} item${r.skipped === 1 ? "" : "s"} — the destination folder couldn't be created or found.`,
+        );
+      }
       router.refresh();
     } catch {
       toast.error("Couldn't apply those changes");

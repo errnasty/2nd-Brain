@@ -305,9 +305,20 @@ export async function renameDirectoryFolderAction(folderId: string, name: string
 
 /**
  * Delete a Directory folder.
- *  - mode = "unassign" (default): items inside become Unsorted (folder_id = null)
- *  - mode = "cascade":            items inside are also deleted, along with
- *                                 their polymorphic item_tags links
+ *  - mode = "unassign" (default): items directly and indirectly inside become
+ *    Unsorted (folder_id = null); any direct subfolders are reparented up to
+ *    this folder's own parent (promoted to root if it had none) instead of
+ *    being deleted or left dangling.
+ *  - mode = "cascade": the folder's entire subtree — every descendant folder
+ *    and every item inside any of them — is deleted, along with the items'
+ *    polymorphic item_tags links.
+ *
+ * `directory_folders.parent_id` is a plain uuid column with no FK/cascade
+ * (self-referential FKs on this table are enforced in app code only — see
+ * the schema comment), so both modes have to resolve the descendant subtree
+ * themselves; skipping that would either leave child folders pointing at a
+ * parent_id that no longer exists (unassign) or silently strand their items
+ * behind an orphaned folder even though "cascade" promised to remove them.
  */
 export async function deleteDirectoryFolderAction(
   folderId: string,
@@ -315,13 +326,33 @@ export async function deleteDirectoryFolderAction(
 ) {
   const { user } = await requireUser();
 
+  const allFolders = await db
+    .select({ id: directoryFolders.id, parentId: directoryFolders.parentId })
+    .from(directoryFolders)
+    .where(eq(directoryFolders.userId, user.id));
+  const childrenOf = new Map<string, string[]>();
+  for (const f of allFolders) {
+    if (!f.parentId) continue;
+    const list = childrenOf.get(f.parentId) ?? [];
+    list.push(f.id);
+    childrenOf.set(f.parentId, list);
+  }
+  const descendantIds: string[] = [];
+  const queue = [...(childrenOf.get(folderId) ?? [])];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    descendantIds.push(cur);
+    queue.push(...(childrenOf.get(cur) ?? []));
+  }
+  const subtreeIds = [folderId, ...descendantIds];
+
   if (mode === "cascade") {
-    const inFolder = await db
+    const inSubtree = await db
       .select({ id: directoryItems.id })
       .from(directoryItems)
-      .where(and(eq(directoryItems.folderId, folderId), eq(directoryItems.userId, user.id)));
-    if (inFolder.length > 0) {
-      const ids = inFolder.map((r) => r.id);
+      .where(and(inArray(directoryItems.folderId, subtreeIds), eq(directoryItems.userId, user.id)));
+    if (inSubtree.length > 0) {
+      const ids = inSubtree.map((r) => r.id);
       await db
         .delete(itemTags)
         .where(
@@ -335,16 +366,29 @@ export async function deleteDirectoryFolderAction(
         .delete(directoryItems)
         .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, ids)));
     }
+    await db
+      .delete(directoryFolders)
+      .where(and(eq(directoryFolders.userId, user.id), inArray(directoryFolders.id, subtreeIds)));
   } else {
     await db
       .update(directoryItems)
       .set({ folderId: null })
-      .where(and(eq(directoryItems.folderId, folderId), eq(directoryItems.userId, user.id)));
+      .where(and(inArray(directoryItems.folderId, subtreeIds), eq(directoryItems.userId, user.id)));
+
+    const directChildren = childrenOf.get(folderId) ?? [];
+    if (directChildren.length > 0) {
+      const grandparentId = allFolders.find((f) => f.id === folderId)?.parentId ?? null;
+      await db
+        .update(directoryFolders)
+        .set({ parentId: grandparentId })
+        .where(and(eq(directoryFolders.userId, user.id), inArray(directoryFolders.id, directChildren)));
+    }
+
+    await db
+      .delete(directoryFolders)
+      .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
   }
 
-  await db
-    .delete(directoryFolders)
-    .where(and(eq(directoryFolders.id, folderId), eq(directoryFolders.userId, user.id)));
   bustMapCache(user.id);
   revalidatePath("/directory");
 }
@@ -950,7 +994,7 @@ export async function previewAutoOrganizeAction(): Promise<
   return { ok: true, proposals };
 }
 
-export type ApplyOrganizeResult = { ok: true; routed: number; foldersCreated: string[] };
+export type ApplyOrganizeResult = { ok: true; routed: number; foldersCreated: string[]; skipped: number };
 
 /**
  * Apply exactly the proposals the user approved (a subset of what
@@ -958,12 +1002,13 @@ export type ApplyOrganizeResult = { ok: true; routed: number; foldersCreated: st
  * "New folder" / drag-to-move flows use, rather than writing raw SQL again.
  */
 export async function applyAutoOrganizeAction(proposals: OrganizeProposal[]): Promise<ApplyOrganizeResult> {
-  await requireUser();
-  if (proposals.length === 0) return { ok: true, routed: 0, foldersCreated: [] };
+  const { user } = await requireUser();
+  if (proposals.length === 0) return { ok: true, routed: 0, foldersCreated: [], skipped: 0 };
 
   const foldersCreated: string[] = [];
   // itemIds to move, grouped by destination folder id.
   const byDest = new Map<string, string[]>();
+  let skipped = 0;
 
   for (const p of proposals) {
     if (p.action === "assign") {
@@ -972,11 +1017,28 @@ export async function applyAutoOrganizeAction(proposals: OrganizeProposal[]): Pr
       byDest.set(p.folderId, list);
     } else {
       const created = await createDirectoryFolderAction(p.folderName);
-      if (!created.ok) continue; // e.g. name collision — skip this group rather than fail the whole batch
-      foldersCreated.push(p.folderName);
-      const list = byDest.get(created.folderId) ?? [];
+      let destFolderId: string | null = null;
+      if (created.ok) {
+        foldersCreated.push(p.folderName);
+        destFolderId = created.folderId;
+      } else {
+        // Most likely a name collision with a folder the user already has —
+        // route this group there instead of silently dropping it (the user
+        // already approved moving these items somewhere named exactly this).
+        const [existing] = await db
+          .select({ id: directoryFolders.id })
+          .from(directoryFolders)
+          .where(and(eq(directoryFolders.userId, user.id), eq(directoryFolders.name, p.folderName)))
+          .limit(1);
+        destFolderId = existing?.id ?? null;
+      }
+      if (!destFolderId) {
+        skipped += p.itemIds.length;
+        continue;
+      }
+      const list = byDest.get(destFolderId) ?? [];
       list.push(...p.itemIds);
-      byDest.set(created.folderId, list);
+      byDest.set(destFolderId, list);
     }
   }
 
@@ -986,7 +1048,7 @@ export async function applyAutoOrganizeAction(proposals: OrganizeProposal[]): Pr
     routed += r.count;
   }
 
-  return { ok: true, routed, foldersCreated };
+  return { ok: true, routed, foldersCreated, skipped };
 }
 
 // ── Tag filtering ────────────────────────────────────────────────────

@@ -157,6 +157,16 @@ export function DirectoryNav({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFolder]);
 
+  // DirectoryShell (a sibling component, not a child) pushes an item's recent
+  // entry to localStorage the moment it's opened from the main list — most
+  // item opens happen there, not via this sidebar tree. Re-read on every
+  // activeItem change so this list reflects those pushes without needing a
+  // shared context between the two components.
+  useEffect(() => {
+    if (!activeItem) return;
+    setRecent(getRecent());
+  }, [activeItem]);
+
   function folderHref(folderId: string | null): string {
     const sp = new URLSearchParams(params.toString());
     if (folderId) sp.set("folder", folderId);
@@ -537,6 +547,7 @@ export function DirectoryNav({
         <DeleteFolderDialog
           folder={folderToDelete}
           itemCount={folderCounts[folderToDelete.id] ?? 0}
+          hasSubfolders={folders.some((f) => f.parentId === folderToDelete.id)}
           open={!!folderToDelete}
           onOpenChange={(open) => !open && setFolderToDelete(null)}
           onConfirm={(mode) => {

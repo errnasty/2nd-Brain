@@ -7,12 +7,16 @@ import type { DirectoryFolder } from "@/lib/db/schema";
 export function DeleteFolderDialog({
   folder,
   itemCount,
+  hasSubfolders = false,
   open,
   onOpenChange,
   onConfirm,
 }: {
   folder: DirectoryFolder;
+  /** Direct-child item count only — subfolders (and their contents) are
+   *  handled separately by the two modes below regardless of this number. */
   itemCount: number;
+  hasSubfolders?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: (mode: "unassign" | "cascade") => void;
@@ -25,7 +29,9 @@ export function DeleteFolderDialog({
           <DialogDescription>
             {itemCount > 0
               ? `This folder contains ${itemCount} item${itemCount === 1 ? "" : "s"}. What would you like to do with them?`
-              : "This folder is empty. Confirm deletion below."}
+              : hasSubfolders
+                ? "This folder has no items directly in it, but it has subfolders. What would you like to do?"
+                : "This folder is empty. Confirm deletion below."}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 py-2">
@@ -38,16 +44,23 @@ export function DeleteFolderDialog({
               {itemCount > 0
                 ? `The ${itemCount} item${itemCount === 1 ? "" : "s"} will move to Unsorted.`
                 : "Delete the folder."}
+              {hasSubfolders && " Subfolders move up to take this folder's place."}
             </div>
           </button>
-          {itemCount > 0 && (
+          {(itemCount > 0 || hasSubfolders) && (
             <button
               onClick={() => onConfirm("cascade")}
               className="w-full rounded-md border border-destructive/40 bg-destructive/5 p-3 text-left transition-colors hover:bg-destructive/10"
             >
-              <div className="text-sm font-medium text-destructive">Delete folder AND all items inside</div>
+              <div className="text-sm font-medium text-destructive">
+                Delete folder AND everything inside{hasSubfolders ? " (including subfolders)" : ""}
+              </div>
               <div className="mt-0.5 text-xs text-muted-foreground">
-                Permanently removes {itemCount} item{itemCount === 1 ? "" : "s"} and their tags. Cannot be undone.
+                {itemCount > 0
+                  ? `Permanently removes ${itemCount} item${itemCount === 1 ? "" : "s"}`
+                  : "Permanently removes"}
+                {hasSubfolders ? ", every subfolder, and everything inside them" : " and their tags"}. Cannot be
+                undone.
               </div>
             </button>
           )}

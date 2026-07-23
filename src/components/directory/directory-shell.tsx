@@ -40,6 +40,7 @@ import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
 import { toast } from "sonner";
 import { usePromptText } from "@/components/ui/app-dialogs";
+import { pushRecent } from "@/lib/directory/recently-viewed";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
 import { FolderBulkActionBar } from "./folder-bulk-action-bar";
@@ -277,22 +278,36 @@ export function DirectoryShell({
     };
   }, [allItems, selectedId, hydratedItem]);
 
-  const selectItem = useCallback((id: string | null) => {
-    setSelectedId(id);
-    const url = new URL(window.location.href);
-    if (id) url.searchParams.set("item", id);
-    else url.searchParams.delete("item");
-    window.history.replaceState(null, "", url.toString());
-  }, []);
+  const selectItem = useCallback(
+    (id: string | null) => {
+      setSelectedId(id);
+      const url = new URL(window.location.href);
+      if (id) {
+        url.searchParams.set("item", id);
+        // Track opens from the main list as "recently viewed" — the sidebar
+        // tree (DirectoryNav) re-reads this on its own once the URL's `item`
+        // param changes, since it's a sibling component with no shared state.
+        const opened = allItems.find((i) => i.id === id) ?? (hydratedItem?.id === id ? hydratedItem : null);
+        if (opened) pushRecent({ id, kind: "item", title: opened.title });
+      } else {
+        url.searchParams.delete("item");
+      }
+      window.history.replaceState(null, "", url.toString());
+    },
+    [allItems, hydratedItem],
+  );
 
+  // Walk filteredItems (not allItems) — j/k should move through what's
+  // actually visible under the current type/age filter, not skip into rows
+  // hidden by it.
   const moveSelection = useCallback(
     (delta: number) => {
-      if (allItems.length === 0) return;
-      const idx = allItems.findIndex((i) => i.id === selectedId);
-      const next = idx < 0 ? 0 : Math.min(allItems.length - 1, Math.max(0, idx + delta));
-      selectItem(allItems[next].id);
+      if (filteredItems.length === 0) return;
+      const idx = filteredItems.findIndex((i) => i.id === selectedId);
+      const next = idx < 0 ? 0 : Math.min(filteredItems.length - 1, Math.max(0, idx + delta));
+      selectItem(filteredItems[next].id);
     },
-    [allItems, selectedId, selectItem],
+    [filteredItems, selectedId, selectItem],
   );
   useShortcuts({ escape: () => selectItem(null) });
   useShortcuts(
@@ -1124,9 +1139,16 @@ function DraggableItemRow({
 
 /** A child-folder tile in the content pane: click to browse in, drag the
  *  folder icon to nest it elsewhere (or drop items/other folders onto it),
- *  and a hover/selection checkbox for bulk actions. Reuses the same
- *  `folder-drag:<id>` / `folder:<id>` dnd-kit id conventions as the sidebar's
- *  FolderRow, so it works with the existing DirectoryDndShell drop handling. */
+ *  and a hover/selection checkbox for bulk actions.
+ *
+ *  Uses its OWN id prefixes (`folder-tile:` / `folder-tile-drag:`), distinct
+ *  from the sidebar's FolderRow (`folder:` / `folder-drag:`) — the same
+ *  folder is very often visible in both the sidebar tree AND as a tile here
+ *  at once, and dnd-kit's draggable/droppable registries are keyed by id, so
+ *  reusing the sidebar's id would make one of the two DOM elements silently
+ *  stop working as a drop/drag target (whichever registers second wins the
+ *  id in dnd-kit's internal map). DirectoryDndShell's handleDragEnd
+ *  recognizes both prefixes and resolves them to the same folder id. */
 function ChildFolderTile({
   folder,
   count,
@@ -1142,13 +1164,13 @@ function ChildFolderTile({
   onOpen: () => void;
   onToggleCheck: () => void;
 }) {
-  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `folder:${folder.id}` });
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `folder-tile:${folder.id}` });
   const {
     attributes: dragAttrs,
     listeners: dragListeners,
     setNodeRef: setDragRef,
     isDragging,
-  } = useDraggable({ id: `folder-drag:${folder.id}` });
+  } = useDraggable({ id: `folder-tile-drag:${folder.id}` });
 
   function setNodeRef(node: HTMLDivElement | null) {
     setDropRef(node);
