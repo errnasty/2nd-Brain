@@ -49,3 +49,18 @@ export function isToolCapable(id: string | undefined): boolean {
   if (m.provider === "anthropic" || m.provider === "openai") return true;
   return TOOL_CAPABLE_OPENROUTER.has(m.id);
 }
+
+// OpenRouter slugs known to support reasoning/thinking via OpenRouter's
+// unified `reasoning` request field. Left off deliberately: DeepSeek V3.1 (not
+// a reasoning variant) and "Auto" (backend not fixed, so support isn't
+// guaranteed).
+const THINKING_CAPABLE_OPENROUTER = new Set(["anthropic/claude-sonnet-4.6", "google/gemini-2.5-flash"]);
+
+/** Whether a model can stream extended-thinking/reasoning output. Anthropic
+ *  models always; OpenRouter only for the allowlisted slugs above; OpenAI never. */
+export function isThinkingCapable(id: string | undefined): boolean {
+  const m = getChatModel(id);
+  if (m.provider === "anthropic") return true;
+  if (m.provider === "openrouter") return THINKING_CAPABLE_OPENROUTER.has(m.id);
+  return false;
+}

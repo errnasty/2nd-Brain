@@ -27,6 +27,78 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-n",
+    date: "July 23, 2026",
+    title: "Create folders right where you're browsing",
+    tag: "feature",
+    summary:
+      "You can now add a new subfolder directly from inside the folder you're viewing, or with a quick hover button in the sidebar tree — no need to jump back to the top-level folder list.",
+  },
+  {
+    id: "2026-07-23-m",
+    date: "July 23, 2026",
+    title: "Breadcrumbs, drag-to-nest, and bulk folder actions",
+    tag: "feature",
+    summary:
+      "The Directory now shows a breadcrumb trail so you always know where you are, and you can drag folder tiles onto each other to nest them. Select multiple folders at once to move or delete them together.",
+  },
+  {
+    id: "2026-07-23-l",
+    date: "July 23, 2026",
+    title: "Recently viewed, filtering, and saved views in the sidebar",
+    tag: "feature",
+    summary:
+      "The Directory sidebar now keeps a short list of recently opened folders and notes, lets you filter the folder tree by typing, and lets you save a combination of tags as a named view you can jump back to.",
+  },
+  {
+    id: "2026-07-23-i",
+    date: "July 23, 2026",
+    title: "Browse folders like a file tree",
+    tag: "feature",
+    summary:
+      "The Directory sidebar now expands folders to show their subfolders and files right in the tree, like a code editor. Opening a folder that only contains subfolders now shows those subfolders as clickable tiles instead of a confusing empty screen.",
+  },
+  {
+    id: "2026-07-23-j",
+    date: "July 23, 2026",
+    title: "A cleaner Directory toolbar",
+    tag: "improvement",
+    summary:
+      "Less-used actions (curriculum, knowledge gaps, save from URL, study folder) are now tucked into a single \"More\" menu, and folder labels are simpler — so the toolbar and headings stay tidy on both desktop and mobile.",
+  },
+  {
+    id: "2026-07-23-k",
+    date: "July 23, 2026",
+    title: "Review auto-organize suggestions before they apply",
+    tag: "improvement",
+    summary:
+      "Auto-organize now shows exactly what it wants to do — including any new folders it wants to create — as a checklist you approve before anything moves, instead of silently reorganizing your library.",
+  },
+  {
+    id: "2026-07-23-f",
+    date: "July 23, 2026",
+    title: "Ask no longer shows a scary error on long answers",
+    tag: "fix",
+    summary:
+      "Long answers used to sometimes fail with a generic \"network error\" that threw away everything already written. Ask now starts streaming right away, and if the connection ever does drop mid-answer, whatever was written stays on screen with a Retry option instead of vanishing.",
+  },
+  {
+    id: "2026-07-23-g",
+    date: "July 23, 2026",
+    title: "See what the model is thinking",
+    tag: "feature",
+    summary:
+      "A new \"Show thinking\" option in the Tools menu streams the model's reasoning in a collapsible panel above the answer, for Claude models and several reasoning-capable OpenRouter models.",
+  },
+  {
+    id: "2026-07-23-h",
+    date: "July 23, 2026",
+    title: "Agent mode can now propose changes to your library",
+    tag: "feature",
+    summary:
+      "In Agent mode, the assistant can propose creating or editing notes, adding tasks, tagging, moving items, or deleting something — each shown as an Approve/Discard card so nothing changes in your Directory until you say yes. Deletions always require your explicit approval.",
+  },
+  {
     id: "2026-07-23-e",
     date: "July 23, 2026",
     title: "Ask is faster and more reliable",

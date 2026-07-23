@@ -3,7 +3,11 @@ import { z } from "zod";
 import { retrieveFromDirectory, fetchItemContents, buildDirectoryMap } from "@/lib/ai/rag";
 import { groundFromWeb, formatWebGround } from "@/lib/ai/web-search";
 import { addMemory } from "@/lib/ai/memory";
-import type { AgentSource } from "./stream";
+import type { AgentSource, AgentProposal } from "./stream";
+
+/** Emits a proposed Directory write for the client to Approve/Discard — the
+ *  tool never mutates directly (see AgentProposal in stream.ts). */
+export type ProposalSink = (p: AgentProposal) => void;
 
 /**
  * Collects the library items the agent touches across tool calls, assigning a
@@ -42,7 +46,7 @@ export function createSourceSink(): SourceSink {
  * web grounding; `remember` writes a durable fact. Search/read tools attach a
  * [n] citation number via the sink so the model can cite what it used.
  */
-export function buildAgentTools(userId: string, sink: SourceSink) {
+export function buildAgentTools(userId: string, sink: SourceSink, onProposal?: ProposalSink) {
   return {
     search_library: tool({
       description:
@@ -116,6 +120,91 @@ export function buildAgentTools(userId: string, sink: SourceSink) {
       execute: async ({ fact }) => {
         const r = await addMemory(userId, fact);
         return r.ok ? `Remembered: ${fact}` : "Couldn't save that.";
+      },
+    }),
+
+    // ── Directory write tools ──────────────────────────────────────────
+    // None of these mutate anything. Each records a proposal via onProposal
+    // and returns a short status string so the model continues coherently;
+    // the actual write only happens if the user approves it client-side
+    // (POST /api/agent/apply), which re-runs the real server action.
+    create_note: tool({
+      description:
+        "Propose creating a new note in the user's Directory. This does NOT save it — the user must approve the proposal first.",
+      parameters: z.object({
+        title: z.string().min(1).max(300),
+        content: z.string().max(200000).optional(),
+        folderId: z.string().uuid().nullish(),
+      }),
+      execute: async ({ title, content, folderId }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "create_note", title, content, folderId });
+        return `Proposed creating note "${title}" — awaiting the user's approval.`;
+      },
+    }),
+    append_to_note: tool({
+      description:
+        "Propose appending text to an existing note (use an item found via search_library/list_directory). This does NOT save — awaiting the user's approval.",
+      parameters: z.object({
+        itemId: z.string().uuid(),
+        itemTitle: z.string().min(1),
+        text: z.string().min(1).max(50000),
+      }),
+      execute: async ({ itemId, itemTitle, text }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "append_note", itemId, itemTitle, text });
+        return `Proposed appending to "${itemTitle}" — awaiting the user's approval.`;
+      },
+    }),
+    add_task: tool({
+      description:
+        "Propose adding a to-do item to an existing note (rendered as a checkbox line). This does NOT save — awaiting the user's approval.",
+      parameters: z.object({
+        itemId: z.string().uuid(),
+        itemTitle: z.string().min(1),
+        text: z.string().min(1).max(300),
+      }),
+      execute: async ({ itemId, itemTitle, text }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "add_task", itemId, itemTitle, text });
+        return `Proposed adding task "${text}" to "${itemTitle}" — awaiting the user's approval.`;
+      },
+    }),
+    move_item: tool({
+      description:
+        "Propose moving an item to a different folder (or Unsorted, with folderId null). This does NOT move it — awaiting the user's approval.",
+      parameters: z.object({
+        itemId: z.string().uuid(),
+        itemTitle: z.string().min(1),
+        folderId: z.string().uuid().nullable(),
+        folderName: z.string().min(1),
+      }),
+      execute: async ({ itemId, itemTitle, folderId, folderName }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "move", itemId, itemTitle, folderId, folderName });
+        return `Proposed moving "${itemTitle}" to ${folderName} — awaiting the user's approval.`;
+      },
+    }),
+    create_folder: tool({
+      description: "Propose creating a new folder. This does NOT create it — awaiting the user's approval.",
+      parameters: z.object({ name: z.string().min(1).max(60), parentId: z.string().uuid().nullish() }),
+      execute: async ({ name, parentId }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "create_folder", name, parentId });
+        return `Proposed creating folder "${name}" — awaiting the user's approval.`;
+      },
+    }),
+    tag_item: tool({
+      description:
+        "Propose auto-tagging an item with AI-suggested tags. This does NOT tag it — awaiting the user's approval.",
+      parameters: z.object({ itemId: z.string().uuid(), itemTitle: z.string().min(1) }),
+      execute: async ({ itemId, itemTitle }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "autotag", itemId, itemTitle });
+        return `Proposed tagging "${itemTitle}" — awaiting the user's approval.`;
+      },
+    }),
+    delete_item: tool({
+      description:
+        "Propose permanently deleting an item. This is destructive and irreversible, so it ALWAYS requires the user's explicit approval — this tool never deletes anything itself.",
+      parameters: z.object({ itemId: z.string().uuid(), itemTitle: z.string().min(1) }),
+      execute: async ({ itemId, itemTitle }) => {
+        onProposal?.({ id: crypto.randomUUID(), action: "delete", itemId, itemTitle });
+        return `Proposed deleting "${itemTitle}" — awaiting the user's approval (this is permanent).`;
       },
     }),
   };

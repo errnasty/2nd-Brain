@@ -26,7 +26,14 @@ import { distill } from "@/lib/ai/distill";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
 import { bustMapCache } from "@/lib/map-cache";
-import { fetchDirectoryPage, type DirectoryPage, type DirItem, type DirectorySort } from "@/lib/directory/query";
+import {
+  fetchDirectoryPage,
+  fetchFolderTreeItems,
+  type DirectoryPage,
+  type DirItem,
+  type DirectorySort,
+  type FolderTreeItem,
+} from "@/lib/directory/query";
 
 /** Infinite-scroll: fetch the next page of directory items for the shell. */
 export async function loadMoreDirectoryItemsAction(input: {
@@ -72,6 +79,13 @@ export async function fetchDirectoryItemByIdAction(itemId: string): Promise<DirI
     .where(and(eq(directoryItems.id, itemId), eq(directoryItems.userId, user.id)))
     .limit(1);
   return (row as DirItem) ?? null;
+}
+
+/** Direct-child items of one folder, for the sidebar tree's lazy expand
+ *  (VSCode-style: expanding a folder shows its subfolders AND its files). */
+export async function fetchFolderTreeItemsAction(folderId: string): Promise<FolderTreeItem[]> {
+  const { user } = await requireUser();
+  return fetchFolderTreeItems(user.id, folderId);
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -855,33 +869,24 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
 }
 
 // ── Auto-Organize ───────────────────────────────────────────────────
-// Routes every directory_item with folder_id IS NULL into the best-matching
-// directory_folder via Claude. Anything without a confident match goes to
-// the [Inbox] folder (lazily created).
+// Proposes routing every directory_item with folder_id IS NULL into the
+// best-matching directory_folder (existing or newly-suggested) via Claude.
+// Nothing is written until the user reviews and approves the proposals in
+// the AutoOrganizeDialog UI.
 
-export type OrganizeResult = {
-  ok: true;
-  routed: number;
-  total: number;
-  foldersCreated: string[];
-};
+export type OrganizeProposal =
+  | { id: string; action: "assign"; itemId: string; itemTitle: string; folderId: string; folderName: string }
+  | { id: string; action: "create_folder"; folderName: string; itemIds: string[]; itemTitles: string[] };
 
 /**
- * Smart Auto-Organize.
- *
- * One Claude call (Haiku) that sees ALL uncategorized items at once plus the
- * user's existing folder list, then returns commands:
- *   - `assign`        — place an existing item into an existing folder
- *   - `create_folder` — create a NEW folder for a cluster of items sharing a
- *                       distinct topic that no existing folder covers
- *
- * Steps:
- *   1. Run Claude once on the full batch.
- *   2. Execute `create_folder` commands first (so the folder rows exist).
- *   3. Resolve assign + create_folder destinations, then update items in batch.
- *   4. Items the model didn't return commands for are simply left unsorted.
+ * Preview step: run the same Claude call as before, but only resolve display
+ * data (item/folder names) for the UI — no folders are created and no items
+ * are moved. The user picks which proposals to keep, then
+ * `applyAutoOrganizeAction` performs exactly those.
  */
-export async function autoOrganizeDirectoryAction(): Promise<OrganizeResult> {
+export async function previewAutoOrganizeAction(): Promise<
+  { ok: true; proposals: OrganizeProposal[] } | { ok: false; error: string }
+> {
   const { user } = await requireUser();
 
   const [unsorted, allFolders] = await Promise.all([
@@ -899,10 +904,11 @@ export async function autoOrganizeDirectoryAction(): Promise<OrganizeResult> {
     db.select().from(directoryFolders).where(eq(directoryFolders.userId, user.id)),
   ]);
 
-  if (unsorted.length === 0)
-    return { ok: true, routed: 0, total: 0, foldersCreated: [] };
+  if (unsorted.length === 0) return { ok: true, proposals: [] };
 
   const existingFolderNames = allFolders.filter((f) => !f.isInbox).map((f) => f.name);
+  const folderNameToId = new Map(allFolders.map((f) => [f.name, f.id]));
+  const itemById = new Map(unsorted.map((u) => [u.id, u]));
 
   const aiItems: OrganizeItem[] = unsorted.map((u) => ({
     id: u.id,
@@ -913,81 +919,74 @@ export async function autoOrganizeDirectoryAction(): Promise<OrganizeResult> {
 
   const commands = await organizeItems(aiItems, existingFolderNames);
 
-  // ── 1. Create any new folders the model requested ──────────────────
-  const folderNameToId = new Map<string, string>();
-  for (const f of allFolders) folderNameToId.set(f.name, f.id);
-
-  const foldersCreated: string[] = [];
-  for (const cmd of commands) {
-    if (cmd.action !== "create_folder") continue;
-    if (folderNameToId.has(cmd.folderName)) continue; // race / dup
-    try {
-      const [created] = await db
-        .insert(directoryFolders)
-        .values({ userId: user.id, name: cmd.folderName })
-        .onConflictDoNothing({ target: [directoryFolders.userId, directoryFolders.name] })
-        .returning();
-      if (created) {
-        folderNameToId.set(cmd.folderName, created.id);
-        foldersCreated.push(cmd.folderName);
-      } else {
-        // Folder already existed under that name — fetch it
-        const [existing] = await db
-          .select()
-          .from(directoryFolders)
-          .where(
-            and(eq(directoryFolders.userId, user.id), eq(directoryFolders.name, cmd.folderName)),
-          )
-          .limit(1);
-        if (existing) folderNameToId.set(existing.name, existing.id);
-      }
-    } catch {
-      // ignore individual folder creation failures
-    }
-  }
-
-  // ── 2. Build the itemId → folderId routing map ─────────────────────
-  const validIds = new Set(unsorted.map((u) => u.id));
-  const itemToFolder = new Map<string, string>();
-
+  const proposals: OrganizeProposal[] = [];
+  let n = 0;
   for (const cmd of commands) {
     if (cmd.action === "assign") {
       const folderId = folderNameToId.get(cmd.folderName);
-      if (folderId && validIds.has(cmd.itemId)) {
-        itemToFolder.set(cmd.itemId, folderId);
-      }
-    } else if (cmd.action === "create_folder") {
-      const folderId = folderNameToId.get(cmd.folderName);
-      if (!folderId) continue;
-      for (const itemId of cmd.itemIds) {
-        if (validIds.has(itemId)) itemToFolder.set(itemId, folderId);
-      }
+      const item = itemById.get(cmd.itemId);
+      if (!folderId || !item) continue;
+      proposals.push({
+        id: `p${n++}`,
+        action: "assign",
+        itemId: cmd.itemId,
+        itemTitle: item.title,
+        folderId,
+        folderName: cmd.folderName,
+      });
+    } else {
+      const itemTitles = cmd.itemIds.map((id) => itemById.get(id)?.title).filter((t): t is string => !!t);
+      if (itemTitles.length === 0) continue;
+      proposals.push({
+        id: `p${n++}`,
+        action: "create_folder",
+        folderName: cmd.folderName,
+        itemIds: cmd.itemIds.filter((id) => itemById.has(id)),
+        itemTitles,
+      });
     }
   }
 
-  // ── 3. Apply the routing — one UPDATE per destination folder ──────
+  return { ok: true, proposals };
+}
+
+export type ApplyOrganizeResult = { ok: true; routed: number; foldersCreated: string[] };
+
+/**
+ * Apply exactly the proposals the user approved (a subset of what
+ * `previewAutoOrganizeAction` returned). Reuses the same actions the manual
+ * "New folder" / drag-to-move flows use, rather than writing raw SQL again.
+ */
+export async function applyAutoOrganizeAction(proposals: OrganizeProposal[]): Promise<ApplyOrganizeResult> {
+  await requireUser();
+  if (proposals.length === 0) return { ok: true, routed: 0, foldersCreated: [] };
+
+  const foldersCreated: string[] = [];
+  // itemIds to move, grouped by destination folder id.
   const byDest = new Map<string, string[]>();
-  for (const [itemId, folderId] of itemToFolder) {
-    const list = byDest.get(folderId) ?? [];
-    list.push(itemId);
-    byDest.set(folderId, list);
+
+  for (const p of proposals) {
+    if (p.action === "assign") {
+      const list = byDest.get(p.folderId) ?? [];
+      list.push(p.itemId);
+      byDest.set(p.folderId, list);
+    } else {
+      const created = await createDirectoryFolderAction(p.folderName);
+      if (!created.ok) continue; // e.g. name collision — skip this group rather than fail the whole batch
+      foldersCreated.push(p.folderName);
+      const list = byDest.get(created.folderId) ?? [];
+      list.push(...p.itemIds);
+      byDest.set(created.folderId, list);
+    }
   }
 
+  let routed = 0;
   for (const [folderId, itemIds] of byDest) {
-    await db
-      .update(directoryItems)
-      .set({ folderId })
-      .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, itemIds)));
+    const r = await bulkMoveDirectoryItemsAction(itemIds, folderId);
+    routed += r.count;
   }
 
-  bustMapCache(user.id);
-  revalidatePath("/directory");
-  return {
-    ok: true,
-    routed: itemToFolder.size,
-    total: unsorted.length,
-    foldersCreated,
-  };
+  return { ok: true, routed, foldersCreated };
 }
 
 // ── Tag filtering ────────────────────────────────────────────────────

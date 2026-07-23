@@ -11,6 +11,7 @@ import {
   type DirectoryPage,
   type DirectorySort,
 } from "@/lib/directory/query";
+import { getFolderCounts } from "@/lib/directory/folder-counts";
 
 type Search = Promise<{
   folder?: string;
@@ -32,8 +33,9 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
   let page: DirectoryPage = { items: [], itemTagsById: {}, hasMore: false };
   let allFolders: DirectoryFolder[] = [];
   let settings: UserSettingsData = {};
+  let folderCounts: Record<string, number> = {};
   try {
-    [page, allFolders, settings] = await Promise.all([
+    const [pageRes, foldersRes, settingsRes, counts] = await Promise.all([
       fetchDirectoryPage(user.id, {
         folder: sp.folder ?? null,
         tagIds,
@@ -47,7 +49,14 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
         .where(eq(directoryFolders.userId, user.id))
         .orderBy(asc(directoryFolders.name)),
       getUserSettings(user.id),
+      // Shared + request-cached with the sibling layout's call to the same
+      // helper — used here for the child-folder tiles' item-count badges.
+      getFolderCounts(user.id),
     ]);
+    page = pageRes;
+    allFolders = foldersRes;
+    settings = settingsRes;
+    folderCounts = counts.folderCountMap;
   } catch (err) {
     console.error("DirectoryPage data fetch failed:", err instanceof Error ? err.message : err);
   }
@@ -58,6 +67,7 @@ export default async function DirectoryPage({ searchParams }: { searchParams: Se
       itemTagsById={page.itemTagsById}
       hasMore={page.hasMore}
       folders={allFolders}
+      folderCounts={folderCounts}
       activeFolder={sp.folder ?? null}
       activeTagIds={tagIds}
       activeSort={sort}

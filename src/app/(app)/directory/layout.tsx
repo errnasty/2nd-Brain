@@ -1,10 +1,11 @@
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { directoryFolders, directoryItems, itemTags, tags, type DirectoryFolder } from "@/lib/db/schema";
+import { directoryFolders, itemTags, tags, type DirectoryFolder } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { DirectoryNav, type DirectoryTag } from "@/components/directory/directory-nav";
 import { DirectoryDndShell } from "@/components/directory/directory-dnd-shell";
 import { ResizableShell } from "@/components/shell/resizable-shell";
+import { getFolderCounts } from "@/lib/directory/folder-counts";
 
 export default async function DirectoryLayout({ children }: { children: React.ReactNode }) {
   const { user } = await requireUser();
@@ -15,24 +16,15 @@ export default async function DirectoryLayout({ children }: { children: React.Re
   let unsortedCount = 0;
   let tagList: DirectoryTag[] = [];
   try {
-    const [foldersRes, itemCountByFolder, unsortedRows, tagRows] = await Promise.all([
+    const [foldersRes, counts, tagRows] = await Promise.all([
       db
         .select()
         .from(directoryFolders)
         .where(eq(directoryFolders.userId, user.id))
         .orderBy(asc(directoryFolders.position), asc(directoryFolders.name)),
-      db
-        .select({
-          folderId: directoryItems.folderId,
-          count: sql<number>`count(*)::int`.as("count"),
-        })
-        .from(directoryItems)
-        .where(eq(directoryItems.userId, user.id))
-        .groupBy(directoryItems.folderId),
-      db
-        .select({ count: sql<number>`count(*)::int`.as("count") })
-        .from(directoryItems)
-        .where(and(eq(directoryItems.userId, user.id), isNull(directoryItems.folderId))),
+      // Shared + request-cached with directory/page.tsx's call to the same
+      // helper, so switching folders doesn't pay for this query twice.
+      getFolderCounts(user.id),
       // Tags with how many directory items carry them, most-used first.
       db
         .select({
@@ -48,10 +40,8 @@ export default async function DirectoryLayout({ children }: { children: React.Re
         .limit(40),
     ]);
     folders = foldersRes;
-    folderCountMap = Object.fromEntries(
-      itemCountByFolder.map((f) => [f.folderId ?? "__root__", f.count]),
-    ) as Record<string, number>;
-    unsortedCount = unsortedRows[0]?.count ?? 0;
+    folderCountMap = counts.folderCountMap;
+    unsortedCount = counts.unsortedCount;
     tagList = tagRows;
   } catch (err) {
     console.error("DirectoryLayout data fetch failed:", err instanceof Error ? err.message : err);

@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CitedMarkdown } from "@/components/ui/cited-markdown";
 import {
+  AlertTriangle,
   ArrowUp,
   BookmarkPlus,
   Bot,
@@ -46,9 +47,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "@/lib/ai/models";
+import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel, isThinkingCapable } from "@/lib/ai/models";
 import { ASK_MODEL_KEY, getScopedItem, setScopedItem } from "@/lib/settings";
-import { USAGE_SENTINEL, WEBSOURCES_SENTINEL, displayText } from "@/lib/ai/stream-markers";
+import {
+  USAGE_SENTINEL,
+  WEBSOURCES_SENTINEL,
+  STATUS_SENTINEL,
+  RAGSOURCES_SENTINEL,
+  THINKING_SENTINEL,
+  displayText,
+  extractFrames,
+  decodeFramePayload,
+} from "@/lib/ai/stream-markers";
+import { isSeveredResponse } from "@/lib/ui/severed";
 import { generateFlashcardsAction, createFlashcardAction } from "@/app/(app)/review/actions";
 import { searchAttachableItemsAction, type AttachableItem } from "@/app/(app)/ask/actions";
 import { fetchDirectoryItemByIdAction } from "@/app/(app)/directory/actions";
@@ -63,7 +74,7 @@ import {
   type ThreadSummary,
 } from "@/app/(app)/ask/thread-actions";
 import { ThreadList } from "@/components/ask/thread-list";
-import { parseEvents } from "@/lib/ai/agent/stream";
+import { parseEvents, type AgentProposal } from "@/lib/ai/agent/stream";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
@@ -91,6 +102,9 @@ type Verification =
 
 type AgentStep = { id: string; label: string; done: boolean };
 
+type ProposalStatus = "pending" | "applying" | "applied" | "discarded" | "error";
+type ProposalItem = AgentProposal & { status: ProposalStatus; error?: string };
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -102,7 +116,60 @@ type Message = {
   followups?: string[];
   verification?: Verification;
   steps?: AgentStep[];
+  /** Streamed reasoning text (Claude extended thinking / OpenRouter reasoning). */
+  thinking?: string;
+  /** Short progress label shown before any answer text has arrived. */
+  status?: string;
+  /** The connection dropped mid-stream — content may be incomplete. */
+  severed?: boolean;
+  proposals?: ProposalItem[];
 };
+
+/** Strip every inline frame (status/rag-sources/thinking) out of a raw ask
+ *  stream chunk, returning the plain-text remainder plus whatever each frame
+ *  carried. Safe to call repeatedly over the same growing buffer — see
+ *  extractFrames in stream-markers.ts. */
+function stripInlineFrames(raw: string): {
+  rest: string;
+  statusLabel?: string;
+  sources?: Source[];
+  thinking?: string;
+} {
+  const { payloads: statusPayloads, rest: r1 } = extractFrames(raw, STATUS_SENTINEL);
+  const { payloads: ragPayloads, rest: r2 } = extractFrames(r1, RAGSOURCES_SENTINEL);
+  const { payloads: thinkingPayloads, rest: r3 } = extractFrames(r2, THINKING_SENTINEL);
+
+  let statusLabel: string | undefined;
+  if (statusPayloads.length) {
+    try {
+      const s = decodeFramePayload<{ stage?: string }>(statusPayloads[statusPayloads.length - 1]);
+      statusLabel = s.stage === "retrieving" ? "Searching your library…" : undefined;
+    } catch {
+      // ignore
+    }
+  }
+  let sources: Source[] | undefined;
+  if (ragPayloads.length) {
+    try {
+      sources = decodeFramePayload<Source[]>(ragPayloads[0]);
+    } catch {
+      // ignore
+    }
+  }
+  let thinking: string | undefined;
+  if (thinkingPayloads.length) {
+    thinking = thinkingPayloads
+      .map((p) => {
+        try {
+          return decodeFramePayload<string>(p);
+        } catch {
+          return "";
+        }
+      })
+      .join("");
+  }
+  return { rest: r3, statusLabel, sources, thinking };
+}
 
 const SUGGESTIONS = [
   "Summarize what I've read about AI safety this week",
@@ -183,6 +250,7 @@ export function AskShell({
   const [web, setWeb] = useState(false);
   const [agentMode, setAgentMode] = useState(false);
   const [verifyMode, setVerifyMode] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [studyMode, setStudyMode] = useState(false);
   const [deadline, setDeadline] = useState("");
@@ -297,6 +365,12 @@ export function AskShell({
     const saved = getScopedItem(ASK_MODEL_KEY);
     if (saved && CHAT_MODELS.some((m) => m.id === saved)) setModelId(saved);
   }, []);
+
+  // Switching to a model that can't stream reasoning turns the toggle off,
+  // rather than leaving it silently ignored.
+  useEffect(() => {
+    if (!isThinkingCapable(modelId)) setShowThinking(false);
+  }, [modelId]);
 
   // Cross-surface hand-off: a question pre-typed and/or an item pinned as
   // context (e.g. the reader's "Ask about this"). Applied once on mount.
@@ -432,6 +506,12 @@ export function AskShell({
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Hoisted above the try so a severed connection (thrown before or
+      // during the read loop) still has whatever streamed so far to show.
+      let acc = "";
+      let latestSources: Source[] = [];
+      let latestThinking = "";
+
       try {
         const res = await fetch("/api/ask", {
           method: "POST",
@@ -442,6 +522,7 @@ export function AskShell({
             model: modelId,
             web,
             contextIds: contextItems.map((c) => c.id),
+            thinking: showThinking,
           }),
           cache: "no-store",
           signal: controller.signal,
@@ -453,26 +534,24 @@ export function AskShell({
           return;
         }
 
-        const rawSources = res.headers.get("x-rag-sources");
-        let sources: Source[] = [];
-        if (rawSources) {
-          try {
-            sources = JSON.parse(atob(rawSources));
-          } catch {
-            // ignore
-          }
-        }
-
         if (!res.body) throw new Error("No response body");
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let acc = "";
 
         let frameQueued = false;
         const flush = () => {
           frameQueued = false;
-          const display = displayText(acc);
-          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: display } : m)));
+          const { rest, statusLabel, sources, thinking } = stripInlineFrames(acc);
+          if (sources) latestSources = sources;
+          if (thinking !== undefined) latestThinking = thinking;
+          const display = displayText(rest);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: display, thinking: latestThinking || undefined, status: display ? undefined : statusLabel }
+                : m,
+            ),
+          );
         };
 
         while (true) {
@@ -486,28 +565,30 @@ export function AskShell({
         }
         flush();
 
+        const { rest: stripped } = stripInlineFrames(acc);
         let usage: Usage | undefined;
         let webSources: WebSource[] | undefined;
-        const wIdx = acc.indexOf(WEBSOURCES_SENTINEL);
-        const uIdx = acc.indexOf(USAGE_SENTINEL);
+        const wIdx = stripped.indexOf(WEBSOURCES_SENTINEL);
+        const uIdx = stripped.indexOf(USAGE_SENTINEL);
         if (wIdx >= 0) {
-          const end = uIdx > wIdx ? uIdx : acc.length;
+          const end = uIdx > wIdx ? uIdx : stripped.length;
           try {
-            webSources = JSON.parse(acc.slice(wIdx + WEBSOURCES_SENTINEL.length, end)) as WebSource[];
+            webSources = JSON.parse(stripped.slice(wIdx + WEBSOURCES_SENTINEL.length, end)) as WebSource[];
           } catch {
             // ignore
           }
         }
         if (uIdx >= 0) {
           try {
-            usage = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
+            usage = JSON.parse(stripped.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
           } catch {
             // ignore
           }
         }
+        const sources = latestSources;
         setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, sources, webSources, usage } : m)));
 
-        const finalAnswer = displayText(acc);
+        const finalAnswer = displayText(stripped);
 
         // Opt-in faithfulness check — verify the answer against its cited
         // library sources (non-blocking, fail-soft).
@@ -567,6 +648,33 @@ export function AskShell({
         }
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
+        if (isSeveredResponse(err)) {
+          // Connection dropped mid-stream — keep whatever answer text
+          // arrived instead of wiping it and showing a scary error.
+          const { rest } = stripInlineFrames(acc);
+          const partial = displayText(rest);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: partial || m.content, sources: latestSources.length ? latestSources : m.sources, severed: true, status: undefined }
+                : m,
+            ),
+          );
+          if (tid && partial.trim()) {
+            void appendMessage({
+              threadId: tid,
+              role: "assistant",
+              content: partial,
+              sources: latestSources,
+              webSources: undefined,
+              usage: null,
+              model: modelId,
+            })
+              .then(() => refreshThreads())
+              .catch(() => {});
+          }
+          return;
+        }
         setError(err instanceof Error ? err.message : "Request failed");
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
       } finally {
@@ -574,7 +682,7 @@ export function AskShell({
         inputRef.current?.focus();
       }
     },
-    [messages, streaming, modelId, web, verifyMode, contextItems, ensureThread, refreshThreads],
+    [messages, streaming, modelId, web, verifyMode, showThinking, contextItems, ensureThread, refreshThreads],
   );
 
   const sendStudyPlan = useCallback(
@@ -652,11 +760,19 @@ export function AskShell({
       const controller = new AbortController();
       abortRef.current = controller;
 
+      // Hoisted above the try so a severed connection still has whatever
+      // streamed so far to show.
+      let text = "";
+      let sources: Source[] = [];
+      let thinkingText = "";
+      const steps: AgentStep[] = [];
+      const proposals: ProposalItem[] = [];
+
       try {
         const res = await fetch("/api/agent", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: trimmed, history, model: modelId }),
+          body: JSON.stringify({ question: trimmed, history, model: modelId, thinking: showThinking }),
           cache: "no-store",
           signal: controller.signal,
         });
@@ -669,15 +785,18 @@ export function AskShell({
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
-        let text = "";
-        let sources: Source[] = [];
         let usage: Usage | undefined;
-        const steps: AgentStep[] = [];
 
         let frameQueued = false;
         const flush = () => {
           frameQueued = false;
-          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: text, steps: [...steps] } : m)));
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: text, steps: [...steps], thinking: thinkingText || undefined, proposals: [...proposals] }
+                : m,
+            ),
+          );
         };
 
         while (true) {
@@ -688,6 +807,7 @@ export function AskShell({
           buf = rest;
           for (const e of events) {
             if (e.type === "text") text += e.delta;
+            else if (e.type === "thinking") thinkingText += e.delta;
             else if (e.type === "tool") {
               if (e.status === "start") steps.push({ id: e.id, label: e.label, done: false });
               else {
@@ -704,6 +824,7 @@ export function AskShell({
               }));
             } else if (e.type === "usage") usage = e.usage;
             else if (e.type === "note") toast.message(e.message);
+            else if (e.type === "proposal") proposals.push({ ...e.proposal, status: "pending" });
             else if (e.type === "error") setError(e.message);
           }
           if (!frameQueued) {
@@ -714,7 +835,9 @@ export function AskShell({
         flush();
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, content: text, steps, sources: sources.length ? sources : undefined, usage } : m,
+            m.id === assistantId
+              ? { ...m, content: text, steps, sources: sources.length ? sources : undefined, usage, thinking: thinkingText || undefined, proposals }
+              : m,
           ),
         );
         if (tid && text.trim()) {
@@ -724,6 +847,23 @@ export function AskShell({
         }
       } catch (err) {
         if ((err as Error)?.name === "AbortError") return;
+        if (isSeveredResponse(err)) {
+          // Connection dropped mid-stream — keep whatever text/steps/proposals
+          // arrived instead of wiping the turn and showing a scary error.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? { ...m, content: text, steps, sources: sources.length ? sources : undefined, thinking: thinkingText || undefined, proposals, severed: true }
+                : m,
+            ),
+          );
+          if (tid && text.trim()) {
+            void appendMessage({ threadId: tid, role: "assistant", content: text, sources, usage: null, model: modelId })
+              .then(() => refreshThreads())
+              .catch(() => {});
+          }
+          return;
+        }
         setError(err instanceof Error ? err.message : "Request failed");
         setMessages((prev) => prev.filter((m) => m.id !== assistantId));
       } finally {
@@ -731,7 +871,7 @@ export function AskShell({
         inputRef.current?.focus();
       }
     },
-    [messages, streaming, modelId, ensureThread, refreshThreads],
+    [messages, streaming, modelId, showThinking, ensureThread, refreshThreads],
   );
 
   // Single dispatcher so suggestions, follow-ups, and the composer all honor
@@ -749,8 +889,66 @@ export function AskShell({
     run(input);
   }
 
+  // Approve/Discard for an agent-proposed Directory write. Nothing was
+  // mutated when the proposal streamed in — Approve is the only thing that
+  // actually calls /api/agent/apply.
+  const setProposalStatus = useCallback(
+    (messageId: string, proposalId: string, patch: { status: ProposalStatus; error?: string }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                proposals: m.proposals?.map((p) =>
+                  p.id === proposalId ? ({ ...p, ...patch } as ProposalItem) : p,
+                ),
+              }
+            : m,
+        ),
+      );
+    },
+    [],
+  );
+
+  const approveProposal = useCallback(
+    async (messageId: string, proposal: ProposalItem) => {
+      setProposalStatus(messageId, proposal.id, { status: "applying" });
+      try {
+        const res = await fetch("/api/agent/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ proposal }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+        if (res.ok && data.ok !== false) {
+          setProposalStatus(messageId, proposal.id, { status: "applied" });
+          toast.success("Change applied");
+        } else {
+          setProposalStatus(messageId, proposal.id, { status: "error", error: data.error ?? "Couldn't apply that change" });
+          toast.error(data.error ?? "Couldn't apply that change");
+        }
+      } catch {
+        setProposalStatus(messageId, proposal.id, { status: "error", error: "Couldn't apply that change" });
+        toast.error("Couldn't apply that change");
+      }
+    },
+    [setProposalStatus],
+  );
+
+  const discardProposal = useCallback(
+    (messageId: string, proposalId: string) => {
+      setProposalStatus(messageId, proposalId, { status: "discarded" });
+    },
+    [setProposalStatus],
+  );
+
   const activeToolCount =
-    (web ? 1 : 0) + (agentMode ? 1 : 0) + (studyMode ? 1 : 0) + (verifyMode ? 1 : 0) + (contextItems.length > 0 ? 1 : 0);
+    (web ? 1 : 0) +
+    (agentMode ? 1 : 0) +
+    (studyMode ? 1 : 0) +
+    (verifyMode ? 1 : 0) +
+    (showThinking ? 1 : 0) +
+    (contextItems.length > 0 ? 1 : 0);
 
   return (
     <div className="flex h-full min-h-0">
@@ -855,6 +1053,8 @@ export function AskShell({
                     onOpenSource={openSource}
                     onOpenPath={openPath}
                     onFollowup={run}
+                    onApproveProposal={approveProposal}
+                    onDiscardProposal={discardProposal}
                   />
                 ))}
                 {streaming && (
@@ -1044,6 +1244,22 @@ export function AskShell({
                         <ShieldCheck className="h-3.5 w-3.5" /> Verify answers
                       </span>
                       {verifyMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!isThinkingCapable(modelId)}
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        if (isThinkingCapable(modelId)) setShowThinking((v) => !v);
+                      }}
+                      className={cn("justify-between", !isThinkingCapable(modelId) && "opacity-50")}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Brain className="h-3.5 w-3.5" /> Show thinking
+                        {!isThinkingCapable(modelId) && (
+                          <span className="text-[10px] text-muted-foreground">(not supported)</span>
+                        )}
+                      </span>
+                      {showThinking && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={(e) => {
@@ -1417,12 +1633,16 @@ const MessageBubble = memo(function MessageBubble({
   onOpenSource,
   onOpenPath,
   onFollowup,
+  onApproveProposal,
+  onDiscardProposal,
 }: {
   message: Message;
   question?: string;
   onOpenSource: (directoryItemId: string) => void;
   onOpenPath: (path: string) => void;
   onFollowup: (question: string) => void;
+  onApproveProposal: (messageId: string, proposal: ProposalItem) => void;
+  onDiscardProposal: (messageId: string, proposalId: string) => void;
 }) {
   if (message.role === "user") {
     return (
@@ -1490,6 +1710,7 @@ const MessageBubble = memo(function MessageBubble({
           ))}
         </div>
       )}
+      {message.thinking && <ThinkingPanel text={message.thinking} answering={!!message.content} />}
       <div className="prose-reader max-w-none text-[15px] leading-[1.7]">
         {message.content ? (
           <CitedMarkdown
@@ -1502,10 +1723,43 @@ const MessageBubble = memo(function MessageBubble({
           >
             {message.content}
           </CitedMarkdown>
+        ) : message.status ? (
+          <span className="inline-flex items-center gap-2 text-muted-foreground italic">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> {message.status}
+          </span>
         ) : (
           <span className="text-muted-foreground italic">…</span>
         )}
       </div>
+      {message.severed && (
+        <div className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">Connection dropped — this answer may be incomplete.</span>
+          {question && (
+            <button
+              onClick={() => onFollowup(question)}
+              className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide underline-offset-2 hover:underline"
+            >
+              <RefreshCw className="h-3 w-3" /> Retry
+            </button>
+          )}
+        </div>
+      )}
+      {message.proposals && message.proposals.length > 0 && (
+        <div className="space-y-2 border-t border-border pt-3">
+          <div className="editorial-eyebrow-brand inline-flex items-center gap-2 pb-1">
+            <NotebookPen className="h-3 w-3" /> § Proposed changes
+          </div>
+          {message.proposals.map((p) => (
+            <ProposalCard
+              key={p.id}
+              proposal={p}
+              onApprove={() => onApproveProposal(message.id, p)}
+              onDiscard={() => onDiscardProposal(message.id, p.id)}
+            />
+          ))}
+        </div>
+      )}
       {message.usage && message.usage.totalTokens > 0 && (
         <div className="flex items-center gap-1.5 font-mono text-[10px] tabular-nums text-muted-foreground">
           <span className="inline-flex items-center rounded-full bg-muted px-2 py-0.5">
@@ -1565,6 +1819,118 @@ const MessageBubble = memo(function MessageBubble({
     </div>
   );
 });
+
+/** Collapsible reasoning panel — streams live, then auto-collapses the first
+ *  time the real answer starts arriving (still reopenable by the user). */
+function ThinkingPanel({ text, answering }: { text: string; answering: boolean }) {
+  const [open, setOpen] = useState(true);
+  const autoCollapsed = useRef(false);
+  useEffect(() => {
+    if (answering && !autoCollapsed.current) {
+      autoCollapsed.current = true;
+      setOpen(false);
+    }
+  }, [answering]);
+  return (
+    <div className="rounded-lg border border-border bg-muted/30">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
+      >
+        <Brain className="h-3 w-3" />
+        Thinking
+        <ChevronDown className={cn("ml-auto h-3 w-3 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div className="max-h-64 overflow-y-auto whitespace-pre-wrap px-3 pb-2.5 text-[12.5px] italic leading-relaxed text-muted-foreground">
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Human summary for a proposed Directory write; `destructive` drives styling. */
+function proposalSummary(p: ProposalItem): { title: string; destructive: boolean } {
+  switch (p.action) {
+    case "create_note":
+      return { title: `Create note "${p.title}"`, destructive: false };
+    case "append_note":
+      return { title: `Add to "${p.itemTitle}"`, destructive: false };
+    case "add_task":
+      return { title: `Add task to "${p.itemTitle}": ${p.text}`, destructive: false };
+    case "move":
+      return { title: `Move "${p.itemTitle}" to ${p.folderName}`, destructive: false };
+    case "create_folder":
+      return { title: `Create folder "${p.name}"`, destructive: false };
+    case "autotag":
+      return { title: `Tag "${p.itemTitle}"`, destructive: false };
+    case "delete":
+      return { title: `Delete "${p.itemTitle}"`, destructive: true };
+  }
+}
+
+/** Approve/Discard card for one agent-proposed Directory write. Nothing was
+ *  mutated when the proposal streamed in — Approve is what actually calls
+ *  /api/agent/apply; Discard just dismisses it. */
+function ProposalCard({
+  proposal,
+  onApprove,
+  onDiscard,
+}: {
+  proposal: ProposalItem;
+  onApprove: () => void;
+  onDiscard: () => void;
+}) {
+  const { title, destructive } = proposalSummary(proposal);
+
+  if (proposal.status === "applied") {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground">
+        <Check className="h-3.5 w-3.5 shrink-0" style={{ color: "hsl(var(--brand))" }} />
+        {title} — applied
+      </div>
+    );
+  }
+  if (proposal.status === "discarded") {
+    return (
+      <div className="rounded-lg border border-border bg-card px-3 py-2 text-xs italic text-muted-foreground opacity-60">
+        {title} — discarded
+      </div>
+    );
+  }
+  return (
+    <div
+      className={cn(
+        "rounded-lg border p-3",
+        destructive ? "border-destructive/40 bg-destructive/5" : "border-border bg-card",
+      )}
+    >
+      <p className="text-sm">{title}</p>
+      {proposal.status === "error" && (
+        <p className="mt-1 text-xs text-destructive">{proposal.error ?? "Couldn't apply that change"}</p>
+      )}
+      <div className="mt-2 flex gap-2">
+        <Button
+          size="sm"
+          variant={destructive ? "destructive" : "brand"}
+          onClick={onApprove}
+          disabled={proposal.status === "applying"}
+        >
+          {proposal.status === "applying" ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Check className="mr-1.5 h-3.5 w-3.5" />
+          )}
+          Approve
+        </Button>
+        <Button size="sm" variant="outline" onClick={onDiscard} disabled={proposal.status === "applying"}>
+          <X className="mr-1.5 h-3.5 w-3.5" /> Discard
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function KindIcon({ kind }: { kind: Source["kind"] }) {
   const cls = "h-3 w-3 shrink-0 text-muted-foreground";
