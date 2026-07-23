@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23",
+    date: "July 23, 2026",
+    title: "Ask now remembers your conversations",
+    tag: "feature",
+    summary:
+      "Ask has been rebuilt into a proper assistant: your conversations are saved, so you can leave and come back to them, and they follow you across your devices. It's the first step of a bigger Ask overhaul.",
+    items: [
+      "A conversation sidebar (and a slide-in drawer on mobile) with all your past chats — rename, delete, and jump back into any of them.",
+      "“New chat” starts a fresh thread; refreshing the page no longer loses your conversation.",
+      "A cleaner, roomier chat layout on both desktop and phone, with the extra tools (web search, study plan, voice, attach) tucked into one tidy menu so the composer stays uncluttered.",
+    ],
+  },
+  {
     id: "2026-07-22",
     date: "July 22, 2026",
     title: "A new logo",
