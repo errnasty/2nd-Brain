@@ -319,6 +319,17 @@ create table if not exists ask_messages (
 create index if not exists ask_messages_thread_idx on ask_messages (thread_id, created_at);
 `;
 
+// Ask memory — mirrors cloud migration 0027. Not synced. Always-run + idempotent.
+const ASK_MEMORY_SQL = `
+create table if not exists ask_memory (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  fact text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists ask_memory_user_idx on ask_memory (user_id, created_at desc);
+`;
+
 // FSRS scheduling columns — mirrors cloud migration 0018. Always-run +
 // idempotent so existing local DBs gain them without a reinstall.
 const FSRS_SQL = `
@@ -452,6 +463,13 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(ASK_THREADS_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] ask_threads tables failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: Ask memory (not synced, no triggers).
+  try {
+    await client.exec(ASK_MEMORY_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] ask_memory table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: upgrades pre-sync local DBs (adds updated_at etc.) and

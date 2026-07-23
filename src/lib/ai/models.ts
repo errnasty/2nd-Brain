@@ -32,3 +32,20 @@ export function getChatModel(id: string | undefined): ChatModel {
     CHAT_MODELS.find((m) => m.id === DEFAULT_CHAT_MODEL)!
   );
 }
+
+// OpenRouter slugs that reliably support tool/function calling (needed for the
+// Agent's multi-step tool loop). Others via OpenRouter (e.g. DeepSeek) call
+// tools inconsistently, so the agent falls back to the default model for them.
+const TOOL_CAPABLE_OPENROUTER = new Set([
+  "anthropic/claude-sonnet-4.6",
+  "google/gemini-2.5-flash",
+  "openrouter/auto",
+]);
+
+/** Whether a model can drive the Agent tool loop. Anthropic + OpenAI always;
+ *  OpenRouter only for the allowlisted slugs above. */
+export function isToolCapable(id: string | undefined): boolean {
+  const m = getChatModel(id);
+  if (m.provider === "anthropic" || m.provider === "openai") return true;
+  return TOOL_CAPABLE_OPENROUTER.has(m.id);
+}

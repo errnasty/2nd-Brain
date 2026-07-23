@@ -6,6 +6,7 @@ import { CitedMarkdown } from "@/components/ui/cited-markdown";
 import {
   ArrowUp,
   BookmarkPlus,
+  Bot,
   Brain,
   Check,
   CalendarDays,
@@ -62,6 +63,7 @@ import {
   type ThreadSummary,
 } from "@/app/(app)/ask/thread-actions";
 import { ThreadList } from "@/components/ask/thread-list";
+import { parseEvents } from "@/lib/ai/agent/stream";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
 
@@ -87,6 +89,8 @@ type Verification =
   | "loading"
   | { verdict: "supported" | "partial" | "unsupported" | "unknown"; issues: string[] };
 
+type AgentStep = { id: string; label: string; done: boolean };
+
 type Message = {
   id: string;
   role: "user" | "assistant";
@@ -97,6 +101,7 @@ type Message = {
   plan?: StudyPlanResult;
   followups?: string[];
   verification?: Verification;
+  steps?: AgentStep[];
 };
 
 const SUGGESTIONS = [
@@ -176,6 +181,7 @@ export function AskShell({
   const [error, setError] = useState<string | null>(null);
   const [modelId, setModelId] = useState<string>(DEFAULT_CHAT_MODEL);
   const [web, setWeb] = useState(false);
+  const [agentMode, setAgentMode] = useState(false);
   const [verifyMode, setVerifyMode] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [studyMode, setStudyMode] = useState(false);
@@ -617,13 +623,117 @@ export function AskShell({
     [streaming, deadline, hoursPerWeek],
   );
 
+  // Agent turn: a multi-step tool loop (/api/agent) streaming NDJSON events —
+  // text deltas + tool-step chips. Persists like a normal turn.
+  const sendAgent = useCallback(
+    async (question: string) => {
+      const trimmed = question.trim();
+      if (!trimmed || streaming) return;
+      setError(null);
+      setInput("");
+      const userMessage: Message = { id: crypto.randomUUID(), role: "user", content: trimmed };
+      const assistantId = crypto.randomUUID();
+      setMessages((prev) => [...prev, userMessage, { id: assistantId, role: "assistant", content: "", steps: [] }]);
+      setStreaming(true);
+      const history = messages.map((m) => ({ role: m.role, content: m.content }));
+
+      const tid = await ensureThread(trimmed);
+      if (tid) void appendMessage({ threadId: tid, role: "user", content: trimmed }).catch(() => {});
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const res = await fetch("/api/agent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: trimmed, history, model: modelId }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!res.ok) {
+          setError((await res.text()) || `HTTP ${res.status}`);
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          return;
+        }
+        if (!res.body) throw new Error("No response body");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let text = "";
+        let sources: Source[] = [];
+        let usage: Usage | undefined;
+        const steps: AgentStep[] = [];
+
+        let frameQueued = false;
+        const flush = () => {
+          frameQueued = false;
+          setMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: text, steps: [...steps] } : m)));
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const { events, rest } = parseEvents(buf);
+          buf = rest;
+          for (const e of events) {
+            if (e.type === "text") text += e.delta;
+            else if (e.type === "tool") {
+              if (e.status === "start") steps.push({ id: e.id, label: e.label, done: false });
+              else {
+                const s = steps.find((x) => x.id === e.id);
+                if (s) s.done = true;
+              }
+            } else if (e.type === "sources") {
+              sources = e.sources.map((s) => ({
+                n: s.n,
+                directoryItemId: s.directoryItemId,
+                title: s.title,
+                kind: s.kind,
+                similarity: s.similarity,
+              }));
+            } else if (e.type === "usage") usage = e.usage;
+            else if (e.type === "note") toast.message(e.message);
+            else if (e.type === "error") setError(e.message);
+          }
+          if (!frameQueued) {
+            frameQueued = true;
+            requestAnimationFrame(flush);
+          }
+        }
+        flush();
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: text, steps, sources: sources.length ? sources : undefined, usage } : m,
+          ),
+        );
+        if (tid && text.trim()) {
+          void appendMessage({ threadId: tid, role: "assistant", content: text, sources, usage: usage ?? null, model: modelId })
+            .then(() => refreshThreads())
+            .catch(() => {});
+        }
+      } catch (err) {
+        if ((err as Error)?.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Request failed");
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+      } finally {
+        setStreaming(false);
+        inputRef.current?.focus();
+      }
+    },
+    [messages, streaming, modelId, ensureThread, refreshThreads],
+  );
+
   function submit() {
     if (studyMode) sendStudyPlan(input);
+    else if (agentMode) sendAgent(input);
     else send(input);
   }
 
   const activeToolCount =
-    (web ? 1 : 0) + (studyMode ? 1 : 0) + (verifyMode ? 1 : 0) + (contextItems.length > 0 ? 1 : 0);
+    (web ? 1 : 0) + (agentMode ? 1 : 0) + (studyMode ? 1 : 0) + (verifyMode ? 1 : 0) + (contextItems.length > 0 ? 1 : 0);
 
   return (
     <div className="flex h-full min-h-0">
@@ -875,9 +985,24 @@ export function AskShell({
                       {activeToolCount > 0 && <span className="tabular-nums">· {activeToolCount}</span>}
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" side="top" className="w-52">
+                  <DropdownMenuContent align="start" side="top" className="w-56">
                     <DropdownMenuLabel>Tools</DropdownMenuLabel>
                     <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setAgentMode((a) => {
+                          if (!a) setStudyMode(false);
+                          return !a;
+                        });
+                      }}
+                      className="justify-between"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Bot className="h-3.5 w-3.5" /> Agent (multi-step)
+                      </span>
+                      {agentMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                    </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={(e) => {
                         e.preventDefault();
@@ -887,8 +1012,9 @@ export function AskShell({
                     >
                       <span className="inline-flex items-center gap-2">
                         <Globe className="h-3.5 w-3.5" /> Web search
+                        {agentMode && <span className="text-[10px] text-muted-foreground">(built in)</span>}
                       </span>
-                      {web && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
+                      {web && !agentMode && <Check className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       onSelect={(e) => {
@@ -1330,6 +1456,20 @@ const MessageBubble = memo(function MessageBubble({
           {message.content && <GroundingMeter message={message} />}
         </div>
       </div>
+      {message.steps && message.steps.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {message.steps.map((s) => (
+            <div key={s.id} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              {s.done ? (
+                <Check className="h-3 w-3 shrink-0" style={{ color: "hsl(var(--brand))" }} />
+              ) : (
+                <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+              )}
+              <span className="truncate">{s.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="prose-reader max-w-none text-[15px] leading-[1.7]">
         {message.content ? (
           <CitedMarkdown

@@ -737,6 +737,25 @@ export const askMessages = pgTable(
 export type AskThread = typeof askThreads.$inferSelect;
 export type AskMessage = typeof askMessages.$inferSelect;
 
+// Ask memory — durable user-scoped facts injected into the assistant's prompt.
+// NOT synced. See migration 0027.
+export const askMemory = pgTable(
+  "ask_memory",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    fact: text("fact").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userIdx: index("ask_memory_user_idx").on(t.userId, t.createdAt.desc()),
+  }),
+);
+
+export type AskMemory = typeof askMemory.$inferSelect;
+
 export type DailyBrief = typeof dailyBriefs.$inferSelect;
 
 export type Tag = typeof tags.$inferSelect;
