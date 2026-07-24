@@ -443,7 +443,12 @@ export function KnowledgeMap() {
         }
       }
 
+      // Nodes (world space). Labels are NOT drawn here — they're collected as
+      // candidates and drawn in a separate screen-space declutter pass below,
+      // so overlapping labels get dropped by priority instead of piling into
+      // an unreadable soup.
       const labelThreshold = labelScaleRef.current;
+      const labelCands: { nd: SimNode; color: string; priority: number }[] = [];
       for (const nd of nodes) {
         if (vis && !vis.has(nd.id)) continue;
         const lit = !hi || hi.has(nd.id);
@@ -458,28 +463,67 @@ export function KnowledgeMap() {
           ctx!.strokeStyle = pal.halo;
           ctx!.stroke();
         }
-        if (nd.id === selId) {
+        const isSel = nd.id === selId;
+        if (isSel) {
           ctx!.lineWidth = 2 / cam.scale;
           ctx!.strokeStyle = "hsl(var(--brand))";
           ctx!.beginPath();
           ctx!.arc(nd.x, nd.y, nd.r + 3 / cam.scale, 0, 2 * Math.PI);
           ctx!.stroke();
         }
-        const showLabel = nd.kind !== "item" || cam.scale > labelThreshold || (hi && hi.has(nd.id));
+        // A label is a candidate when it's a folder/tag (structure — always
+        // worth a shot if it fits), an item once zoomed past the fade
+        // threshold, or the selected/highlighted node. Dimmed (non-lit) nodes
+        // are skipped so a hover doesn't leave a field of grey labels behind.
+        const isHi = hi != null && hi.has(nd.id);
+        const showLabel = lit && (nd.kind !== "item" || cam.scale > labelThreshold || isHi || isSel);
         if (showLabel) {
-          const label = nd.label.length > 28 ? nd.label.slice(0, 28) + "…" : nd.label;
-          const fs = (nd.kind === "folder" ? 13 : nd.kind === "tag" ? 9 : 11) / cam.scale;
-          ctx!.font = `${nd.kind === "folder" ? "600 " : "500 "}${fs}px Georgia, serif`;
-          ctx!.textAlign = "center";
-          ctx!.textBaseline = "top";
-          const ly = nd.y + nd.r + 3 / cam.scale;
-          ctx!.lineWidth = 3 / cam.scale;
-          ctx!.strokeStyle = pal.halo;
-          ctx!.lineJoin = "round";
-          ctx!.strokeText(label, nd.x, ly);
-          ctx!.fillStyle = color;
-          ctx!.fillText(label, nd.x, ly);
+          // Higher priority claims screen space first in the declutter pass:
+          // selected > highlighted > folders > higher-degree > tags.
+          let priority = nd.r + (nd.kind === "folder" ? 1000 : nd.kind === "tag" ? 0 : 200);
+          if (isHi) priority += 5000;
+          if (isSel) priority += 10000;
+          labelCands.push({ nd, color, priority });
         }
+      }
+
+      // ── Label declutter pass (screen space) ────────────────────────────
+      // Draw the highest-priority labels first; skip any whose box overlaps a
+      // label already placed this frame. This is what makes the map legible:
+      // you see as many labels as actually fit, cleanly, instead of every
+      // folder/tag/item name stacked on top of the others. Rendering in screen
+      // space (not the zoom-scaled world transform) also keeps text crisp.
+      ctx!.globalAlpha = 1;
+      ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx!.textAlign = "center";
+      ctx!.textBaseline = "top";
+      ctx!.lineJoin = "round";
+      labelCands.sort((a, b) => b.priority - a.priority);
+      const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+      const LABEL_PAD = 2;
+      for (const cand of labelCands) {
+        const nd = cand.nd;
+        const sx = cssW / 2 + cam.x + nd.x * cam.scale;
+        const sy = cssH / 2 + cam.y + nd.y * cam.scale;
+        if (sx < -80 || sx > cssW + 80 || sy < -40 || sy > cssH + 40) continue; // offscreen
+        const fs = nd.kind === "folder" ? 13 : nd.kind === "tag" ? 10 : 11;
+        ctx!.font = `${nd.kind === "folder" ? "600 " : "500 "}${fs}px Georgia, serif`;
+        const label = nd.label.length > 28 ? nd.label.slice(0, 28) + "…" : nd.label;
+        const w = ctx!.measureText(label).width;
+        const top = sy + nd.r * cam.scale + 3;
+        const x0 = sx - w / 2 - LABEL_PAD, x1 = sx + w / 2 + LABEL_PAD;
+        const y0 = top - LABEL_PAD, y1 = top + fs + LABEL_PAD;
+        let clash = false;
+        for (const p of placed) {
+          if (x0 < p.x1 && x1 > p.x0 && y0 < p.y1 && y1 > p.y0) { clash = true; break; }
+        }
+        if (clash) continue;
+        placed.push({ x0, y0, x1, y1 });
+        ctx!.lineWidth = 3;
+        ctx!.strokeStyle = pal.halo;
+        ctx!.strokeText(label, sx, top);
+        ctx!.fillStyle = cand.color;
+        ctx!.fillText(label, sx, top);
       }
 
       // #22 Minimap — overview of visible nodes + the current viewport rect,
@@ -884,7 +928,10 @@ export function KnowledgeMap() {
               </div>
               <Toggle label="Link arrows" checked={arrows} onChange={setArrows} />
               <div className="my-2 border-t border-border" />
-              <Field label="Label fade"><Range min={0.1} max={1.2} step={0.05} value={labelScale} onChange={setLabelScale} /></Field>
+              <Field label="Item labels from zoom">
+                <Range min={0.1} max={1.2} step={0.05} value={labelScale} onChange={setLabelScale} />
+                <span className="text-[10px] italic text-muted-foreground">folder &amp; tag labels always show if they fit; item names appear once you zoom in past this</span>
+              </Field>
               <Field label="Repel force"><Range min={2000} max={30000} step={500} value={repel} onChange={setRepel} /></Field>
               <Field label="Link distance"><Range min={40} max={260} step={5} value={linkDist} onChange={setLinkDist} /></Field>
               <Field label="Center force"><Range min={0} max={0.08} step={0.002} value={centerForce} onChange={setCenterForce} /></Field>

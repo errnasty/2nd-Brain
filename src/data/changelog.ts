@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-q",
+    date: "July 23, 2026",
+    title: "Knowledge map labels no longer overlap into a soup",
+    tag: "improvement",
+    summary:
+      "The Knowledge map used to draw every folder, tag, and item name on top of each other, so nothing was readable. It now shows as many labels as actually fit without overlapping — prioritizing folders and whatever you've hovered or selected — so you can read the map at a glance. Zoom in to reveal more.",
+  },
+  {
     id: "2026-07-23-p",
     date: "July 23, 2026",
     title: "Three new colour themes, and a tidier theme picker",
