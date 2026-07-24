@@ -27,6 +27,29 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-r",
+    date: "July 23, 2026",
+    title: "Knowledge map is far easier to read",
+    tag: "improvement",
+    summary:
+      "The map now opens grouped into folder clusters with tags hidden, so it reads as neighborhoods instead of a hairball, and it uses your chosen colour theme's colours. Click any folder (or a row in the new Clusters panel) to isolate its cluster, click a legend entry to show or hide that kind of node, and tag connections now stay out of the way until you hover.",
+    items: [
+      "Opens in a cluster-by-folder layout with tags hidden by default.",
+      "Node and link colours follow your selected colour theme, in light and dark.",
+      "New Clusters panel lists your folders with item counts and their top tags.",
+      "Isolate a folder to dim everything except its cluster.",
+      "Click legend entries to toggle folders, tags, articles, documents, or notes.",
+    ],
+  },
+  {
+    id: "2026-07-23-q",
+    date: "July 23, 2026",
+    title: "Knowledge map labels no longer overlap into a soup",
+    tag: "improvement",
+    summary:
+      "The Knowledge map used to draw every folder, tag, and item name on top of each other, so nothing was readable. It now shows as many labels as actually fit without overlapping — prioritizing folders and whatever you've hovered or selected — so you can read the map at a glance. Zoom in to reveal more.",
+  },
+  {
     id: "2026-07-23-p",
     date: "July 23, 2026",
     title: "Three new colour themes, and a tidier theme picker",
