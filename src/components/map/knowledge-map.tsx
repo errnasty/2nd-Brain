@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { ChevronRight, Loader2, Maximize2, Minus, Network, Plus, Search, SlidersHorizontal, X } from "lucide-react";
+import { ChevronRight, List, Loader2, Maximize2, Minus, Network, Plus, Search, SlidersHorizontal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -53,6 +53,50 @@ function typeColor(kind: MapNode["kind"], itemKind: MapNode["itemKind"], c: Pale
   if (itemKind === "uploaded_document") return c.document;
   return c.note;
 }
+
+// ── Theme-aware palette ───────────────────────────────────────────────
+// The map used to be a fixed warm/brown palette regardless of the app's
+// colour theme. These read the live theme tokens (--brand, --foreground, …)
+// so the graph matches whatever palette is active (parchment, ocean,
+// purple90s, …) in both light and dark, falling back to the built-ins if the
+// vars can't be read (SSR / parse failure).
+function parseHslTriplet(raw: string): { h: number; s: number; l: number } | null {
+  const m = raw.trim().match(/^(-?[\d.]+)\s+([\d.]+)%\s+([\d.]+)%$/);
+  return m ? { h: +m[1], s: +m[2], l: +m[3] } : null;
+}
+function hslStr(h: number, s: number, l: number, a?: number): string {
+  return a == null ? `hsl(${h} ${s}% ${l}%)` : `hsl(${h} ${s}% ${l}% / ${a})`;
+}
+function readThemePalette(dark: boolean): Palette {
+  const fallback = dark ? COLORS_DARK : COLORS;
+  if (typeof window === "undefined") return fallback;
+  const cs = getComputedStyle(document.documentElement);
+  const brand = parseHslTriplet(cs.getPropertyValue("--brand"));
+  const fg = parseHslTriplet(cs.getPropertyValue("--foreground"));
+  const mf = parseHslTriplet(cs.getPropertyValue("--muted-foreground"));
+  const bg = parseHslTriplet(cs.getPropertyValue("--background"));
+  if (!brand || !fg || !mf || !bg) return fallback;
+  // Monochrome-brand themes (the default Parchment in light mode, Black &
+  // white) have a near-neutral brand ≈ foreground — theming folders with it
+  // would make folders and documents the same near-black and flatten the whole
+  // map to greyscale. Keep the distinguishable warm built-in accent for those;
+  // only re-theme the background halo so label outlines still match.
+  if (brand.s < 12) return { ...fallback, halo: hslStr(bg.h, bg.s, bg.l, 0.92) };
+  // Folders take the brand accent; tags a softer, desaturated brand (related
+  // but secondary); the three item kinds are neutral shades spanning
+  // foreground → muted-foreground.
+  return {
+    folder: hslStr(brand.h, brand.s, brand.l),
+    tag: hslStr(brand.h, Math.max(18, brand.s - 28), dark ? Math.min(74, brand.l + 10) : Math.max(38, brand.l + 6)),
+    article: hslStr(fg.h, Math.round((fg.s + mf.s) / 2), Math.round((fg.l + mf.l) / 2)),
+    document: hslStr(fg.h, fg.s, fg.l),
+    note: hslStr(mf.h, mf.s, mf.l),
+    link: hslStr(brand.h, brand.s, brand.l, 0.85),
+    folderLink: hslStr(brand.h, brand.s, brand.l, dark ? 0.5 : 0.45),
+    tagLink: hslStr(mf.h, mf.s, mf.l, 0.38),
+    halo: hslStr(bg.h, bg.s, bg.l, 0.92),
+  };
+}
 function radiusFor(kind: MapNode["kind"], degree: number): number {
   const base = kind === "folder" ? 10 : kind === "tag" ? 3.5 : 5;
   return base + Math.sqrt(degree) * (kind === "tag" ? 0.7 : 1.4);
@@ -77,7 +121,16 @@ export function KnowledgeMap() {
   const router = useRouter();
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
-  const palette = dark ? COLORS_DARK : COLORS;
+  // Palette follows the live theme tokens; recomputed when dark mode or the
+  // colour theme (data-palette attribute) changes.
+  const [palette, setPalette] = useState<Palette>(() => (dark ? COLORS_DARK : COLORS));
+  useEffect(() => {
+    const compute = () => setPalette(readThemePalette(document.documentElement.classList.contains("dark")));
+    compute();
+    const obs = new MutationObserver(compute);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-palette"] });
+    return () => obs.disconnect();
+  }, [resolvedTheme]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -92,16 +145,22 @@ export function KnowledgeMap() {
   const [query, setQuery] = useState("");
   // #23 Local-graph breadcrumb stack.
   const [crumbs, setCrumbs] = useState<{ id: string; label: string }[]>([]);
-  // #17 / #18 layout + time-range.
-  const [layout, setLayout] = useState<LayoutMode>("force");
+  // #17 / #18 layout + time-range. Cluster-by-folder is the default: it groups
+  // the graph into readable folder neighborhoods instead of one hairball.
+  const [layout, setLayout] = useState<LayoutMode>("cluster");
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   // #21 Find-connection.
   const [findOpen, setFindOpen] = useState(false);
   const [fromLabel, setFromLabel] = useState("");
   const [toLabel, setToLabel] = useState("");
-  const layoutRef = useRef<LayoutMode>("force");
+  const layoutRef = useRef<LayoutMode>("cluster");
   const pathRef = useRef<Set<string> | null>(null);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
+
+  // Clusters overview + folder isolate.
+  const [showClusters, setShowClusters] = useState(false);
+  const [isolateId, setIsolateId] = useState<string | null>(null);
+  const isolateRef = useRef<Set<string> | null>(null);
 
   // Controls.
   const [showPanel, setShowPanel] = useState(false);
@@ -109,8 +168,20 @@ export function KnowledgeMap() {
   const [colorMode, setColorMode] = useState<ColorMode>("type");
   const [arrows, setArrows] = useState(false);
   const [labelScale, setLabelScale] = useState(0.45);
-  const [hideTags, setHideTags] = useState(false);
-  const [hideDocs, setHideDocs] = useState(false);
+  const [tagLinksOnHover, setTagLinksOnHover] = useState(true);
+  // Legend/type visibility. Tags hidden by default — they're the bulk of the
+  // visual noise; structure (folders → items) is the signal. Keys are the node
+  // "kind" ("folder" | "tag") or an item-kind ("saved_article" |
+  // "uploaded_document" | "user_note").
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set(["tag"]));
+  const toggleHidden = useCallback((key: string) => {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
   const [hideOrphans, setHideOrphans] = useState(false);
   const [repel, setRepel] = useState(11000);
   const [linkDist, setLinkDist] = useState(120);
@@ -138,6 +209,7 @@ export function KnowledgeMap() {
   const labelScaleRef = useRef(labelScale);
   const arrowsRef = useRef(arrows);
   const colorModeRef = useRef<ColorMode>(colorMode);
+  const tagLinksHoverRef = useRef(tagLinksOnHover);
 
   useEffect(() => { paletteRef.current = palette; darkRef.current = dark; }, [palette, dark]);
   useEffect(() => { selectedIdRef.current = selected?.id ?? null; }, [selected]);
@@ -147,10 +219,23 @@ export function KnowledgeMap() {
   useEffect(() => { labelScaleRef.current = labelScale; }, [labelScale]);
   useEffect(() => { arrowsRef.current = arrows; }, [arrows]);
   useEffect(() => { colorModeRef.current = colorMode; }, [colorMode]);
+  useEffect(() => { tagLinksHoverRef.current = tagLinksOnHover; }, [tagLinksOnHover]);
   // #17 Re-run physics when the layout changes so the new arrangement applies.
   useEffect(() => { alphaRef.current = Math.max(alphaRef.current, 0.8); fittedRef.current = false; }, [layout]);
-  // #21 Drop a stale highlight path when the graph reloads (its ids are gone).
-  useEffect(() => { pathRef.current = null; setPathLen(null); setFindMsg(null); }, [data]);
+  // #21 Drop a stale highlight path/isolate when the graph reloads (ids gone).
+  useEffect(() => { pathRef.current = null; setPathLen(null); setFindMsg(null); setIsolateId(null); }, [data]);
+
+  // Isolate a folder's cluster: dim everything except the folder, its items,
+  // and those items' tags (2 hops). Recomputed from the adjacency the sim
+  // build fills in; null = nothing isolated.
+  useEffect(() => {
+    if (!isolateId) { isolateRef.current = null; return; }
+    const adj = adjRef.current;
+    const set = new Set<string>([isolateId]);
+    for (const nb of adj.get(isolateId) ?? []) set.add(nb);
+    for (const id of [...set]) for (const nb of adj.get(id) ?? []) set.add(nb);
+    isolateRef.current = set;
+  }, [isolateId, data]);
 
   const degreeMap = useMemo(() => {
     const d: Record<string, number> = {};
@@ -158,11 +243,14 @@ export function KnowledgeMap() {
     return d;
   }, [data]);
 
+  // A node's legend/type key: folders + tags by kind, items by their item-kind.
+  const typeKeyOf = (n: MapNode): string => (n.kind === "item" ? n.itemKind ?? "user_note" : n.kind);
+
   // ── Filters + search → visible id set (null = all) ──────────────────
   const visibleIds = useMemo(() => {
     if (!data) return null as Set<string> | null;
     const q = query.trim().toLowerCase();
-    if (!q && !hideTags && !hideDocs && !hideOrphans && timeRange === "all") return null;
+    if (!q && hidden.size === 0 && !hideOrphans && timeRange === "all") return null;
     const DAY = 86_400_000;
     const cutoff =
       timeRange === "7d" ? Date.now() - 7 * DAY
@@ -170,8 +258,7 @@ export function KnowledgeMap() {
       : timeRange === "90d" ? Date.now() - 90 * DAY
       : 0;
     const passes = (n: MapNode) =>
-      !(hideTags && n.kind === "tag") &&
-      !(hideDocs && n.itemKind === "uploaded_document") &&
+      !hidden.has(typeKeyOf(n)) &&
       !(hideOrphans && (degreeMap[n.id] ?? 0) === 0) &&
       !(cutoff > 0 && n.kind === "item" && n.addedAt != null && new Date(n.addedAt).getTime() < cutoff);
     let allowed = new Set(data.nodes.filter(passes).map((n) => n.id));
@@ -187,8 +274,35 @@ export function KnowledgeMap() {
       allowed = expand;
     }
     return allowed;
-  }, [data, query, hideTags, hideDocs, hideOrphans, timeRange, degreeMap]);
+  }, [data, query, hidden, hideOrphans, timeRange, degreeMap]);
   useEffect(() => { visibleIdsRef.current = visibleIds; }, [visibleIds]);
+
+  // #5 Clusters overview: each folder with its direct item count + the tags
+  // most common across those items, sorted by size. Powers the left panel and
+  // doubles as a click-to-isolate index.
+  const clusters = useMemo(() => {
+    if (!data) return [] as { id: string; label: string; itemCount: number; topTags: string[] }[];
+    const byId = new Map(data.nodes.map((n) => [n.id, n]));
+    const adj = new Map<string, Set<string>>();
+    for (const l of data.links) {
+      (adj.get(l.source) ?? adj.set(l.source, new Set()).get(l.source)!).add(l.target);
+      (adj.get(l.target) ?? adj.set(l.target, new Set()).get(l.target)!).add(l.source);
+    }
+    return data.nodes
+      .filter((n) => n.kind === "folder")
+      .map((f) => {
+        const items = [...(adj.get(f.id) ?? [])].map((id) => byId.get(id)).filter((n): n is MapNode => n?.kind === "item");
+        const tagCount = new Map<string, number>();
+        for (const it of items)
+          for (const id of adj.get(it.id) ?? []) {
+            const t = byId.get(id);
+            if (t?.kind === "tag") tagCount.set(t.label, (tagCount.get(t.label) ?? 0) + 1);
+          }
+        const topTags = [...tagCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map((e) => e[0]);
+        return { id: f.id, label: f.label, itemCount: items.length, topTags };
+      })
+      .sort((a, b) => b.itemCount - a.itemCount);
+  }, [data]);
 
   const summary = useMemo(() => {
     if (!data) return null;
@@ -407,10 +521,11 @@ export function KnowledgeMap() {
     function render() {
       const pal = paletteRef.current, cam = camRef.current, vis = visibleIdsRef.current;
       const selId = selectedIdRef.current, hovered = hoveredRef.current;
-      // Highlight set: an active find-connection path wins; otherwise hovered +
-      // neighbors. Non-members are dimmed.
+      // Highlight set (non-members dimmed). Precedence: an active
+      // find-connection path > an isolated folder cluster > hover + neighbors.
       let hi: Set<string> | null = null;
       if (pathRef.current) hi = pathRef.current;
+      else if (isolateRef.current) hi = isolateRef.current;
       else if (hovered) { hi = new Set([hovered]); for (const nb of adjRef.current.get(hovered) ?? []) hi.add(nb); }
       ctx!.setTransform(1, 0, 0, 1, 0, 0);
       ctx!.clearRect(0, 0, canvas!.width, canvas!.height);
@@ -421,6 +536,10 @@ export function KnowledgeMap() {
       ctx!.lineCap = "round";
       for (const l of links) {
         if (vis && !(vis.has(l.source.id) && vis.has(l.target.id))) continue;
+        // #4 Tag links only draw when an endpoint is highlighted (hover/isolate/
+        // path) — they're the densest, least-informative edges, so keeping them
+        // off until relevant calms the "string art" a lot.
+        if (l.kind === "tag" && tagLinksHoverRef.current && !(hi && (hi.has(l.source.id) || hi.has(l.target.id)))) continue;
         const lit = !hi || (hi.has(l.source.id) && hi.has(l.target.id));
         ctx!.globalAlpha = lit ? 1 : 0.08;
         ctx!.strokeStyle = l.kind === "link" ? pal.link : l.kind === "folder" ? pal.folderLink : pal.tagLink;
@@ -658,7 +777,6 @@ export function KnowledgeMap() {
     fitFnRef.current?.();
     setZoomPct(Math.round(camRef.current.scale * 100));
   }, []);
-  const activeFilters = (hideTags ? 1 : 0) + (hideDocs ? 1 : 0) + (hideOrphans ? 1 : 0);
 
   // #21 Find connection (BFS shortest path) + "Walk from here" (random walk).
   const [pathLen, setPathLen] = useState<number | null>(null);
@@ -717,11 +835,13 @@ export function KnowledgeMap() {
   // #23 Focus a node's local graph + push a breadcrumb.
   const focusLocal = useCallback((id: string, label: string) => {
     clearPath();
+    setIsolateId(null);
     setCrumbs((prev) => (prev.some((c) => c.id === id) ? prev : [...prev, { id, label }]));
     setCenterId(id);
   }, [clearPath]);
   const exitLocal = useCallback(() => {
     clearPath();
+    setIsolateId(null);
     setCrumbs([]);
     setCenterId(null);
   }, [clearPath]);
@@ -791,6 +911,13 @@ export function KnowledgeMap() {
               </button>
             )}
             <button
+              onClick={() => setShowClusters((v) => !v)}
+              title="Clusters overview"
+              className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-accent ${showClusters ? "text-brand" : "text-muted-foreground"}`}
+            >
+              <List className="h-4 w-4" />
+            </button>
+            <button
               onClick={() => setShowPanel((v) => !v)}
               title="Graph settings"
               className={`inline-flex h-8 w-8 items-center justify-center rounded-md border border-border hover:bg-accent ${showPanel ? "text-brand" : "text-muted-foreground"}`}
@@ -832,9 +959,49 @@ export function KnowledgeMap() {
             />
           )}
 
-          {/* Top-left overlay: breadcrumb · layout · find-connection */}
+          {/* Top-left overlay: clusters · isolate · breadcrumb · layout · find */}
           {hasGraph && (
-            <div className="absolute left-4 top-4 flex flex-col gap-2">
+            <div className="absolute left-4 top-4 flex max-w-[min(16rem,calc(100%-2rem))] flex-col gap-2">
+              {/* #5 Clusters overview — click a folder to isolate its cluster */}
+              {showClusters && clusters.length > 0 && (
+                <div className="max-h-[42vh] w-64 overflow-y-auto rounded-lg border border-border bg-card/95 p-2 shadow-lg backdrop-blur">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="editorial-eyebrow-brand">§ Clusters</span>
+                    <button onClick={() => setShowClusters(false)} className="rounded p-0.5 text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
+                  </div>
+                  <div className="space-y-0.5">
+                    {clusters.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => setIsolateId((cur) => (cur === c.id ? null : c.id))}
+                        title="Isolate this cluster"
+                        className={cn(
+                          "flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left transition-colors",
+                          isolateId === c.id ? "bg-accent" : "hover:bg-accent/60",
+                        )}
+                      >
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate text-[13px] font-medium">{c.label}</span>
+                          <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">{c.itemCount}</span>
+                        </span>
+                        {c.topTags.length > 0 && (
+                          <span className="truncate font-mono text-[10px] text-muted-foreground">{c.topTags.map((t) => `#${t}`).join(" ")}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Isolate exit chip */}
+              {isolateId && (
+                <button
+                  onClick={() => setIsolateId(null)}
+                  className="inline-flex items-center gap-1 self-start rounded-lg border border-border bg-card/95 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide shadow-sm backdrop-blur"
+                  style={{ color: "hsl(var(--brand))" }}
+                >
+                  <X className="h-3 w-3" /> Exit isolate
+                </button>
+              )}
               {/* #23 Local-graph breadcrumb stack */}
               {crumbs.length > 0 && (
                 <div className="flex items-center gap-1 rounded-lg border border-border bg-card/95 px-2 py-1 text-[11px] shadow-sm backdrop-blur">
@@ -919,13 +1086,11 @@ export function KnowledgeMap() {
                 {!centerId && <span className="text-[10px] italic text-muted-foreground">applies after “Focus local graph”</span>}
               </Field>
               <div className="my-2 border-t border-border" />
-              <Toggle label="Hide tags" checked={hideTags} onChange={setHideTags} />
-              <Toggle label="Hide attachments" checked={hideDocs} onChange={setHideDocs} />
+              <Toggle label="Hide tags" checked={hidden.has("tag")} onChange={() => toggleHidden("tag")} />
+              <Toggle label="Hide attachments" checked={hidden.has("uploaded_document")} onChange={() => toggleHidden("uploaded_document")} />
               <Toggle label="Hide orphans" checked={hideOrphans} onChange={setHideOrphans} />
-              <div className="mb-1.5 flex items-center justify-between font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                <span>Showing</span>
-                <span className="tabular-nums">{3 - activeFilters} / 3 types</span>
-              </div>
+              <p className="mb-1.5 text-[10px] italic text-muted-foreground">Tip: click a type in the legend to toggle it.</p>
+              <Toggle label="Tag links on hover only" checked={tagLinksOnHover} onChange={setTagLinksOnHover} />
               <Toggle label="Link arrows" checked={arrows} onChange={setArrows} />
               <div className="my-2 border-t border-border" />
               <Field label="Item labels from zoom">
@@ -938,16 +1103,16 @@ export function KnowledgeMap() {
             </div>
           )}
 
-          {/* Legend */}
+          {/* Legend — #6 click a row to show/hide that node type */}
           {hasGraph && (
-            <div className="pointer-events-none absolute bottom-4 left-4 rounded-lg border border-border bg-card/95 px-3 py-2.5 backdrop-blur">
-              <div className="mb-1.5 editorial-eyebrow-brand">§ Legend</div>
+            <div className="absolute bottom-4 left-4 rounded-lg border border-border bg-card/95 px-3 py-2.5 backdrop-blur">
+              <div className="mb-1.5 editorial-eyebrow-brand">§ Legend · click to toggle</div>
               <div className="space-y-0.5 text-[11px]">
-                <LegendDot color={palette.folder} label="Folder" />
-                <LegendDot color={palette.tag} label="Tag" />
-                <LegendDot color={palette.article} label="Saved article" />
-                <LegendDot color={palette.document} label="Uploaded document" />
-                <LegendDot color={palette.note} label="User note" />
+                <LegendRow color={palette.folder} label="Folder" hidden={hidden.has("folder")} onClick={() => toggleHidden("folder")} />
+                <LegendRow color={palette.tag} label="Tag" hidden={hidden.has("tag")} onClick={() => toggleHidden("tag")} />
+                <LegendRow color={palette.article} label="Saved article" hidden={hidden.has("saved_article")} onClick={() => toggleHidden("saved_article")} />
+                <LegendRow color={palette.document} label="Uploaded document" hidden={hidden.has("uploaded_document")} onClick={() => toggleHidden("uploaded_document")} />
+                <LegendRow color={palette.note} label="User note" hidden={hidden.has("user_note")} onClick={() => toggleHidden("user_note")} />
               </div>
               <div className="mt-2 border-t border-border pt-1.5 font-mono text-[10px] italic text-muted-foreground">
                 {data!.truncated ? `Top ${data!.shown} of ${data!.total} · ` : ""}drag · scroll zoom · dbl-click pin
@@ -1008,7 +1173,20 @@ export function KnowledgeMap() {
               <div className="p-4">
                 <h2 className="editorial-display" style={{ fontSize: "1.25rem", letterSpacing: "-0.014em" }}>{selected.label}</h2>
                 {selected.kind === "tag" && <p className="mt-3 text-sm italic text-muted-foreground">Click an item connected to this tag to open it.</p>}
-                {selected.kind === "folder" && <p className="mt-3 text-sm italic text-muted-foreground">Folder. Click a connected item to inspect it, or open it in the Directory.</p>}
+                {selected.kind === "folder" && (
+                  <>
+                    <p className="mt-3 text-sm italic text-muted-foreground">Folder. Isolate its cluster to focus, or click a connected item to inspect it.</p>
+                    <div className="mt-4 flex flex-col gap-2">
+                      <Button
+                        size="sm"
+                        variant={isolateId === selected.id ? "brand" : "outline"}
+                        onClick={() => setIsolateId(isolateId === selected.id ? null : selected.id)}
+                      >
+                        <Network className="mr-1.5 h-3.5 w-3.5" /> {isolateId === selected.id ? "Exit isolate" : "Isolate this cluster"}
+                      </Button>
+                    </div>
+                  </>
+                )}
                 {selected.kind === "item" && detailLoading && (
                   <div className="mt-4 flex items-center gap-2 text-sm italic text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading…</div>
                 )}
@@ -1067,11 +1245,15 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
     </label>
   );
 }
-function LegendDot({ color, label }: { color: string; label: string }) {
+function LegendRow({ color, label, hidden, onClick }: { color: string; label: string; hidden: boolean; onClick: () => void }) {
   return (
-    <div className="flex items-center gap-2">
-      <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
-      <span className="text-muted-foreground">{label}</span>
-    </div>
+    <button
+      onClick={onClick}
+      title={hidden ? `Show ${label.toLowerCase()}s` : `Hide ${label.toLowerCase()}s`}
+      className={cn("flex w-full items-center gap-2 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/60", hidden && "opacity-40")}
+    >
+      <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+      <span className={cn("text-muted-foreground", hidden && "line-through")}>{label}</span>
+    </button>
   );
 }
