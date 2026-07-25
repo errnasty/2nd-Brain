@@ -362,3 +362,37 @@ export async function rewriteLeechAction(cardId: string) {
     return { ok: false as const, error: msg };
   }
 }
+
+export type ProposedCard = { question: string; answer: string };
+
+/**
+ * Draft flashcards from text WITHOUT saving them. The reader shows these for
+ * per-card approval — adding to someone's study deck uninvited costs them
+ * review time later, so nothing is persisted here.
+ */
+export async function proposeCardsFromTextAction(input: { title: string; text: string }) {
+  const title = (input.title ?? "").slice(0, 300);
+  const text = (input.text ?? "").trim();
+  if (!text) return { ok: false as const, error: "Nothing to make cards from" };
+  const { user } = await requireUser();
+  try {
+    const settings = await getUserSettings(user.id);
+    const cards = await generateFlashcards(title, text.slice(0, 6000), {
+      count: settings.flashcardCount ?? DEFAULT_FLASHCARD_COUNT,
+      difficulty: settings.flashcardDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+    });
+    if (cards.length === 0) {
+      return {
+        ok: false as const,
+        error: aiAvailable()
+          ? "Couldn't draft cards from this article — try again"
+          : "AI isn't configured — add an API key in Settings",
+      };
+    }
+    return { ok: true as const, cards: cards as ProposedCard[] };
+  } catch (err) {
+    const msg = dbErrorMessage(err, "Couldn't draft flashcards");
+    console.error("proposeCardsFromTextAction failed:", msg);
+    return { ok: false as const, error: msg };
+  }
+}

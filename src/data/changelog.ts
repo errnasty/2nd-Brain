@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25",
+    date: "July 25, 2026",
+    title: "Turn an article into flashcards as you finish it",
+    tag: "feature",
+    summary:
+      "At the end of every article there's now a \"Make cards from this\" button that drafts a few flashcards from what you just read. Nothing is added to your deck unless you keep it — review each card and discard the rest.",
+    items: [
+      "Cards are drafted only when you ask, never automatically.",
+      "Keep the ones worth remembering, discard the rest.",
+      "Kept cards go straight into your normal review schedule.",
+    ],
+  },
+  {
     id: "2026-07-23-v",
     date: "July 23, 2026",
     title: "Read news in any language",

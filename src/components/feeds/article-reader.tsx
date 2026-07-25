@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import {
   Bookmark,
   BookmarkPlus,
+  Brain,
+  Check,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -19,6 +21,7 @@ import {
   Sparkles,
   Star,
   Volume2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -55,7 +58,12 @@ import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 import { SelectionToCard } from "@/components/review/selection-card";
 import { PaneToggles } from "@/components/shell/pane-toggles";
-import { createCardsFromTextAction } from "@/app/(app)/review/actions";
+import {
+  createCardsFromTextAction,
+  createFlashcardAction,
+  proposeCardsFromTextAction,
+  type ProposedCard,
+} from "@/app/(app)/review/actions";
 
 type ArticleData = {
   id: string;
@@ -1051,6 +1059,12 @@ export function ArticleReader({
               ) : null}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
               {article && !loadingContent && (
+                <CardsFromArticle
+                  title={displayTitle ?? article.title}
+                  text={(displayContent ?? article.excerpt ?? "").replace(/<[^>]+>/g, " ")}
+                />
+              )}
+              {article && !loadingContent && (
                 <NextUpFooter
                   nextId={nextId}
                   nextTitle={nextId ? titleById[nextId] : undefined}
@@ -1161,6 +1175,125 @@ function TranslationBar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+    </div>
+  );
+}
+
+/**
+ * End-of-article capture. The moment after reading is when context is
+ * freshest and effort lowest — but nothing reaches the study deck until it's
+ * explicitly kept.
+ */
+function CardsFromArticle({ title, text }: { title: string; text: string }) {
+  const [state, setState] = useState<"idle" | "drafting" | "review">("idle");
+  const [cards, setCards] = useState<ProposedCard[]>([]);
+  const [savingIdx, setSavingIdx] = useState<number | null>(null);
+  const [keptCount, setKeptCount] = useState(0);
+
+  async function draft() {
+    setState("drafting");
+    try {
+      const r = await proposeCardsFromTextAction({ title, text });
+      if (!r.ok) {
+        toast.error(r.error);
+        setState("idle");
+        return;
+      }
+      setCards(r.cards);
+      setState("review");
+    } catch {
+      toast.error("Couldn't draft cards from this article");
+      setState("idle");
+    }
+  }
+
+  function discard(idx: number) {
+    setCards((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function keep(idx: number) {
+    const card = cards[idx];
+    if (!card || savingIdx !== null) return;
+    setSavingIdx(idx);
+    try {
+      const r = await createFlashcardAction({ question: card.question, answer: card.answer, itemId: null });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setKeptCount((n) => n + 1);
+      discard(idx);
+    } catch {
+      toast.error("Couldn't save that card");
+    } finally {
+      setSavingIdx(null);
+    }
+  }
+
+  if (!text.trim()) return null;
+
+  return (
+    <div className="not-prose mt-10 border-t border-border pt-5">
+      <div className="editorial-eyebrow-brand mb-2">§ Remember this</div>
+      {state !== "review" && (
+        <>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Turn what you just read into flashcards. You choose which ones to keep.
+          </p>
+          <Button size="sm" variant="outline" onClick={draft} disabled={state === "drafting"}>
+            {state === "drafting" ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Brain className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {state === "drafting" ? "Drafting…" : "Make cards from this"}
+          </Button>
+        </>
+      )}
+      {state === "review" && (
+        <>
+          <p className="mb-3 text-xs text-muted-foreground">
+            {cards.length > 0
+              ? "Keep the ones worth remembering."
+              : keptCount > 0
+                ? `Added ${keptCount} card${keptCount === 1 ? "" : "s"} to your deck.`
+                : "No cards kept."}
+          </p>
+          <div className="space-y-2">
+            {cards.map((c, i) => (
+              <div key={`${i}-${c.question}`} className="rounded-md border border-border p-3">
+                <div className="text-sm font-medium leading-snug">{c.question}</div>
+                <div className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{c.answer}</div>
+                <div className="mt-2 flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="brand"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => keep(i)}
+                    disabled={savingIdx !== null}
+                  >
+                    {savingIdx === i ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Check className="mr-1 h-3 w-3" />
+                    )}
+                    Keep
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-muted-foreground"
+                    onClick={() => discard(i)}
+                    disabled={savingIdx !== null}
+                  >
+                    <X className="mr-1 h-3 w-3" /> Discard
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
