@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Languages,
   ListChecks,
   Loader2,
   MoreVertical,
@@ -41,6 +42,14 @@ import { formatRelativeTime } from "@/lib/utils";
 import { runOptimistic } from "@/lib/ui/optimistic";
 import { toast } from "sonner";
 import { ReaderControls, useReaderPrefs } from "@/components/reader/reader-controls";
+import { detectLanguage, languageName, LANGUAGE_NAMES, type LanguageCode } from "@/lib/i18n/detect-language";
+import {
+  getCachedTranslation,
+  getTranslatePrefs,
+  putCachedTranslation,
+  setTranslatePrefs,
+  type TranslatePrefs,
+} from "@/lib/i18n/translate-prefs";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
@@ -139,6 +148,17 @@ export function ArticleReader({
   const [progress, setProgress] = useState(0);
   // Mobile immersive reading: hides the reader toolbar while scrolling forward.
   const [chromeHidden, setChromeHidden] = useState(false);
+  // ── Translation ────────────────────────────────────────────────────
+  const [tPrefs, setTPrefs] = useState<TranslatePrefs>({ target: "en", auto: false });
+  const [translation, setTranslation] = useState<{ title: string; content: string } | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
+  // null = not yet judged / unknown. Detection deliberately stays quiet when
+  // unsure, so we simply don't offer a translation in that case.
+  const [sourceLang, setSourceLang] = useState<LanguageCode | null>(null);
+  useEffect(() => {
+    setTPrefs(getTranslatePrefs());
+  }, []);
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
@@ -293,7 +313,78 @@ export function ArticleReader({
     advancingRef.current = false;
     setPullProgress(0);
     setChromeHidden(false); // a new article always starts with its toolbar shown
+    setTranslation(null);
+    setShowOriginal(false);
+    setSourceLang(null);
+    setTranslating(false);
   }, [selectedId]);
+
+  // Work out what language this article is in, once its body has loaded.
+  useEffect(() => {
+    if (!article) return;
+    const body = content ?? article.excerpt ?? "";
+    if (!body) return;
+    setSourceLang(detectLanguage(`${article.title} ${body}`)?.code ?? null);
+  }, [article, content]);
+
+  const needsTranslation = sourceLang !== null && sourceLang !== tPrefs.target;
+
+  const translate = useCallback(
+    async (articleId: string, target: LanguageCode) => {
+      const cached = getCachedTranslation(articleId, target);
+      if (cached) {
+        setTranslation(cached);
+        setShowOriginal(false);
+        return;
+      }
+      setTranslating(true);
+      try {
+        const res = await fetch(`/api/articles/${articleId}/translate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ target }),
+        });
+        const data = await res.json().catch(() => ({}));
+        // Paging away mid-translation: drop the result rather than pasting a
+        // different article's text over what's now on screen.
+        if (articleId !== latestIdRef.current) return;
+        if (res.status === 409) {
+          setSourceLang(target); // already in the target language — stop offering
+          return;
+        }
+        if (!res.ok || typeof data.content !== "string") {
+          toast.error(typeof data.error === "string" ? data.error : "Couldn't translate this article");
+          return;
+        }
+        const value = { title: typeof data.title === "string" ? data.title : "", content: data.content };
+        putCachedTranslation(articleId, target, value);
+        setTranslation(value);
+        setShowOriginal(false);
+      } catch {
+        if (articleId === latestIdRef.current) toast.error("Couldn't translate this article");
+      } finally {
+        if (articleId === latestIdRef.current) setTranslating(false);
+      }
+    },
+    [],
+  );
+
+  // Auto-translate when switched on. A cached translation is applied even when
+  // auto is off, so re-opening an article you already translated doesn't make
+  // you ask twice.
+  useEffect(() => {
+    if (!article || !needsTranslation || translation || translating) return;
+    const cached = getCachedTranslation(article.id, tPrefs.target);
+    if (cached) {
+      setTranslation(cached);
+      return;
+    }
+    if (tPrefs.auto) void translate(article.id, tPrefs.target);
+  }, [article, needsTranslation, translation, translating, tPrefs, translate]);
+
+  const showTranslated = translation !== null && !showOriginal;
+  const displayTitle = showTranslated ? translation.title || article?.title : article?.title;
+  const displayContent = showTranslated ? translation.content : content;
 
   // Warm the next article once this one has settled. Delayed so paging quickly
   // with j/j/j doesn't fire off an extraction for every article skimmed past —
@@ -452,13 +543,16 @@ export function ArticleReader({
   }
 
   // #3 "Listen" — read the article aloud via the Web Speech API. Plain text is
-  // the title + the de-HTML'd body (falls back to the RSS excerpt).
+  // the title + the de-HTML'd body (falls back to the RSS excerpt). Follows
+  // what's on screen, so a translated article is read in the language you're
+  // actually reading it in.
   const ttsText = useMemo(() => {
-    const html = content ?? article?.excerpt ?? "";
+    const html = displayContent ?? article?.excerpt ?? "";
     const body = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
     if (!body) return "";
-    return article ? `${article.title}. ${body}` : body;
-  }, [content, article]);
+    const heading = displayTitle ?? article?.title;
+    return heading ? `${heading}. ${body}` : body;
+  }, [displayContent, displayTitle, article]);
 
   const toggleListen = useCallback(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -845,7 +939,24 @@ export function ArticleReader({
                 <span>{article.feedTitle}</span>
               </nav>
 
-              <h1 className="editorial-display">{article.title}</h1>
+              <h1 className="editorial-display">{displayTitle}</h1>
+              <TranslationBar
+                sourceLang={sourceLang}
+                target={tPrefs.target}
+                auto={tPrefs.auto}
+                needsTranslation={needsTranslation}
+                translating={translating}
+                hasTranslation={translation !== null}
+                showingOriginal={showOriginal}
+                onTranslate={() => article && translate(article.id, tPrefs.target)}
+                onToggleOriginal={() => setShowOriginal((v) => !v)}
+                onSetTarget={(target) => {
+                  setTPrefs(setTranslatePrefs({ target }));
+                  setTranslation(null);
+                  setShowOriginal(false);
+                }}
+                onToggleAuto={() => setTPrefs(setTranslatePrefs({ auto: !tPrefs.auto }))}
+              />
               <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
                 {article.author && (
                   <span className="font-medium" style={{ color: "hsl(var(--brand))" }}>{article.author}</span>
@@ -916,10 +1027,10 @@ export function ArticleReader({
                   {article?.excerpt ? " Showing the RSS excerpt below." : ""}
                 </div>
               )}
-              {content ? (
+              {displayContent ? (
                 // Highlight any passage → floating "Make flashcard" button.
                 <SelectionToCard sourceTitle={article?.title ?? ""}>
-                  <div dangerouslySetInnerHTML={{ __html: content }} />
+                  <div dangerouslySetInnerHTML={{ __html: displayContent }} />
                 </SelectionToCard>
               ) : !loadingContent && article ? (
                 article.excerpt ? (
@@ -956,12 +1067,101 @@ export function ArticleReader({
         <DocQueryPanel
           open={queryOpen}
           docId={article.id}
-          title={article.title}
-          content={content ?? article.excerpt ?? ""}
+          // Ask about the text you can actually see — if you're reading a
+          // translation, questions and answers should be in that language too.
+          title={displayTitle ?? article.title}
+          content={displayContent ?? article.excerpt ?? ""}
           onClose={() => setQueryOpen(false)}
         />
       )}
     </section>
+  );
+}
+
+/**
+ * Translation strip under the headline. Appears only when the article is in a
+ * language other than the one you read in, and once translated offers a
+ * one-tap flip back to the original — machine translation is an aid, not a
+ * replacement, so the source is always a click away.
+ */
+function TranslationBar({
+  sourceLang,
+  target,
+  auto,
+  needsTranslation,
+  translating,
+  hasTranslation,
+  showingOriginal,
+  onTranslate,
+  onToggleOriginal,
+  onSetTarget,
+  onToggleAuto,
+}: {
+  sourceLang: LanguageCode | null;
+  target: LanguageCode;
+  auto: boolean;
+  needsTranslation: boolean;
+  translating: boolean;
+  hasTranslation: boolean;
+  showingOriginal: boolean;
+  onTranslate: () => void;
+  onToggleOriginal: () => void;
+  onSetTarget: (target: LanguageCode) => void;
+  onToggleAuto: () => void;
+}) {
+  if (!needsTranslation && !hasTranslation) return null;
+  return (
+    <div className="not-prose mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+      <Languages className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="text-muted-foreground">
+        {hasTranslation
+          ? showingOriginal
+            ? `Original — ${sourceLang ? languageName(sourceLang) : "source"}`
+            : `Translated to ${languageName(target)}`
+          : `This article is in ${sourceLang ? languageName(sourceLang) : "another language"}.`}
+      </span>
+
+      {hasTranslation ? (
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onToggleOriginal}>
+          {showingOriginal ? `Show ${languageName(target)}` : "Show original"}
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={onTranslate}
+          disabled={translating}
+        >
+          {translating && <Loader2 className="h-3 w-3 animate-spin" />}
+          {translating ? "Translating…" : `Translate to ${languageName(target)}`}
+        </Button>
+      )}
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button size="sm" variant="ghost" className="ml-auto h-6 px-2 text-xs text-muted-foreground">
+            Options
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="max-h-[50vh] w-52 overflow-y-auto">
+          <DropdownMenuItem onClick={onToggleAuto}>
+            {auto ? "Stop translating automatically" : "Translate automatically"}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {(Object.keys(LANGUAGE_NAMES) as LanguageCode[]).map((code) => (
+            <DropdownMenuItem
+              key={code}
+              onClick={() => onSetTarget(code)}
+              className="flex items-center justify-between"
+            >
+              {languageName(code)}
+              {code === target && <span className="text-[10px] text-muted-foreground">current</span>}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 

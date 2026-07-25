@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-v",
+    date: "July 23, 2026",
+    title: "Read news in any language",
+    tag: "feature",
+    summary:
+      "Articles in a language you don't read now offer a one-tap translation that keeps the original formatting, headings and links intact. Turn on automatic translation and they'll simply arrive readable — and the original is always one tap away.",
+    items: [
+      "Pick the language you read in, and optionally translate foreign articles automatically.",
+      "Flip between the translation and the original at any time.",
+      "Listen and Ask follow whichever version you're reading.",
+      "Translations are remembered on your device, so re-opening an article is instant.",
+    ],
+  },
+  {
     id: "2026-07-23-u",
     date: "July 23, 2026",
     title: "More of the screen for the article on phones",
