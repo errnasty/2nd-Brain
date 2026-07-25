@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-u",
+    date: "July 23, 2026",
+    title: "More of the screen for the article on phones",
+    tag: "improvement",
+    summary:
+      "The article toolbar now slides out of the way as you read down a story and comes straight back when you scroll up or reach the top — so a phone spends its screen on the words instead of the buttons.",
+  },
+  {
     id: "2026-07-23-t",
     date: "July 23, 2026",
     title: "Read straight through, instantly, without leaving the article",

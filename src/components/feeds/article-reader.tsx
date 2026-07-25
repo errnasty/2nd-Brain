@@ -137,6 +137,8 @@ export function ArticleReader({
   const [ttsState, setTtsState] = useState<"idle" | "speaking" | "paused">("idle");
   const [ttsSupported, setTtsSupported] = useState(false);
   const [progress, setProgress] = useState(0);
+  // Mobile immersive reading: hides the reader toolbar while scrolling forward.
+  const [chromeHidden, setChromeHidden] = useState(false);
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
@@ -231,6 +233,7 @@ export function ArticleReader({
     }
 
     let raf = 0;
+    let lastTop = vp.scrollTop;
     const onScroll = () => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -238,6 +241,15 @@ export function ArticleReader({
         const max = vp.scrollHeight - vp.clientHeight;
         const p = max > 0 ? Math.min(1, Math.max(0, vp.scrollTop / max)) : 0;
         setProgress(p);
+        // Immersive reading (mobile): the toolbar retreats while you read
+        // forward and comes back the moment you scroll up or return to the
+        // top. Between the app's top bar, this toolbar and the tab bar, a
+        // phone spends a fifth of its screen on chrome mid-article.
+        const top = vp.scrollTop;
+        if (top < 40) setChromeHidden(false);
+        else if (top > lastTop + 6) setChromeHidden(true);
+        else if (top < lastTop - 6) setChromeHidden(false);
+        lastTop = top;
         try {
           localStorage.setItem(`article.progress.${selectedId}`, String(p));
         } catch {
@@ -280,6 +292,7 @@ export function ArticleReader({
   useEffect(() => {
     advancingRef.current = false;
     setPullProgress(0);
+    setChromeHidden(false); // a new article always starts with its toolbar shown
   }, [selectedId]);
 
   // Warm the next article once this one has settled. Delayed so paging quickly
@@ -633,7 +646,16 @@ export function ArticleReader({
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden motion-safe:animate-page-in" data-reader-theme={prefs.theme}>
-      <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+      {/* Collapses (mobile only) while reading forward — see setChromeHidden.
+          max-h caps well above the row's natural ~52px so it never clips. */}
+      <div
+        className={cn(
+          "flex items-center gap-1 overflow-hidden border-b border-border px-2 transition-all duration-200 motion-reduce:transition-none",
+          chromeHidden
+            ? "max-lg:max-h-0 max-lg:border-b-0 max-lg:py-0 max-lg:opacity-0 max-h-20 py-2 lg:opacity-100"
+            : "max-h-20 py-2 opacity-100",
+        )}
+      >
         {/* Mobile-only back: returns to the article list (list is hidden on
             mobile while reading; side-by-side on md+ so no button needed). */}
         <Button size="sm" variant="ghost" onClick={close} className="lg:hidden -ml-1 gap-1 px-2">
