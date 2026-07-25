@@ -363,6 +363,26 @@ export async function rewriteLeechAction(cardId: string) {
   }
 }
 
+export type RecallCard = { id: string; question: string; answer: string };
+
+/**
+ * A couple of due cards for surfaces that aren't the study page — the daily
+ * brief in particular. `fetchDueCards` needs a userId the client doesn't have,
+ * so this resolves the session itself. Returns [] rather than an error shape:
+ * callers embed this in something the user came for, and a recall prompt
+ * failing must never take that page down with it.
+ */
+export async function fetchRecallCardsAction(limit = 2): Promise<RecallCard[]> {
+  try {
+    const { user } = await requireUser();
+    const cards = await fetchDueCards(user.id, Math.max(1, Math.min(limit, 5)));
+    return cards.map((c) => ({ id: c.id, question: c.question, answer: c.answer }));
+  } catch (err) {
+    console.error("fetchRecallCardsAction failed:", dbErrorMessage(err, "Couldn't load due cards"));
+    return [];
+  }
+}
+
 export type ProposedCard = { question: string; answer: string };
 
 /**

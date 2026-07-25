@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CitedMarkdown, type Citation } from "@/components/ui/cited-markdown";
 import {
   Bookmark,
+  Brain,
   Check,
   CheckCheck,
   ExternalLink,
@@ -33,6 +34,7 @@ import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, displayText } from "@/lib/ai/str
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
+import { fetchRecallCardsAction, gradeCardAction, type RecallCard } from "@/app/(app)/review/actions";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -738,6 +740,9 @@ export function DailyBrief({
         </div>
       )}
 
+      {/* ── Recall check ────────────────────────────────────────── */}
+      {!loading && <RecallCheck />}
+
       {/* ── Sources ─────────────────────────────────────────────── */}
       {!loading && sources.length > 0 && (
         <section className="not-prose mt-10">
@@ -834,5 +839,107 @@ export function DailyBrief({
         </footer>
       )}
     </article>
+  );
+}
+
+/** Grade buttons, mapped onto the quality scale `gradeCardAction` expects. */
+const RECALL_GRADES: { label: string; quality: number }[] = [
+  { label: "Again", quality: 1 },
+  { label: "Hard", quality: 3 },
+  { label: "Good", quality: 4 },
+  { label: "Easy", quality: 5 },
+];
+
+/**
+ * One or two due cards, inside a page the user already opens daily. Review
+ * happens where attention already is instead of requiring a trip to Study —
+ * the cheapest possible spaced repetition.
+ *
+ * Renders nothing when nothing is due: an empty state here would just be a
+ * daily reminder that you have no work, which is nagging, not helping.
+ */
+function RecallCheck() {
+  const [cards, setCards] = useState<RecallCard[]>([]);
+  const [revealed, setRevealed] = useState(false);
+  const [grading, setGrading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRecallCardsAction(2)
+      .then((due) => {
+        if (!cancelled) setCards(due);
+      })
+      // A recall prompt is a bonus on this page. If it can't load, stay silent.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const card = cards[0];
+  if (!card) return null;
+
+  async function grade(quality: number) {
+    if (!card || grading) return;
+    setGrading(true);
+    try {
+      const r = await gradeCardAction({ id: card.id, quality });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setRevealed(false);
+      setCards((prev) => prev.slice(1));
+    } catch {
+      toast.error("Couldn't save that answer");
+    } finally {
+      setGrading(false);
+    }
+  }
+
+  return (
+    <section className="not-prose mt-10">
+      <div className="editorial-section-row mb-3">
+        <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
+          <Brain className="h-3 w-3" />§ Still remember?
+        </span>
+        <span className="editorial-section-rule" />
+        <span className="text-[11px] italic text-muted-foreground">
+          {cards.length} {cards.length === 1 ? "card" : "cards"} due
+        </span>
+      </div>
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="text-sm font-medium leading-snug">{card.question}</div>
+        {revealed ? (
+          <>
+            <div className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{card.answer}</div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {RECALL_GRADES.map((g) => (
+                <Button
+                  key={g.quality}
+                  size="sm"
+                  variant={g.quality === 4 ? "brand" : "outline"}
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => grade(g.quality)}
+                  disabled={grading}
+                >
+                  {grading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                  {g.label}
+                </Button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-3 h-7 px-2.5 text-xs"
+            onClick={() => setRevealed(true)}
+          >
+            Show answer
+          </Button>
+        )}
+      </div>
+    </section>
   );
 }

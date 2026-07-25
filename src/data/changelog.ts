@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-a",
+    date: "July 25, 2026",
+    title: "A quick recall check in your daily brief",
+    tag: "feature",
+    summary:
+      "Your brief now slips in a question or two from cards that are due, so a little review happens without opening Study at all. Nothing appears on days when nothing is due.",
+    items: [
+      "See the question, reveal the answer, rate how it went.",
+      "Ratings feed the same review schedule as a normal study session.",
+    ],
+  },
+  {
     id: "2026-07-25",
     date: "July 25, 2026",
     title: "Turn an article into flashcards as you finish it",
