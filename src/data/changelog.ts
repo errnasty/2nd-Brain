@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-c",
+    date: "July 25, 2026",
+    title: "See what connected your week's reading",
+    tag: "feature",
+    summary:
+      "A new section in your brief looks at the last seven days as one body of work: the thread running through it, the recurring themes, and the places your sources contradicted each other.",
+    items: [
+      "Generated only when you ask for it, then kept for the rest of the week.",
+      "Disagreements between sources are called out separately — that's usually where the interesting part is.",
+      "Needs at least five articles read in the week to say anything useful.",
+    ],
+  },
+  {
     id: "2026-07-25-b",
     date: "July 25, 2026",
     title: "Points now reward remembering, not just reading",
