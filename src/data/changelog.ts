@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-e",
+    date: "July 25, 2026",
+    title: "Highlight passages, and see them first on re-read",
+    tag: "feature",
+    summary:
+      "Selecting text now offers Highlight alongside Make flashcard. Re-open the article later and the passages you marked appear above it, so a second read starts from your own first read.",
+    items: [
+      "Highlighting is instant and costs nothing — use it for anything worth keeping, not just study material.",
+      "Highlights are saved on the device you read on.",
+    ],
+  },
+  {
     id: "2026-07-25-d",
     date: "July 25, 2026",
     title: "“Explain this more simply”",

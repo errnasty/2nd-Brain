@@ -1,21 +1,31 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { Brain, Loader2 } from "lucide-react";
+import { Brain, Highlighter, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { createCardsFromTextAction } from "@/app/(app)/review/actions";
+import { addHighlight } from "@/lib/reader/highlights";
 
 /**
- * Wraps reader content and floats a "Make flashcard" button over any text
- * selection — highlight a passage, one click, and the AI turns it into
- * recall cards in the review deck. Selection-scoped so the rest of the page
- * (headers, toolbars) doesn't trigger it.
+ * Wraps reader content and floats actions over any text selection — turn the
+ * passage into recall cards, or just mark it so it surfaces on re-read.
+ * Selection-scoped so the rest of the page (headers, toolbars) doesn't trigger
+ * it.
+ *
+ * The two actions sit at different costs: a flashcard is an AI call and a
+ * commitment to review later; a highlight is free and local. Keeping both
+ * means "this matters" doesn't have to mean "study this".
  */
 export function SelectionToCard({
   sourceTitle,
+  articleId,
+  onHighlight,
   children,
 }: {
   sourceTitle: string;
+  /** Omit to hide the highlight action (highlights are stored per article). */
+  articleId?: string;
+  onHighlight?: (highlights: string[]) => void;
   children: React.ReactNode;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -66,26 +76,47 @@ export function SelectionToCard({
     }
   }
 
+  function highlight() {
+    if (!sel || !articleId) return;
+    const next = addHighlight(articleId, sel.text);
+    onHighlight?.(next);
+    setSel(null);
+    window.getSelection()?.removeAllRanges();
+  }
+
   return (
     <div ref={wrapRef} className="relative" onMouseUp={onPointerUp} onTouchEnd={onPointerUp}>
       {children}
       {sel && (
-        <button
+        <div
           // preventDefault on mousedown so the click doesn't collapse the
           // selection before onClick fires.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={make}
-          disabled={making}
-          className="absolute z-20 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium shadow-lg transition-colors hover:bg-accent"
+          className="absolute z-20 flex items-center gap-1 rounded-full border border-border bg-card p-1 shadow-lg"
           style={{ top: sel.top, left: sel.left }}
         >
-          {making ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Brain className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />
+          <button
+            onClick={make}
+            disabled={making}
+            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors hover:bg-accent"
+          >
+            {making ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Brain className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />
+            )}
+            Make flashcard
+          </button>
+          {articleId && (
+            <button
+              onClick={highlight}
+              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Highlighter className="h-3.5 w-3.5" />
+              Highlight
+            </button>
           )}
-          Make flashcard
-        </button>
+        </div>
       )}
     </div>
   );

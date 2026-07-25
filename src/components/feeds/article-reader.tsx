@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Highlighter,
   Languages,
   ListChecks,
   Loader2,
@@ -55,6 +56,7 @@ import {
   type TranslatePrefs,
 } from "@/lib/i18n/translate-prefs";
 import { getCachedSimplified, putCachedSimplified } from "@/lib/reader/simplify-cache";
+import { getHighlights } from "@/lib/reader/highlights";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
@@ -173,6 +175,8 @@ export function ArticleReader({
   const [simplified, setSimplified] = useState<{ title: string; content: string } | null>(null);
   const [simplifying, setSimplifying] = useState(false);
   const [showSimplified, setShowSimplified] = useState(false);
+  // ── Highlights (per device, localStorage) ──────────────────────────
+  const [highlights, setHighlights] = useState<string[]>([]);
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
@@ -334,6 +338,9 @@ export function ArticleReader({
     setSimplified(null);
     setShowSimplified(false);
     setSimplifying(false);
+    // Re-reading is a second pass: whatever you marked last time comes back
+    // first, so the article opens with your own reading of it.
+    setHighlights(selectedId ? getHighlights(selectedId) : []);
   }, [selectedId]);
 
   // Work out what language this article is in, once its body has loaded.
@@ -1101,9 +1108,16 @@ export function ArticleReader({
                   {article?.excerpt ? " Showing the RSS excerpt below." : ""}
                 </div>
               )}
+              {highlights.length > 0 && !loadingContent && (
+                <HighlightsRecap highlights={highlights} />
+              )}
               {displayContent ? (
-                // Highlight any passage → floating "Make flashcard" button.
-                <SelectionToCard sourceTitle={article?.title ?? ""}>
+                // Select any passage → floating "Make flashcard" / "Highlight".
+                <SelectionToCard
+                  sourceTitle={article?.title ?? ""}
+                  articleId={article?.id}
+                  onHighlight={setHighlights}
+                >
                   <div dangerouslySetInnerHTML={{ __html: displayContent }} />
                 </SelectionToCard>
               ) : !loadingContent && article ? (
@@ -1155,6 +1169,43 @@ export function ArticleReader({
         />
       )}
     </section>
+  );
+}
+
+/**
+ * What you marked last time, above the body on re-read. A second pass through
+ * an article is worth more when it starts from your own first pass, rather than
+ * from the top again — so the passages you kept lead, and the article follows.
+ */
+function HighlightsRecap({ highlights }: { highlights: string[] }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="not-prose mb-8 rounded-lg border border-border bg-muted/40 p-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="editorial-eyebrow-brand inline-flex items-center gap-1.5">
+          <Highlighter className="h-3 w-3" /> § You highlighted
+        </span>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {open ? "Hide" : `Show ${highlights.length}`}
+        </button>
+      </div>
+      {open && (
+        <ul className="space-y-2">
+          {highlights.map((h, i) => (
+            <li
+              key={`${i}-${h.slice(0, 24)}`}
+              className="border-l-2 pl-3 text-[13px] leading-relaxed text-muted-foreground"
+              style={{ borderColor: "hsl(var(--brand) / 0.5)" }}
+            >
+              {h}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
