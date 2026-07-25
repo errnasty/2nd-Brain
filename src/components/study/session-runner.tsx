@@ -1,14 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Check, CheckSquare, HelpCircle, Loader2, PartyPopper, Square } from "lucide-react";
+import { Brain, Check, CheckSquare, HelpCircle, Loader2, PartyPopper, Square, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ReviewView } from "@/components/review/review-view";
 import { QuizRunner } from "./quiz-runner";
 import { toggleTaskAction, type TaskRow } from "@/app/(app)/tasks/actions";
+import { finishSessionAction } from "@/app/(app)/study/actions";
 import { celebrate } from "@/lib/gamify/celebrate";
 import type { SessionPlan } from "@/app/(app)/study/session-actions";
 
@@ -235,6 +236,25 @@ function Recap({
   didTasks: boolean;
   onExit: () => void;
 }) {
+  // Finishing the whole session pays a completion bonus — the payoff for going
+  // all the way through rather than bailing after the flashcards. Idempotent
+  // per day server-side, and the ref guards React's double-invoked effects.
+  const [bonus, setBonus] = useState<number | null>(null);
+  const claimed = useRef(false);
+  useEffect(() => {
+    if (claimed.current) return;
+    claimed.current = true;
+    finishSessionAction()
+      .then((r) => {
+        if (!r.ok) return;
+        setBonus(r.xp.awarded);
+        celebrate(r.xp);
+      })
+      .catch(() => {
+        /* the bonus is a nicety — never block the recap on it */
+      });
+  }, []);
+
   const rows: { label: string; value: string; icon: React.ReactNode }[] = [];
   if (didReview)
     rows.push({ label: "Cards reviewed", value: String(cardsReviewed), icon: <Brain className="h-4 w-4" /> });
@@ -259,6 +279,19 @@ function Recap({
         <div className="editorial-display text-2xl">Session complete</div>
         <p className="mt-1 text-sm text-muted-foreground">Nice work — you&apos;re caught up for now.</p>
       </div>
+      {bonus !== null && bonus > 0 && (
+        <div
+          className="flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-semibold"
+          style={{
+            borderColor: "rgba(245,158,11,0.4)",
+            background: "linear-gradient(135deg, rgba(245,158,11,0.18), rgba(236,72,153,0.10))",
+          }}
+        >
+          <Zap className="h-4 w-4 text-amber-500" />
+          <span className="tabular-nums">+{bonus} XP</span>
+          <span className="font-normal text-muted-foreground">session bonus</span>
+        </div>
+      )}
       {rows.length > 0 && (
         <div className="w-full space-y-2">
           {rows.map((r) => (

@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { directoryItems, directoryTasks, directoryFlashcards, directoryFolders } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { computeStreak, dayKey } from "@/lib/study/streak";
+import { awardXp, type AwardResult } from "@/lib/gamify/award";
 
 export type SubjectRetention = { subject: string; pct: number; cards: number };
 
@@ -202,4 +203,23 @@ export async function fetchCalendar(
 export async function fetchCalendarRange(fromISO: string, toISO: string): Promise<CalendarEntry[]> {
   const { user } = await requireUser();
   return fetchCalendar(user.id, fromISO, toISO);
+}
+
+/**
+ * Award the completion bonus for finishing "Today's session" end to end.
+ * Idempotent per day (refKind/refId), so re-running the recap or a stray
+ * double-click can't farm it — the bonus is for showing up, once.
+ */
+export async function finishSessionAction(): Promise<{ ok: true; xp: AwardResult } | { ok: false; error: string }> {
+  try {
+    const { user } = await requireUser();
+    const xp = await awardXp(user.id, {
+      source: "session_complete",
+      refKind: "session_complete",
+      refId: dayKey(new Date()),
+    });
+    return { ok: true, xp };
+  } catch {
+    return { ok: false, error: "Couldn't record the session" };
+  }
 }

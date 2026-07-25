@@ -4,8 +4,15 @@
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { playerProfile, skills, xpEvents } from "@/lib/db/schema";
-import { playerLevelFromXp, skillLevelFromXp, tierForLevel, rankTitle } from "./levels";
-import { DAILY_GOAL, SOURCE_LABEL, type XpSource } from "./rules";
+import {
+  playerLevelFromXp,
+  skillLevelFromXp,
+  tierForLevel,
+  nextTier,
+  rankForLevel,
+  nextRank,
+} from "./levels";
+import { DAILY_GOAL, SOURCE_LABEL, streakMultiplier, type XpSource } from "./rules";
 import { ACHIEVEMENTS } from "./achievements";
 
 export type GameSkill = {
@@ -20,6 +27,15 @@ export type GameSkill = {
   tier: string;
   rarity: string;
   color: string;
+  /** Gradient stops + glow flag for the tier's badge treatment. */
+  from: string;
+  to: string;
+  glow: boolean;
+  /** Next milestone teaser: "2 levels → Adept". Null at the top tier. */
+  nextTier: string | null;
+  nextTierRarity: string | null;
+  nextTierColor: string | null;
+  levelsToNextTier: number | null;
 };
 
 export type GamePlayer = {
@@ -28,7 +44,16 @@ export type GamePlayer = {
   intoLevel: number;
   span: number;
   rank: string;
+  /** Rank colors so the medallion + bar match the milestone you're at. */
+  rankColor: string;
+  rankFrom: string;
+  rankTo: string;
+  rankGlow: boolean;
+  nextRank: string | null;
+  levelsToNextRank: number | null;
   streakDays: number;
+  /** Current streak bonus as a percentage (0 = none). */
+  streakBonusPct: number;
   dailyXp: number;
   dailyGoal: number;
 };
@@ -44,9 +69,24 @@ export type GameState = {
   achievements: GameAchievement[];
 };
 
+/** Shared shaping of the player's rank/milestone fields. */
+function rankFields(level: number) {
+  const rank = rankForLevel(level);
+  const up = nextRank(level);
+  return {
+    rank: rank.title,
+    rankColor: rank.color,
+    rankFrom: rank.from,
+    rankTo: rank.to,
+    rankGlow: rank.glow,
+    nextRank: up?.title ?? null,
+    levelsToNextRank: up ? up.minLevel - level : null,
+  };
+}
+
 const EMPTY_PLAYER: GamePlayer = {
-  level: 1, totalXp: 0, intoLevel: 0, span: playerLevelFromXp(0).span, rank: rankTitle(1),
-  streakDays: 0, dailyXp: 0, dailyGoal: DAILY_GOAL,
+  level: 1, totalXp: 0, intoLevel: 0, span: playerLevelFromXp(0).span, ...rankFields(1),
+  streakDays: 0, streakBonusPct: 0, dailyXp: 0, dailyGoal: DAILY_GOAL,
 };
 
 export async function fetchGameState(userId: string): Promise<GameState> {
@@ -75,10 +115,16 @@ export async function fetchGameState(userId: string): Promise<GameState> {
   const gameSkills: GameSkill[] = skillRows.map((s) => {
     const li = skillLevelFromXp(s.xp);
     const tier = tierForLevel(li.level);
+    const up = nextTier(li.level);
     return {
       id: s.id, name: s.name, emoji: s.emoji, domain: s.domain, xp: s.xp,
       level: li.level, intoLevel: li.intoLevel, span: li.span,
       tier: tier.name, rarity: tier.rarity, color: tier.color,
+      from: tier.from, to: tier.to, glow: tier.glow,
+      nextTier: up?.name ?? null,
+      nextTierRarity: up?.rarity ?? null,
+      nextTierColor: up?.color ?? null,
+      levelsToNextTier: up ? up.minLevel - li.level : null,
     };
   });
 
@@ -86,7 +132,9 @@ export async function fetchGameState(userId: string): Promise<GameState> {
   const gamePlayer: GamePlayer = player
     ? {
         level: pl.level, totalXp: player.totalXp, intoLevel: pl.intoLevel, span: pl.span,
-        rank: rankTitle(pl.level), streakDays: player.streakDays,
+        ...rankFields(pl.level),
+        streakDays: player.streakDays,
+        streakBonusPct: Math.round((streakMultiplier(player.streakDays) - 1) * 100),
         dailyXp: player.dailyDateKey === todayKey() ? player.dailyXp : 0, dailyGoal: DAILY_GOAL,
       }
     : EMPTY_PLAYER;
