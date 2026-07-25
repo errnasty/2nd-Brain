@@ -26,10 +26,16 @@ describe("newlyUnlocked", () => {
   });
 
   it("unlocks skill + streak milestones", () => {
-    expect(newlyUnlocked({ ...base, maxSkillLevel: 35 }, [])).toEqual(
-      expect.arrayContaining(["skill_adept", "skill_master"]),
+    expect(newlyUnlocked({ ...base, maxSkillLevel: 30 }, [])).toEqual(
+      expect.arrayContaining(["skill_adept", "skill_expert", "skill_virtuoso", "skill_master"]),
     );
+    expect(newlyUnlocked({ ...base, maxSkillLevel: 6 }, [])).not.toContain("skill_adept");
     expect(newlyUnlocked({ ...base, streakDays: 7 }, [])).toContain("streak_7");
+  });
+
+  it("unlocks the daily-goal + session badges from their counters", () => {
+    expect(newlyUnlocked({ ...base, counters: { goalsHit: 10 } }, [])).toContain("goal_10");
+    expect(newlyUnlocked({ ...base, counters: { sessionsDone: 10 } }, [])).toContain("sessions_10");
   });
 
   it("returns multiple new keys at once and all are real", () => {

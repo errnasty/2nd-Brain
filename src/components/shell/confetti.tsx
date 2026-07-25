@@ -1,23 +1,31 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { CelebrateDetail } from "@/lib/gamify/celebrate";
 
-const COLORS = ["#f59e0b", "#ec4899", "#3b82f6", "#22c55e", "#a855f7", "#ef4444"];
+const DEFAULT_COLORS = ["#f59e0b", "#ec4899", "#3b82f6", "#22c55e", "#a855f7", "#ef4444"];
+
+type Burst = { id: number; colors: string[]; count: number };
 
 /**
  * Dependency-free confetti burst. Mounted once globally; listens for the
  * `gamify-celebrate` event (fired by lib/gamify/celebrate.ts) and rains a short
- * burst. Self-contained keyframes so it touches no global CSS.
+ * burst. The event can carry the milestone's own colors and an intensity, so a
+ * tier evolution or rank-up showers in that milestone's palette rather than a
+ * generic one. Self-contained keyframes so it touches no global CSS.
  */
 export function Confetti() {
-  const [bursts, setBursts] = useState<number[]>([]);
+  const [bursts, setBursts] = useState<Burst[]>([]);
 
   useEffect(() => {
     let n = 0;
-    function go() {
+    function go(e: Event) {
+      const detail = (e as CustomEvent<CelebrateDetail>).detail ?? {};
       const id = (n += 1);
-      setBursts((b) => [...b, id]);
-      setTimeout(() => setBursts((b) => b.filter((x) => x !== id)), 1800);
+      const colors = detail.colors?.length ? detail.colors : DEFAULT_COLORS;
+      const count = Math.round(70 * Math.min(2, Math.max(0.5, detail.intensity ?? 1)));
+      setBursts((b) => [...b, { id, colors, count }]);
+      setTimeout(() => setBursts((b) => b.filter((x) => x.id !== id)), 2200);
     }
     window.addEventListener("gamify-celebrate", go);
     return () => window.removeEventListener("gamify-celebrate", go);
@@ -28,9 +36,9 @@ export function Confetti() {
   return (
     <div className="pointer-events-none fixed inset-0 z-[100] overflow-hidden" aria-hidden>
       <style>{`@keyframes sb-confetti { to { transform: translateY(110vh) rotate(720deg); opacity: 0.15; } }`}</style>
-      {bursts.map((id) => (
-        <div key={id}>
-          {Array.from({ length: 70 }).map((_, i) => {
+      {bursts.map((burst) => (
+        <div key={burst.id}>
+          {Array.from({ length: burst.count }).map((_, i) => {
             const left = Math.random() * 100;
             const delay = Math.random() * 0.25;
             const dur = 1 + Math.random() * 0.7;
@@ -44,7 +52,7 @@ export function Confetti() {
                   top: "-12px",
                   width: size,
                   height: size,
-                  background: COLORS[i % COLORS.length],
+                  background: burst.colors[i % burst.colors.length],
                   borderRadius: 2,
                   animation: `sb-confetti ${dur}s ${delay}s ease-in forwards`,
                 }}

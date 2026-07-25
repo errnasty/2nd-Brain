@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Brain, Check, Loader2, RotateCcw, Wand2 } from "lucide-react";
+import { Brain, Check, Loader2, RotateCcw, Wand2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -40,6 +40,9 @@ export function ReviewView({
   const [queue, setQueue] = useState<DueCard[]>(cards);
   const [showAnswer, setShowAnswer] = useState(false);
   const [reviewed, setReviewed] = useState(0);
+  // Live XP readout: the last award and the session momentum ("combo") it rode,
+  // so a run of reviews visibly pays more instead of silently doing so.
+  const [lastAward, setLastAward] = useState<{ amount: number; momentum: number; n: number } | null>(null);
   const [, startTransition] = useTransition();
 
   // In embedded mode, hand control back to the session runner once the queue is
@@ -131,7 +134,16 @@ export function ReviewView({
     startTransition(async () => {
       try {
         const r = await gradeCardAction({ id: card.id, quality });
-        if (r.ok) celebrate(r.xp);
+        if (r.ok) {
+          celebrate(r.xp);
+          if (r.xp && r.xp.awarded > 0) {
+            setLastAward((prev) => ({
+              amount: r.xp!.awarded,
+              momentum: r.xp!.momentum ?? 0,
+              n: (prev?.n ?? 0) + 1,
+            }));
+          }
+        }
         if (!r.ok) {
           // Server rejected the grade — put the card back so it isn't silently
           // lost from the session, and undo the optimistic counters.
@@ -205,12 +217,37 @@ export function ReviewView({
             <Brain className="h-5 w-5 shrink-0" style={{ color: "hsl(var(--brand))" }} /> Review
           </h1>
         </div>
-        <span
-          className="shrink-0 rounded-full px-2.5 py-1 font-mono text-[11px] tabular-nums"
-          style={{ color: "hsl(var(--brand))", background: "hsl(var(--brand) / 0.08)" }}
-        >
-          {remainingDue} due
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {lastAward && (
+            <span
+              key={lastAward.n}
+              className="flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[11px] font-semibold tabular-nums"
+              style={{
+                color: lastAward.momentum >= 2 ? "#f59e0b" : "#10b981",
+                background: lastAward.momentum >= 2 ? "rgba(245,158,11,0.12)" : "rgba(16,185,129,0.12)",
+                animation: "sb-xp-pop 400ms ease-out",
+              }}
+              title={
+                lastAward.momentum >= 2
+                  ? `Session momentum: +${lastAward.momentum * 5}% XP while you keep going`
+                  : "XP from your last review"
+              }
+            >
+              <Zap className="h-3 w-3" />+{lastAward.amount}
+              {lastAward.momentum >= 2 && <span className="ml-0.5">×{lastAward.momentum}</span>}
+            </span>
+          )}
+          <span
+            className="rounded-full px-2.5 py-1 font-mono text-[11px] tabular-nums"
+            style={{ color: "hsl(var(--brand))", background: "hsl(var(--brand) / 0.08)" }}
+          >
+            {remainingDue} due
+          </span>
+        </div>
+        <style>{`
+          @keyframes sb-xp-pop { 0% { transform: scale(0.7); opacity: 0; } 55% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+          @media (prefers-reduced-motion: reduce) { @keyframes sb-xp-pop { 0%, 100% { transform: none; opacity: 1; } } }
+        `}</style>
       </div>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-6 px-6 py-8">

@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-f",
+    date: "July 25, 2026",
+    title: "Levels come faster, and milestones look the part",
+    tag: "improvement",
+    summary:
+      "Studying now levels you up several times quicker, and every milestone you cross changes how the Study tab looks — new rank colors, glowing skill tiers, and a track showing what's next.",
+    items: [
+      "Levelling is roughly three to four times faster, and the high tiers are actually reachable now instead of decorative.",
+      "Skills climb eight tiers from Common to Celestial; Legendary and above glow.",
+      "A rank track shows the milestone you're on and the one coming up, so you always know how close you are.",
+      "Keeping a streak is worth more (up to +60% XP), a run of reviews in one sitting pays a growing momentum bonus, hitting your daily goal pays a bonus on the spot, and finishing a full session pays another.",
+      "Confetti and level-up messages now match the colors of the milestone you just crossed.",
+    ],
+  },
+  {
     id: "2026-07-25-e",
     date: "July 25, 2026",
     title: "Highlight passages, and see them first on re-read",
