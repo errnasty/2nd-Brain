@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   Bookmark,
   BookmarkPlus,
+  BookOpen,
   Brain,
   Check,
   ChevronLeft,
@@ -53,6 +54,7 @@ import {
   setTranslatePrefs,
   type TranslatePrefs,
 } from "@/lib/i18n/translate-prefs";
+import { getCachedSimplified, putCachedSimplified } from "@/lib/reader/simplify-cache";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
@@ -167,6 +169,10 @@ export function ArticleReader({
   useEffect(() => {
     setTPrefs(getTranslatePrefs());
   }, []);
+  // ── Reading level ──────────────────────────────────────────────────
+  const [simplified, setSimplified] = useState<{ title: string; content: string } | null>(null);
+  const [simplifying, setSimplifying] = useState(false);
+  const [showSimplified, setShowSimplified] = useState(false);
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
@@ -325,6 +331,9 @@ export function ArticleReader({
     setShowOriginal(false);
     setSourceLang(null);
     setTranslating(false);
+    setSimplified(null);
+    setShowSimplified(false);
+    setSimplifying(false);
   }, [selectedId]);
 
   // Work out what language this article is in, once its body has loaded.
@@ -390,9 +399,57 @@ export function ArticleReader({
     if (tPrefs.auto) void translate(article.id, tPrefs.target);
   }, [article, needsTranslation, translation, translating, tPrefs, translate]);
 
+  const simplify = useCallback(async (articleId: string) => {
+    const cached = getCachedSimplified(articleId);
+    if (cached) {
+      setSimplified(cached);
+      setShowSimplified(true);
+      return;
+    }
+    setSimplifying(true);
+    try {
+      const res = await fetch(`/api/articles/${articleId}/simplify`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      // Paging away mid-rewrite: drop the result rather than pasting a
+      // different article's text over what's now on screen.
+      if (articleId !== latestIdRef.current) return;
+      if (!res.ok || typeof data.content !== "string") {
+        toast.error(typeof data.error === "string" ? data.error : "Couldn't simplify this article");
+        return;
+      }
+      const value = { title: typeof data.title === "string" ? data.title : "", content: data.content };
+      putCachedSimplified(articleId, value);
+      setSimplified(value);
+      setShowSimplified(true);
+    } catch {
+      if (articleId === latestIdRef.current) toast.error("Couldn't simplify this article");
+    } finally {
+      if (articleId === latestIdRef.current) setSimplifying(false);
+    }
+  }, []);
+
+  // Re-opening an article you already simplified restores that version, so you
+  // don't pay for the same rewrite twice.
+  useEffect(() => {
+    if (!article || simplified || simplifying) return;
+    const cached = getCachedSimplified(article.id);
+    if (cached) setSimplified(cached);
+  }, [article, simplified, simplifying]);
+
   const showTranslated = translation !== null && !showOriginal;
-  const displayTitle = showTranslated ? translation.title || article?.title : article?.title;
-  const displayContent = showTranslated ? translation.content : content;
+  // Reading level takes precedence over translation: both rewrite the body from
+  // the same source, so they're alternatives rather than layers.
+  const showingSimplified = simplified !== null && showSimplified;
+  const displayTitle = showingSimplified
+    ? simplified.title || article?.title
+    : showTranslated
+      ? translation.title || article?.title
+      : article?.title;
+  const displayContent = showingSimplified
+    ? simplified.content
+    : showTranslated
+      ? translation.content
+      : content;
 
   // Warm the next article once this one has settled. Delayed so paging quickly
   // with j/j/j doesn't fire off an extraction for every article skimmed past —
@@ -965,6 +1022,15 @@ export function ArticleReader({
                 }}
                 onToggleAuto={() => setTPrefs(setTranslatePrefs({ auto: !tPrefs.auto }))}
               />
+              {!loadingContent && (
+                <ReadingLevelBar
+                  simplifying={simplifying}
+                  hasSimplified={simplified !== null}
+                  showingSimplified={showingSimplified}
+                  onSimplify={() => article && simplify(article.id)}
+                  onToggle={() => setShowSimplified((v) => !v)}
+                />
+              )}
               <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
                 {article.author && (
                   <span className="font-medium" style={{ color: "hsl(var(--brand))" }}>{article.author}</span>
@@ -1089,6 +1155,56 @@ export function ArticleReader({
         />
       )}
     </section>
+  );
+}
+
+/**
+ * Reading-level strip under the headline. Same bargain as translation: a
+ * machine rewrite is an aid, not a replacement, so the original is always one
+ * tap away — and nothing is rewritten until asked, because it costs a model
+ * call per article.
+ */
+function ReadingLevelBar({
+  simplifying,
+  hasSimplified,
+  showingSimplified,
+  onSimplify,
+  onToggle,
+}: {
+  simplifying: boolean;
+  hasSimplified: boolean;
+  showingSimplified: boolean;
+  onSimplify: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="not-prose mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+      <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="text-muted-foreground">
+        {hasSimplified
+          ? showingSimplified
+            ? "Simplified — shorter sentences, jargon explained"
+            : "Original wording"
+          : "Heavy going? Read a plainer version."}
+      </span>
+
+      {hasSimplified ? (
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onToggle}>
+          {showingSimplified ? "Show original" : "Show simplified"}
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={onSimplify}
+          disabled={simplifying}
+        >
+          {simplifying && <Loader2 className="h-3 w-3 animate-spin" />}
+          {simplifying ? "Simplifying…" : "Explain more simply"}
+        </Button>
+      )}
+    </div>
   );
 }
 

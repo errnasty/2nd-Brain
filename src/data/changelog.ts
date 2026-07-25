@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-d",
+    date: "July 25, 2026",
+    title: "“Explain this more simply”",
+    tag: "feature",
+    summary:
+      "Any article can now be rewritten at a plainer reading level: shorter sentences, everyday words, jargon explained the first time it appears. Useful for subjects outside your field or reading in a second language.",
+    items: [
+      "Nothing is left out — it's a rewrite, not a summary.",
+      "The original wording is always one tap away.",
+      "Remembered on your device, so re-opening the article is instant.",
+    ],
+  },
+  {
     id: "2026-07-25-c",
     date: "July 25, 2026",
     title: "See what connected your week's reading",
