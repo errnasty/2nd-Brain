@@ -362,3 +362,57 @@ export async function rewriteLeechAction(cardId: string) {
     return { ok: false as const, error: msg };
   }
 }
+
+export type RecallCard = { id: string; question: string; answer: string };
+
+/**
+ * A couple of due cards for surfaces that aren't the study page — the daily
+ * brief in particular. `fetchDueCards` needs a userId the client doesn't have,
+ * so this resolves the session itself. Returns [] rather than an error shape:
+ * callers embed this in something the user came for, and a recall prompt
+ * failing must never take that page down with it.
+ */
+export async function fetchRecallCardsAction(limit = 2): Promise<RecallCard[]> {
+  try {
+    const { user } = await requireUser();
+    const cards = await fetchDueCards(user.id, Math.max(1, Math.min(limit, 5)));
+    return cards.map((c) => ({ id: c.id, question: c.question, answer: c.answer }));
+  } catch (err) {
+    console.error("fetchRecallCardsAction failed:", dbErrorMessage(err, "Couldn't load due cards"));
+    return [];
+  }
+}
+
+export type ProposedCard = { question: string; answer: string };
+
+/**
+ * Draft flashcards from text WITHOUT saving them. The reader shows these for
+ * per-card approval — adding to someone's study deck uninvited costs them
+ * review time later, so nothing is persisted here.
+ */
+export async function proposeCardsFromTextAction(input: { title: string; text: string }) {
+  const title = (input.title ?? "").slice(0, 300);
+  const text = (input.text ?? "").trim();
+  if (!text) return { ok: false as const, error: "Nothing to make cards from" };
+  const { user } = await requireUser();
+  try {
+    const settings = await getUserSettings(user.id);
+    const cards = await generateFlashcards(title, text.slice(0, 6000), {
+      count: settings.flashcardCount ?? DEFAULT_FLASHCARD_COUNT,
+      difficulty: settings.flashcardDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+    });
+    if (cards.length === 0) {
+      return {
+        ok: false as const,
+        error: aiAvailable()
+          ? "Couldn't draft cards from this article — try again"
+          : "AI isn't configured — add an API key in Settings",
+      };
+    }
+    return { ok: true as const, cards: cards as ProposedCard[] };
+  } catch (err) {
+    const msg = dbErrorMessage(err, "Couldn't draft flashcards");
+    console.error("proposeCardsFromTextAction failed:", msg);
+    return { ok: false as const, error: msg };
+  }
+}

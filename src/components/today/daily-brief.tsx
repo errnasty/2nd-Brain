@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { CitedMarkdown, type Citation } from "@/components/ui/cited-markdown";
 import {
   Bookmark,
+  Brain,
   Check,
   CheckCheck,
   ExternalLink,
@@ -33,6 +34,7 @@ import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, displayText } from "@/lib/ai/str
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
+import { fetchRecallCardsAction, gradeCardAction, type RecallCard } from "@/app/(app)/review/actions";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -56,7 +58,20 @@ type BriefEntry = {
 const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
 const BRIEF_CACHE_KEY = "brief.cache.v2";
 const BRIEF_HISTORY_KEY = "brief.history.v1";
+const SYNTHESIS_CACHE_KEY = "brief.weeklySynthesis.v1";
 const MAX_HISTORY = 10;
+
+/** ISO week key ("2026-W30") — the cache identity for the weekly synthesis, so
+ *  a new week naturally invalidates the last one. */
+function isoWeekKey(d: Date): string {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  // ISO weeks run Mon–Sun and belong to the year containing their Thursday.
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((t.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
 
 /** Same calendar day in local time. */
 function isSameDay(a: Date, b: Date): boolean {
@@ -738,6 +753,12 @@ export function DailyBrief({
         </div>
       )}
 
+      {/* ── Recall check ────────────────────────────────────────── */}
+      {!loading && <RecallCheck />}
+
+      {/* ── Weekly synthesis ────────────────────────────────────── */}
+      {!loading && <WeeklySynthesisSection />}
+
       {/* ── Sources ─────────────────────────────────────────────── */}
       {!loading && sources.length > 0 && (
         <section className="not-prose mt-10">
@@ -834,5 +855,241 @@ export function DailyBrief({
         </footer>
       )}
     </article>
+  );
+}
+
+/** Grade buttons, mapped onto the quality scale `gradeCardAction` expects. */
+const RECALL_GRADES: { label: string; quality: number }[] = [
+  { label: "Again", quality: 1 },
+  { label: "Hard", quality: 3 },
+  { label: "Good", quality: 4 },
+  { label: "Easy", quality: 5 },
+];
+
+/**
+ * One or two due cards, inside a page the user already opens daily. Review
+ * happens where attention already is instead of requiring a trip to Study —
+ * the cheapest possible spaced repetition.
+ *
+ * Renders nothing when nothing is due: an empty state here would just be a
+ * daily reminder that you have no work, which is nagging, not helping.
+ */
+function RecallCheck() {
+  const [cards, setCards] = useState<RecallCard[]>([]);
+  const [revealed, setRevealed] = useState(false);
+  const [grading, setGrading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRecallCardsAction(2)
+      .then((due) => {
+        if (!cancelled) setCards(due);
+      })
+      // A recall prompt is a bonus on this page. If it can't load, stay silent.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const card = cards[0];
+  if (!card) return null;
+
+  async function grade(quality: number) {
+    if (!card || grading) return;
+    setGrading(true);
+    try {
+      const r = await gradeCardAction({ id: card.id, quality });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setRevealed(false);
+      setCards((prev) => prev.slice(1));
+    } catch {
+      toast.error("Couldn't save that answer");
+    } finally {
+      setGrading(false);
+    }
+  }
+
+  return (
+    <section className="not-prose mt-10">
+      <div className="editorial-section-row mb-3">
+        <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
+          <Brain className="h-3 w-3" />§ Still remember?
+        </span>
+        <span className="editorial-section-rule" />
+        <span className="text-[11px] italic text-muted-foreground">
+          {cards.length} {cards.length === 1 ? "card" : "cards"} due
+        </span>
+      </div>
+      <div className="rounded-lg border border-border bg-card p-4">
+        <div className="text-sm font-medium leading-snug">{card.question}</div>
+        {revealed ? (
+          <>
+            <div className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{card.answer}</div>
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {RECALL_GRADES.map((g) => (
+                <Button
+                  key={g.quality}
+                  size="sm"
+                  variant={g.quality === 4 ? "brand" : "outline"}
+                  className="h-7 px-2.5 text-xs"
+                  onClick={() => grade(g.quality)}
+                  disabled={grading}
+                >
+                  {grading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                  {g.label}
+                </Button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-3 h-7 px-2.5 text-xs"
+            onClick={() => setRevealed(true)}
+          >
+            Show answer
+          </Button>
+        )}
+      </div>
+    </section>
+  );
+}
+
+type WeeklySynthesisResult = {
+  throughLine: string;
+  themes: string[];
+  tensions: string[];
+  articleCount?: number;
+};
+
+function readSynthesisCache(week: string): WeeklySynthesisResult | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SYNTHESIS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { week?: string; result?: WeeklySynthesisResult };
+    if (parsed?.week !== week) return null;
+    return typeof parsed.result?.throughLine === "string" ? parsed.result : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeSynthesisCache(week: string, result: WeeklySynthesisResult): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(SYNTHESIS_CACHE_KEY, JSON.stringify({ week, result }));
+  } catch {
+    // private mode / quota — the synthesis just won't survive a reload
+  }
+}
+
+/**
+ * What connected the week's reading, and where sources disagreed. Contradiction
+ * is where understanding forms, so tensions get their own list.
+ *
+ * Never generates on its own: this is a weekly, whole-corpus AI call, and
+ * paying for it on every page load would be indefensible. One tap, then cached
+ * for the rest of the ISO week.
+ */
+function WeeklySynthesisSection() {
+  const week = isoWeekKey(new Date());
+  const [result, setResult] = useState<WeeklySynthesisResult | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    setResult(readSynthesisCache(week));
+  }, [week]);
+
+  async function generate() {
+    setLoading(true);
+    setNote(null);
+    try {
+      const res = await fetch("/api/weekly-synthesis", { method: "POST" });
+      const data = (await res.json().catch(() => null)) as
+        | (WeeklySynthesisResult & { error?: string })
+        | null;
+      if (!res.ok) {
+        // 422 is the ordinary "quiet week" case, not a failure worth a toast.
+        setNote(data?.error ?? "Couldn't look at this week");
+        return;
+      }
+      if (!data?.throughLine) {
+        setNote("Couldn't look at this week");
+        return;
+      }
+      setResult(data);
+      writeSynthesisCache(week, data);
+    } catch {
+      setNote("Couldn't look at this week");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="not-prose mt-10">
+      <div className="editorial-section-row mb-3">
+        <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
+          <Sparkles className="h-3 w-3" />§ This week
+        </span>
+        <span className="editorial-section-rule" />
+        {result?.articleCount ? (
+          <span className="text-[11px] italic text-muted-foreground">
+            {result.articleCount} articles
+          </span>
+        ) : null}
+      </div>
+
+      {result ? (
+        <div className="rounded-lg border border-border bg-card p-4">
+          <p className="text-sm leading-relaxed">{result.throughLine}</p>
+          {result.themes.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {result.themes.map((t) => (
+                <span
+                  key={t}
+                  className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+          {result.tensions.length > 0 && (
+            <div className="mt-4 border-t border-border pt-3">
+              <div className="editorial-eyebrow mb-1.5">Where sources disagreed</div>
+              <ul className="space-y-1.5">
+                {result.tensions.map((t) => (
+                  <li key={t} className="text-[13px] leading-relaxed text-muted-foreground">
+                    {t}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border bg-card p-4">
+          <p className="mb-3 text-xs text-muted-foreground">
+            {note ?? "Look at the last seven days as a whole — the through-line, and where your sources disagreed."}
+          </p>
+          <Button size="sm" variant="outline" onClick={generate} disabled={loading}>
+            {loading ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {loading ? "Reading your week…" : "Synthesize this week"}
+          </Button>
+        </div>
+      )}
+    </section>
   );
 }

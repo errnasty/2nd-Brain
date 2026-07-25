@@ -21,18 +21,30 @@ export type Achievement = {
 
 const c = (s: AchievementSnapshot, k: string) => s.counters[k] ?? 0;
 
+// Thresholds track the tier/rank boundaries in levels.ts — keep them in sync
+// when a curve moves, or a badge either becomes free or becomes unreachable.
 export const ACHIEVEMENTS: Achievement[] = [
   { key: "first_xp", name: "First steps", desc: "Earn your first XP", emoji: "✨", test: (s) => s.totalXp > 0 },
   { key: "level_5", name: "Getting serious", desc: "Reach player level 5", emoji: "🚀", test: (s) => s.playerLevel >= 5 },
   { key: "level_10", name: "Dedicated", desc: "Reach player level 10", emoji: "🏆", test: (s) => s.playerLevel >= 10 },
+  { key: "level_25", name: "Seasoned", desc: "Reach player level 25", emoji: "🌟", test: (s) => s.playerLevel >= 25 },
+  { key: "level_50", name: "Ascended", desc: "Reach player level 50", emoji: "🔱", test: (s) => s.playerLevel >= 50 },
   { key: "streak_7", name: "Streak keeper", desc: "A 7-day streak", emoji: "🔥", test: (s) => s.streakDays >= 7 },
   { key: "streak_30", name: "Unstoppable", desc: "A 30-day streak", emoji: "⚡", test: (s) => s.streakDays >= 30 },
+  { key: "streak_100", name: "Centurion", desc: "A 100-day streak", emoji: "💯", test: (s) => s.streakDays >= 100 },
   { key: "cards_50", name: "Card sharp", desc: "Grade 50 flashcards", emoji: "🃏", test: (s) => c(s, "cardsGraded") >= 50 },
+  { key: "cards_500", name: "Deck runner", desc: "Grade 500 flashcards", emoji: "🎴", test: (s) => c(s, "cardsGraded") >= 500 },
   { key: "tasks_25", name: "Taskmaster", desc: "Complete 25 tasks", emoji: "✅", test: (s) => c(s, "tasksDone") >= 25 },
   { key: "reader_50", name: "Bookworm", desc: "Read 50 articles", emoji: "📚", test: (s) => c(s, "articlesRead") >= 50 },
   { key: "notes_25", name: "Scribe", desc: "Write 25 notes", emoji: "✍️", test: (s) => c(s, "notesCreated") >= 25 },
-  { key: "skill_adept", name: "Specializing", desc: "Take a skill to Adept (Lv10)", emoji: "🎯", test: (s) => s.maxSkillLevel >= 10 },
-  { key: "skill_master", name: "Ascended", desc: "Take a skill to Master (Lv35)", emoji: "👑", test: (s) => s.maxSkillLevel >= 35 },
+  { key: "goal_10", name: "Goal getter", desc: "Hit the daily goal 10 times", emoji: "🎯", test: (s) => c(s, "goalsHit") >= 10 },
+  { key: "goal_50", name: "Metronome", desc: "Hit the daily goal 50 times", emoji: "⏱️", test: (s) => c(s, "goalsHit") >= 50 },
+  { key: "sessions_10", name: "Regular", desc: "Finish 10 daily sessions", emoji: "🗓️", test: (s) => c(s, "sessionsDone") >= 10 },
+  { key: "skill_adept", name: "Specializing", desc: "Take a skill to Adept (Lv7)", emoji: "🔷", test: (s) => s.maxSkillLevel >= 7 },
+  { key: "skill_expert", name: "Expertise", desc: "Take a skill to Expert (Lv12)", emoji: "🔮", test: (s) => s.maxSkillLevel >= 12 },
+  { key: "skill_virtuoso", name: "Virtuoso", desc: "Take a skill to Legendary (Lv20)", emoji: "🌠", test: (s) => s.maxSkillLevel >= 20 },
+  { key: "skill_master", name: "Mythic", desc: "Take a skill to Master (Lv30)", emoji: "👑", test: (s) => s.maxSkillLevel >= 30 },
+  { key: "skill_grandmaster", name: "Radiant", desc: "Take a skill to Grandmaster (Lv42)", emoji: "💎", test: (s) => s.maxSkillLevel >= 42 },
   { key: "polymath", name: "Polymath", desc: "Grow 5 different skills", emoji: "🧠", test: (s) => s.skillCount >= 5 },
 ];
 

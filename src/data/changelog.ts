@@ -27,7 +27,7 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
-    id: "2026-07-25-a",
+    id: "2026-07-25-h",
     date: "July 25, 2026",
     title: "Every page starts up lighter",
     tag: "improvement",
@@ -35,12 +35,98 @@ export const CHANGELOG: ChangelogEntry[] = [
       "Roughly a fifth of the code the app used to load on every single page has moved off the startup path. The offline folder cache, the ⌘K palette and quick capture now load quietly in the background instead of holding up the first paint — they still open instantly when you reach for them.",
   },
   {
-    id: "2026-07-25",
+    id: "2026-07-25-g",
     date: "July 25, 2026",
     title: "The Directory opens faster",
     tag: "improvement",
     summary:
       "The Directory now downloads noticeably less before it can show your library. The item reader, the board view and the dialogs are fetched the moment you actually open one, instead of on every visit.",
+  },
+  {
+    id: "2026-07-25-f",
+    date: "July 25, 2026",
+    title: "Levels come faster, and milestones look the part",
+    tag: "improvement",
+    summary:
+      "Studying now levels you up several times quicker, and every milestone you cross changes how the Study tab looks — new rank colors, glowing skill tiers, and a track showing what's next.",
+    items: [
+      "Levelling is roughly three to four times faster, and the high tiers are actually reachable now instead of decorative.",
+      "Skills climb eight tiers from Common to Celestial; Legendary and above glow.",
+      "A rank track shows the milestone you're on and the one coming up, so you always know how close you are.",
+      "Keeping a streak is worth more (up to +60% XP), a run of reviews in one sitting pays a growing momentum bonus, hitting your daily goal pays a bonus on the spot, and finishing a full session pays another.",
+      "Confetti and level-up messages now match the colors of the milestone you just crossed.",
+    ],
+  },
+  {
+    id: "2026-07-25-e",
+    date: "July 25, 2026",
+    title: "Highlight passages, and see them first on re-read",
+    tag: "feature",
+    summary:
+      "Selecting text now offers Highlight alongside Make flashcard. Re-open the article later and the passages you marked appear above it, so a second read starts from your own first read.",
+    items: [
+      "Highlighting is instant and costs nothing — use it for anything worth keeping, not just study material.",
+      "Highlights are saved on the device you read on.",
+    ],
+  },
+  {
+    id: "2026-07-25-d",
+    date: "July 25, 2026",
+    title: "“Explain this more simply”",
+    tag: "feature",
+    summary:
+      "Any article can now be rewritten at a plainer reading level: shorter sentences, everyday words, jargon explained the first time it appears. Useful for subjects outside your field or reading in a second language.",
+    items: [
+      "Nothing is left out — it's a rewrite, not a summary.",
+      "The original wording is always one tap away.",
+      "Remembered on your device, so re-opening the article is instant.",
+    ],
+  },
+  {
+    id: "2026-07-25-c",
+    date: "July 25, 2026",
+    title: "See what connected your week's reading",
+    tag: "feature",
+    summary:
+      "A new section in your brief looks at the last seven days as one body of work: the thread running through it, the recurring themes, and the places your sources contradicted each other.",
+    items: [
+      "Generated only when you ask for it, then kept for the rest of the week.",
+      "Disagreements between sources are called out separately — that's usually where the interesting part is.",
+      "Needs at least five articles read in the week to say anything useful.",
+    ],
+  },
+  {
+    id: "2026-07-25-b",
+    date: "July 25, 2026",
+    title: "Points now reward remembering, not just reading",
+    tag: "improvement",
+    summary:
+      "Reading an article earns a token amount, while reviewing cards, making cards, quizzes and finishing decks are worth considerably more. Getting through 30 articles isn't the same as learning from them.",
+  },
+  {
+    id: "2026-07-25-a",
+    date: "July 25, 2026",
+    title: "A quick recall check in your daily brief",
+    tag: "feature",
+    summary:
+      "Your brief now slips in a question or two from cards that are due, so a little review happens without opening Study at all. Nothing appears on days when nothing is due.",
+    items: [
+      "See the question, reveal the answer, rate how it went.",
+      "Ratings feed the same review schedule as a normal study session.",
+    ],
+  },
+  {
+    id: "2026-07-25",
+    date: "July 25, 2026",
+    title: "Turn an article into flashcards as you finish it",
+    tag: "feature",
+    summary:
+      "At the end of every article there's now a \"Make cards from this\" button that drafts a few flashcards from what you just read. Nothing is added to your deck unless you keep it — review each card and discard the rest.",
+    items: [
+      "Cards are drafted only when you ask, never automatically.",
+      "Keep the ones worth remembering, discard the rest.",
+      "Kept cards go straight into your normal review schedule.",
+    ],
   },
   {
     id: "2026-07-23-v",

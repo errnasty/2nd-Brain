@@ -5,7 +5,7 @@
 // celebrate. NEVER throws — XP is a side effect and must not break its host.
 
 import { createHash } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, gte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   articles,
@@ -21,11 +21,23 @@ import { dayKey } from "@/lib/study/streak";
 import {
   XP_RULES,
   SOURCE_COUNTER,
+  DAILY_GOAL,
+  DAILY_GOAL_BONUS,
+  MOMENTUM_WINDOW_MINUTES,
   cardGradeXp,
+  momentumMultiplier,
+  momentumStep,
   withStreak,
   type XpSource,
 } from "./rules";
-import { skillLevelFromXp, playerLevelFromXp, tierForLevel, evolved } from "./levels";
+import {
+  skillLevelFromXp,
+  playerLevelFromXp,
+  tierForLevel,
+  evolved,
+  rankForLevel,
+  promoted,
+} from "./levels";
 import { newlyUnlocked, achievementByKey, type AchievementSnapshot } from "./achievements";
 import { classifyItemSkills } from "./skill-classifier";
 
@@ -42,13 +54,23 @@ export type AwardOptions = {
 };
 
 export type AwardResult = {
+  /** XP credited by this award, including any momentum/streak boost. */
   awarded: number;
   skipped?: boolean;
-  skill?: { name: string; emoji: string | null; level: number; tier: string };
+  skill?: { name: string; emoji: string | null; level: number; tier: string; color: string };
   skillLeveledUp?: boolean;
   evolvedTo?: string | null;
+  /** Tier colors so the UI can theme the toast + confetti to the evolution. */
+  evolvedColors?: { from: string; to: string } | null;
   playerLevel?: number;
   playerLeveledUp?: boolean;
+  /** Set when the level-up also promoted the player into a new rank. */
+  rankUpTo?: string | null;
+  rankColors?: { from: string; to: string } | null;
+  /** Consecutive-grade combo step this award rode (0 = none). */
+  momentum?: number;
+  /** Extra XP granted for crossing today's goal on this award (0 = none). */
+  goalBonus?: number;
   newAchievements?: { key: string; name: string; emoji: string }[];
 };
 
@@ -236,13 +258,57 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
     if (player.lastActiveDateKey !== today) {
       streakDays = player.lastActiveDateKey === yesterdayKey(today) ? streakDays + 1 : 1;
     }
-    const amount = withStreak(base, streakDays);
+
+    // Session momentum: a review inside a run of recent reviews is worth more,
+    // so working through a stack pays better than one card a day. Counted from
+    // the ledger (server truth) — the client never gets to claim a combo.
+    let momentum = 0;
+    if (opts.source === "card_graded") {
+      const since = new Date(Date.now() - MOMENTUM_WINDOW_MINUTES * 60_000);
+      const [recent] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(xpEvents)
+        .where(
+          and(
+            eq(xpEvents.userId, userId),
+            eq(xpEvents.source, "card_graded"),
+            gte(xpEvents.createdAt, since),
+          ),
+        );
+      momentum = momentumStep(recent?.n ?? 0);
+    }
+
+    const amount = Math.round(withStreak(base, streakDays) * momentumMultiplier(momentum));
+
+    // Daily goal: crossing it pays a one-off bonus that lands the same instant,
+    // so the goal bar is a reward to chase rather than a progress indicator.
+    const priorDaily = player.dailyDateKey === today ? player.dailyXp : 0;
+    let goalBonus = 0;
+    if (opts.source !== "daily_goal" && priorDaily < DAILY_GOAL && priorDaily + amount >= DAILY_GOAL) {
+      // The daily snapshot above isn't transactional, so two awards landing at
+      // once could both think they were the one to cross. The ledger row is the
+      // tiebreaker: one bonus per day, whoever gets there first.
+      const [already] = await db
+        .select({ id: xpEvents.id })
+        .from(xpEvents)
+        .where(
+          and(
+            eq(xpEvents.userId, userId),
+            eq(xpEvents.source, "daily_goal"),
+            eq(xpEvents.refId, today),
+          ),
+        )
+        .limit(1);
+      if (!already) goalBonus = DAILY_GOAL_BONUS;
+    }
+    const credited = amount + goalBonus;
 
     // Resolve + apply skill.
     const skill = await resolveSkill(userId, opts);
     let skillResult: AwardResult["skill"];
     let skillLeveledUp = false;
     let evolvedTo: string | null = null;
+    let evolvedColors: { from: string; to: string } | null = null;
     if (skill) {
       // Atomic increment (returning the new total) so rapid concurrent grades of
       // the same skill can't lose XP via read-modify-write.
@@ -259,11 +325,22 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
         await db.update(skills).set({ level: newLevel }).where(eq(skills.id, skill.id));
       }
       skillLeveledUp = newLevel > oldLevel;
-      evolvedTo = evolved(oldLevel, newLevel)?.name ?? null;
-      skillResult = { name: skill.name, emoji: skill.emoji, level: newLevel, tier: tierForLevel(newLevel).name };
+      const newTier = tierForLevel(newLevel);
+      const crossed = evolved(oldLevel, newLevel);
+      evolvedTo = crossed?.name ?? null;
+      evolvedColors = crossed ? { from: crossed.from, to: crossed.to } : null;
+      skillResult = {
+        name: skill.name,
+        emoji: skill.emoji,
+        level: newLevel,
+        tier: newTier.name,
+        color: newTier.color,
+      };
     }
 
-    // Ledger.
+    // Ledger. The goal bonus is a separate, player-only row so the XP feed
+    // reads honestly ("+50 hit the daily goal") instead of silently fattening
+    // whatever award happened to tip it over.
     await db.insert(xpEvents).values({
       userId,
       skillId: skill?.id ?? null,
@@ -272,15 +349,27 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
       refKind: opts.refKind ?? null,
       refId: opts.refId ?? null,
     });
+    if (goalBonus > 0) {
+      await db.insert(xpEvents).values({
+        userId,
+        skillId: null,
+        source: "daily_goal",
+        amount: goalBonus,
+        refKind: "daily_goal",
+        refId: today,
+      });
+    }
 
     // Player aggregates + counters + achievements.
     const counters = { ...(player.counters ?? {}) };
     const counterKey = SOURCE_COUNTER[opts.source];
     if (counterKey) counters[counterKey] = (counters[counterKey] ?? 0) + 1;
 
+    if (goalBonus > 0) counters.goalsHit = (counters.goalsHit ?? 0) + 1;
+
     // Estimated values for the achievement snapshot (authoritative total is
     // read back from the atomic update below).
-    const newTotal = player.totalXp + amount;
+    const newTotal = player.totalXp + credited;
     const newPlayerLevel = playerLevelFromXp(newTotal).level;
 
     // Skill aggregates for achievement predicates.
@@ -308,10 +397,10 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
     const [prow] = await db
       .update(playerProfile)
       .set({
-        totalXp: sql`${playerProfile.totalXp} + ${amount}`,
+        totalXp: sql`${playerProfile.totalXp} + ${credited}`,
         streakDays,
         lastActiveDateKey: today,
-        dailyXp: sql`case when ${playerProfile.dailyDateKey} = ${today} then ${playerProfile.dailyXp} + ${amount} else ${amount} end`,
+        dailyXp: sql`case when ${playerProfile.dailyDateKey} = ${today} then ${playerProfile.dailyXp} + ${credited} else ${credited} end`,
         dailyDateKey: today,
         counters,
         unlocked,
@@ -323,18 +412,26 @@ export async function awardXp(userId: string, opts: AwardOptions): Promise<Award
     // Authoritative level from the DB-truth total; level column is a cache.
     const authTotal = prow?.totalXp ?? newTotal;
     const authNewLevel = playerLevelFromXp(authTotal).level;
-    const authOldLevel = playerLevelFromXp(Math.max(0, authTotal - amount)).level;
+    const authOldLevel = playerLevelFromXp(Math.max(0, authTotal - credited)).level;
     if (authNewLevel !== authOldLevel) {
       await db.update(playerProfile).set({ level: authNewLevel }).where(eq(playerProfile.userId, userId));
     }
+    const rankUp = promoted(authOldLevel, authNewLevel);
 
     return {
-      awarded: amount,
+      awarded: credited,
       skill: skillResult,
       skillLeveledUp,
       evolvedTo,
+      evolvedColors,
       playerLevel: authNewLevel,
       playerLeveledUp: authNewLevel > authOldLevel,
+      rankUpTo: rankUp?.title ?? null,
+      rankColors: rankUp
+        ? { from: rankUp.from, to: rankUp.to }
+        : { from: rankForLevel(authNewLevel).from, to: rankForLevel(authNewLevel).to },
+      momentum,
+      goalBonus,
       newAchievements: fresh
         .map((key) => achievementByKey(key))
         .filter((a): a is NonNullable<typeof a> => !!a)

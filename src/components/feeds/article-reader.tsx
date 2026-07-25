@@ -6,9 +6,13 @@ import { useRouter } from "next/navigation";
 import {
   Bookmark,
   BookmarkPlus,
+  BookOpen,
+  Brain,
+  Check,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Highlighter,
   Languages,
   ListChecks,
   Loader2,
@@ -19,6 +23,7 @@ import {
   Sparkles,
   Star,
   Volume2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -50,12 +55,19 @@ import {
   setTranslatePrefs,
   type TranslatePrefs,
 } from "@/lib/i18n/translate-prefs";
+import { getCachedSimplified, putCachedSimplified } from "@/lib/reader/simplify-cache";
+import { getHighlights } from "@/lib/reader/highlights";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
 import { DocQueryPanel } from "@/components/reader/doc-query-panel";
 import { SelectionToCard } from "@/components/review/selection-card";
 import { PaneToggles } from "@/components/shell/pane-toggles";
-import { createCardsFromTextAction } from "@/app/(app)/review/actions";
+import {
+  createCardsFromTextAction,
+  createFlashcardAction,
+  proposeCardsFromTextAction,
+  type ProposedCard,
+} from "@/app/(app)/review/actions";
 
 type ArticleData = {
   id: string;
@@ -159,6 +171,12 @@ export function ArticleReader({
   useEffect(() => {
     setTPrefs(getTranslatePrefs());
   }, []);
+  // ── Reading level ──────────────────────────────────────────────────
+  const [simplified, setSimplified] = useState<{ title: string; content: string } | null>(null);
+  const [simplifying, setSimplifying] = useState(false);
+  const [showSimplified, setShowSimplified] = useState(false);
+  // ── Highlights (per device, localStorage) ──────────────────────────
+  const [highlights, setHighlights] = useState<string[]>([]);
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
@@ -317,6 +335,12 @@ export function ArticleReader({
     setShowOriginal(false);
     setSourceLang(null);
     setTranslating(false);
+    setSimplified(null);
+    setShowSimplified(false);
+    setSimplifying(false);
+    // Re-reading is a second pass: whatever you marked last time comes back
+    // first, so the article opens with your own reading of it.
+    setHighlights(selectedId ? getHighlights(selectedId) : []);
   }, [selectedId]);
 
   // Work out what language this article is in, once its body has loaded.
@@ -382,9 +406,57 @@ export function ArticleReader({
     if (tPrefs.auto) void translate(article.id, tPrefs.target);
   }, [article, needsTranslation, translation, translating, tPrefs, translate]);
 
+  const simplify = useCallback(async (articleId: string) => {
+    const cached = getCachedSimplified(articleId);
+    if (cached) {
+      setSimplified(cached);
+      setShowSimplified(true);
+      return;
+    }
+    setSimplifying(true);
+    try {
+      const res = await fetch(`/api/articles/${articleId}/simplify`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      // Paging away mid-rewrite: drop the result rather than pasting a
+      // different article's text over what's now on screen.
+      if (articleId !== latestIdRef.current) return;
+      if (!res.ok || typeof data.content !== "string") {
+        toast.error(typeof data.error === "string" ? data.error : "Couldn't simplify this article");
+        return;
+      }
+      const value = { title: typeof data.title === "string" ? data.title : "", content: data.content };
+      putCachedSimplified(articleId, value);
+      setSimplified(value);
+      setShowSimplified(true);
+    } catch {
+      if (articleId === latestIdRef.current) toast.error("Couldn't simplify this article");
+    } finally {
+      if (articleId === latestIdRef.current) setSimplifying(false);
+    }
+  }, []);
+
+  // Re-opening an article you already simplified restores that version, so you
+  // don't pay for the same rewrite twice.
+  useEffect(() => {
+    if (!article || simplified || simplifying) return;
+    const cached = getCachedSimplified(article.id);
+    if (cached) setSimplified(cached);
+  }, [article, simplified, simplifying]);
+
   const showTranslated = translation !== null && !showOriginal;
-  const displayTitle = showTranslated ? translation.title || article?.title : article?.title;
-  const displayContent = showTranslated ? translation.content : content;
+  // Reading level takes precedence over translation: both rewrite the body from
+  // the same source, so they're alternatives rather than layers.
+  const showingSimplified = simplified !== null && showSimplified;
+  const displayTitle = showingSimplified
+    ? simplified.title || article?.title
+    : showTranslated
+      ? translation.title || article?.title
+      : article?.title;
+  const displayContent = showingSimplified
+    ? simplified.content
+    : showTranslated
+      ? translation.content
+      : content;
 
   // Warm the next article once this one has settled. Delayed so paging quickly
   // with j/j/j doesn't fire off an extraction for every article skimmed past —
@@ -957,6 +1029,15 @@ export function ArticleReader({
                 }}
                 onToggleAuto={() => setTPrefs(setTranslatePrefs({ auto: !tPrefs.auto }))}
               />
+              {!loadingContent && (
+                <ReadingLevelBar
+                  simplifying={simplifying}
+                  hasSimplified={simplified !== null}
+                  showingSimplified={showingSimplified}
+                  onSimplify={() => article && simplify(article.id)}
+                  onToggle={() => setShowSimplified((v) => !v)}
+                />
+              )}
               <div className="not-prose mt-3 mb-8 pb-6 border-b border-border flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
                 {article.author && (
                   <span className="font-medium" style={{ color: "hsl(var(--brand))" }}>{article.author}</span>
@@ -1027,9 +1108,16 @@ export function ArticleReader({
                   {article?.excerpt ? " Showing the RSS excerpt below." : ""}
                 </div>
               )}
+              {highlights.length > 0 && !loadingContent && (
+                <HighlightsRecap highlights={highlights} />
+              )}
               {displayContent ? (
-                // Highlight any passage → floating "Make flashcard" button.
-                <SelectionToCard sourceTitle={article?.title ?? ""}>
+                // Select any passage → floating "Make flashcard" / "Highlight".
+                <SelectionToCard
+                  sourceTitle={article?.title ?? ""}
+                  articleId={article?.id}
+                  onHighlight={setHighlights}
+                >
                   <div dangerouslySetInnerHTML={{ __html: displayContent }} />
                 </SelectionToCard>
               ) : !loadingContent && article ? (
@@ -1050,6 +1138,12 @@ export function ArticleReader({
                 )
               ) : null}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
+              {article && !loadingContent && (
+                <CardsFromArticle
+                  title={displayTitle ?? article.title}
+                  text={(displayContent ?? article.excerpt ?? "").replace(/<[^>]+>/g, " ")}
+                />
+              )}
               {article && !loadingContent && (
                 <NextUpFooter
                   nextId={nextId}
@@ -1075,6 +1169,93 @@ export function ArticleReader({
         />
       )}
     </section>
+  );
+}
+
+/**
+ * What you marked last time, above the body on re-read. A second pass through
+ * an article is worth more when it starts from your own first pass, rather than
+ * from the top again — so the passages you kept lead, and the article follows.
+ */
+function HighlightsRecap({ highlights }: { highlights: string[] }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="not-prose mb-8 rounded-lg border border-border bg-muted/40 p-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="editorial-eyebrow-brand inline-flex items-center gap-1.5">
+          <Highlighter className="h-3 w-3" /> § You highlighted
+        </span>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {open ? "Hide" : `Show ${highlights.length}`}
+        </button>
+      </div>
+      {open && (
+        <ul className="space-y-2">
+          {highlights.map((h, i) => (
+            <li
+              key={`${i}-${h.slice(0, 24)}`}
+              className="border-l-2 pl-3 text-[13px] leading-relaxed text-muted-foreground"
+              style={{ borderColor: "hsl(var(--brand) / 0.5)" }}
+            >
+              {h}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Reading-level strip under the headline. Same bargain as translation: a
+ * machine rewrite is an aid, not a replacement, so the original is always one
+ * tap away — and nothing is rewritten until asked, because it costs a model
+ * call per article.
+ */
+function ReadingLevelBar({
+  simplifying,
+  hasSimplified,
+  showingSimplified,
+  onSimplify,
+  onToggle,
+}: {
+  simplifying: boolean;
+  hasSimplified: boolean;
+  showingSimplified: boolean;
+  onSimplify: () => void;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="not-prose mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+      <BookOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <span className="text-muted-foreground">
+        {hasSimplified
+          ? showingSimplified
+            ? "Simplified — shorter sentences, jargon explained"
+            : "Original wording"
+          : "Heavy going? Read a plainer version."}
+      </span>
+
+      {hasSimplified ? (
+        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={onToggle}>
+          {showingSimplified ? "Show original" : "Show simplified"}
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 gap-1 px-2 text-xs"
+          onClick={onSimplify}
+          disabled={simplifying}
+        >
+          {simplifying && <Loader2 className="h-3 w-3 animate-spin" />}
+          {simplifying ? "Simplifying…" : "Explain more simply"}
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -1161,6 +1342,125 @@ function TranslationBar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+    </div>
+  );
+}
+
+/**
+ * End-of-article capture. The moment after reading is when context is
+ * freshest and effort lowest — but nothing reaches the study deck until it's
+ * explicitly kept.
+ */
+function CardsFromArticle({ title, text }: { title: string; text: string }) {
+  const [state, setState] = useState<"idle" | "drafting" | "review">("idle");
+  const [cards, setCards] = useState<ProposedCard[]>([]);
+  const [savingIdx, setSavingIdx] = useState<number | null>(null);
+  const [keptCount, setKeptCount] = useState(0);
+
+  async function draft() {
+    setState("drafting");
+    try {
+      const r = await proposeCardsFromTextAction({ title, text });
+      if (!r.ok) {
+        toast.error(r.error);
+        setState("idle");
+        return;
+      }
+      setCards(r.cards);
+      setState("review");
+    } catch {
+      toast.error("Couldn't draft cards from this article");
+      setState("idle");
+    }
+  }
+
+  function discard(idx: number) {
+    setCards((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function keep(idx: number) {
+    const card = cards[idx];
+    if (!card || savingIdx !== null) return;
+    setSavingIdx(idx);
+    try {
+      const r = await createFlashcardAction({ question: card.question, answer: card.answer, itemId: null });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      setKeptCount((n) => n + 1);
+      discard(idx);
+    } catch {
+      toast.error("Couldn't save that card");
+    } finally {
+      setSavingIdx(null);
+    }
+  }
+
+  if (!text.trim()) return null;
+
+  return (
+    <div className="not-prose mt-10 border-t border-border pt-5">
+      <div className="editorial-eyebrow-brand mb-2">§ Remember this</div>
+      {state !== "review" && (
+        <>
+          <p className="mb-3 text-xs text-muted-foreground">
+            Turn what you just read into flashcards. You choose which ones to keep.
+          </p>
+          <Button size="sm" variant="outline" onClick={draft} disabled={state === "drafting"}>
+            {state === "drafting" ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Brain className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {state === "drafting" ? "Drafting…" : "Make cards from this"}
+          </Button>
+        </>
+      )}
+      {state === "review" && (
+        <>
+          <p className="mb-3 text-xs text-muted-foreground">
+            {cards.length > 0
+              ? "Keep the ones worth remembering."
+              : keptCount > 0
+                ? `Added ${keptCount} card${keptCount === 1 ? "" : "s"} to your deck.`
+                : "No cards kept."}
+          </p>
+          <div className="space-y-2">
+            {cards.map((c, i) => (
+              <div key={`${i}-${c.question}`} className="rounded-md border border-border p-3">
+                <div className="text-sm font-medium leading-snug">{c.question}</div>
+                <div className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{c.answer}</div>
+                <div className="mt-2 flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="brand"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => keep(i)}
+                    disabled={savingIdx !== null}
+                  >
+                    {savingIdx === i ? (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Check className="mr-1 h-3 w-3" />
+                    )}
+                    Keep
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 px-2 text-xs text-muted-foreground"
+                    onClick={() => discard(i)}
+                    disabled={savingIdx !== null}
+                  >
+                    <X className="mr-1 h-3 w-3" /> Discard
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
