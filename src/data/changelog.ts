@@ -27,6 +27,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-h",
+    date: "July 25, 2026",
+    title: "Every page starts up lighter",
+    tag: "improvement",
+    summary:
+      "Roughly a fifth of the code the app used to load on every single page has moved off the startup path. The offline folder cache, the ⌘K palette and quick capture now load quietly in the background instead of holding up the first paint — they still open instantly when you reach for them.",
+  },
+  {
+    id: "2026-07-25-g",
+    date: "July 25, 2026",
+    title: "The Directory opens faster",
+    tag: "improvement",
+    summary:
+      "The Directory now downloads noticeably less before it can show your library. The item reader, the board view and the dialogs are fetched the moment you actually open one, instead of on every visit.",
+  },
+  {
     id: "2026-07-25-f",
     date: "July 25, 2026",
     title: "Levels come faster, and milestones look the part",

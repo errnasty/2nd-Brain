@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { useSearchParams, useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -35,9 +36,20 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { AddFeedDialog } from "./add-feed-dialog";
-import { ImportOpmlDialog } from "./import-opml-dialog";
-import { FeedDiscoveryDialog } from "./feed-discovery-dialog";
+// Adding, importing and discovering feeds are occasional setup actions, but
+// their code shipped with every visit to /feeds. Deferred and mounted on first
+// open — reading the feed list is the common path and shouldn't pay for them.
+const AddFeedDialog = dynamic(() => import("./add-feed-dialog").then((m) => m.AddFeedDialog), {
+  ssr: false,
+});
+const ImportOpmlDialog = dynamic(
+  () => import("./import-opml-dialog").then((m) => m.ImportOpmlDialog),
+  { ssr: false },
+);
+const FeedDiscoveryDialog = dynamic(
+  () => import("./feed-discovery-dialog").then((m) => m.FeedDiscoveryDialog),
+  { ssr: false },
+);
 import {
   createFolderAction,
   deleteFeedAction,
@@ -404,13 +416,15 @@ export function FeedsNav({
         </nav>
       </ScrollArea>
 
-      <AddFeedDialog open={addOpen} onOpenChange={setAddOpen} folders={folders} />
-      <ImportOpmlDialog open={importOpen} onOpenChange={setImportOpen} />
-      <FeedDiscoveryDialog
-        open={discoverOpen}
-        onOpenChange={setDiscoverOpen}
-        followedUrls={feeds.map((f) => f.url)}
-      />
+      {addOpen && <AddFeedDialog open={addOpen} onOpenChange={setAddOpen} folders={folders} />}
+      {importOpen && <ImportOpmlDialog open={importOpen} onOpenChange={setImportOpen} />}
+      {discoverOpen && (
+        <FeedDiscoveryDialog
+          open={discoverOpen}
+          onOpenChange={setDiscoverOpen}
+          followedUrls={feeds.map((f) => f.url)}
+        />
+      )}
     </aside>
   );
 }

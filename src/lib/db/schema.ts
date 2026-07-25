@@ -310,6 +310,11 @@ export const directoryItems = pgTable(
       .on(t.userId, t.updatedAt.desc())
       .where(sql`${t.folderId} is null`),
     folderIdx: index("directory_items_folder_idx").on(t.folderId),
+    // Sidebar/content-pane badge counts: `group by folder_id where user_id = ?`.
+    // Covering, so it plans as an index-only scan (no heap fetches) instead of
+    // walking (user,kind,updated) and touching every row's heap page — rows here
+    // are wide (content text + embedding vector), so the heap access dominates.
+    userFolderIdx: index("directory_items_user_folder_idx").on(t.userId, t.folderId),
     articleIdx: index("directory_items_article_idx").on(t.articleId),
     documentIdx: index("directory_items_document_idx").on(t.documentId),
     embeddingIdx: index("directory_items_embedding_idx").using(
