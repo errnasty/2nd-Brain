@@ -175,6 +175,32 @@ export function ArticleList({
     });
   }
 
+  // "Mark read while scrolling" — OFF by default. This used to be unconditional
+  // in the Unread view, which meant a single flick down the list silently
+  // cleared everything you scrolled past, whether or not you'd read any of it.
+  // Destroying unread state is not something to do without being asked, so it's
+  // now opt-in and persisted like the density setting.
+  const [autoReadOnScroll, setAutoReadOnScroll] = useState(false);
+  useEffect(() => {
+    try {
+      setAutoReadOnScroll(localStorage.getItem("feeds.autoReadOnScroll.v1") === "1");
+    } catch {
+      // ignore
+    }
+  }, []);
+  function toggleAutoReadOnScroll() {
+    setAutoReadOnScroll((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("feeds.autoReadOnScroll.v1", next ? "1" : "0");
+      } catch {
+        // ignore
+      }
+      toast.success(next ? "Articles mark read as you scroll past" : "Scrolling no longer marks articles read");
+      return next;
+    });
+  }
+
   // Multi-select for bulk actions.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const clearSelection = () => setSelected(new Set());
@@ -486,7 +512,12 @@ export function ArticleList({
           <ViewLink view="readlater" current={view} label="Read Later" />
         </div>
         <div className="flex items-center gap-0.5">
-          <SortControls compact={compact} onToggleCompact={toggleCompact} />
+          <SortControls
+            compact={compact}
+            onToggleCompact={toggleCompact}
+            autoReadOnScroll={autoReadOnScroll}
+            onToggleAutoReadOnScroll={toggleAutoReadOnScroll}
+          />
           <Button
             size="sm"
             variant="ghost"
@@ -553,7 +584,7 @@ export function ArticleList({
           onPrefetch={prefetch}
           onMarkRead={markReadOne}
           onAutoRead={onAutoRead}
-          autoRead={view === "unread" && !showingSearch}
+          autoRead={autoReadOnScroll && view === "unread" && !showingSearch}
           onLoadMore={loadMore}
           loadingMore={loadingMore}
           canLoadMore={!showingSearch && hasMore}
@@ -644,6 +675,30 @@ function VirtualizedArticleList({
     virtualizer.measure();
   }, [compact, virtualizer]);
 
+  // Auto-mark-read runs only after scrolling *settles*, and only for rows that
+  // are a full screen-ful above the fold. Marking on every scroll tick meant
+  // flinging through the list nuked the unread state of articles that were
+  // never on screen long enough to read; waiting for the scroll to stop means
+  // a fast flick past a section leaves it alone.
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => { if (settleTimer.current) clearTimeout(settleTimer.current); }, []);
+
+  function markSettledRowsRead() {
+    const el = parentRef.current;
+    if (!el) return;
+    const top = el.scrollTop;
+    // One viewport of clearance: the row must be well and truly behind you.
+    const cutoff = top - Math.max(120, el.clientHeight * 0.5);
+    const past: string[] = [];
+    for (const vi of virtualizer.getVirtualItems()) {
+      if (vi.start + vi.size < cutoff) {
+        const it = items[vi.index];
+        if (it && it.readStatus === "unread") past.push(it.id);
+      }
+    }
+    if (past.length > 0) onAutoRead(past);
+  }
+
   function handleScroll() {
     const el = parentRef.current;
     if (!el) return;
@@ -651,14 +706,8 @@ function VirtualizedArticleList({
     const goingDown = top > lastScrollTop.current + 2;
     lastScrollTop.current = top;
     if (!autoRead || !goingDown) return;
-    const past: string[] = [];
-    for (const vi of virtualizer.getVirtualItems()) {
-      if (vi.start + vi.size < top - 4) {
-        const it = items[vi.index];
-        if (it && it.readStatus === "unread") past.push(it.id);
-      }
-    }
-    if (past.length > 0) onAutoRead(past);
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(markSettledRowsRead, 450);
   }
 
   const touchStart = useRef<{ x: number; y: number; id: string } | null>(null);
@@ -896,9 +945,13 @@ const SORT_LABELS: Record<string, string> = {
 function SortControls({
   compact,
   onToggleCompact,
+  autoReadOnScroll,
+  onToggleAutoReadOnScroll,
 }: {
   compact: boolean;
   onToggleCompact: () => void;
+  autoReadOnScroll: boolean;
+  onToggleAutoReadOnScroll: () => void;
 }) {
   const router = useRouter();
   const params = useSearchParams();
@@ -950,6 +1003,14 @@ function SortControls({
         <DropdownMenuCheckboxItem checked={compact} onCheckedChange={onToggleCompact}>
           <AlignJustify className="mr-2 h-3.5 w-3.5" />
           Compact rows
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuCheckboxItem
+          checked={autoReadOnScroll}
+          onCheckedChange={onToggleAutoReadOnScroll}
+        >
+          <CheckCheck className="mr-2 h-3.5 w-3.5" />
+          Mark read while scrolling
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>

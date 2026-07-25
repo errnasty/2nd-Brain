@@ -69,12 +69,16 @@ type ArticleData = {
 export function ArticleReader({
   selectedId,
   orderedIds,
+  titleById = {},
   onSelect,
   listCollapsed = false,
   onToggleList,
 }: {
   selectedId: string | null;
   orderedIds: string[];
+  /** Titles for the ids in `orderedIds`, so the end-of-article footer can name
+   *  what's coming next. Partial — falls back to a generic label. */
+  titleById?: Record<string, string>;
   onSelect: (id: string | null) => void;
   /** Whether the article list (third bar) is collapsed. */
   listCollapsed?: boolean;
@@ -170,15 +174,20 @@ export function ArticleReader({
     if (!vp) return;
 
     // Restore saved position once per article, after content has laid out.
+    // The viewport is reused across articles, so an article with no saved
+    // progress must be explicitly sent back to the top — otherwise paging to
+    // the next article drops you into the middle of it at the old offset.
     if (content && restoredFor.current !== selectedId) {
       restoredFor.current = selectedId;
+      let target = 0;
       try {
         const saved = parseFloat(localStorage.getItem(`article.progress.${selectedId}`) ?? "0");
         const max = vp.scrollHeight - vp.clientHeight;
-        if (saved > 0.02 && saved < 0.99 && max > 0) vp.scrollTop = saved * max;
+        if (saved > 0.02 && saved < 0.99 && max > 0) target = saved * max;
       } catch {
         // ignore
       }
+      vp.scrollTop = target;
     }
 
     let raf = 0;
@@ -214,6 +223,79 @@ export function ArticleReader({
 
   const goToArticle = useCallback((id: string | null) => onSelect(id), [onSelect]);
   const close = useCallback(() => goToArticle(null), [goToArticle]);
+
+  // ── Continuous reading ──────────────────────────────────────────────
+  // Reaching the end of an article and continuing to scroll opens the next
+  // one, so a reading session never breaks stride to go back to the list.
+  // It takes a deliberate extra pull past the bottom (not merely arriving
+  // there), so stopping to read the last paragraph never skips you onward.
+  const PULL_TO_ADVANCE = 160;
+  const [pullProgress, setPullProgress] = useState(0);
+  const nextIdRef = useRef<string | null>(null);
+  nextIdRef.current = nextId;
+  const advancingRef = useRef(false);
+
+  useEffect(() => {
+    advancingRef.current = false;
+    setPullProgress(0);
+  }, [selectedId]);
+
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!root) return;
+    const vp = root.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]");
+    if (!vp) return;
+
+    let pull = 0;
+    let lastTouchY: number | null = null;
+    let decay: ReturnType<typeof setTimeout> | null = null;
+    const atBottom = () => vp.scrollHeight - vp.clientHeight - vp.scrollTop <= 2;
+    const reset = () => {
+      pull = 0;
+      lastTouchY = null;
+      setPullProgress(0);
+    };
+
+    const addPull = (dy: number) => {
+      if (dy <= 0 || advancingRef.current || !nextIdRef.current || !atBottom()) return;
+      pull += dy;
+      setPullProgress(Math.min(1, pull / PULL_TO_ADVANCE));
+      // Let the intent lapse if they stop — a pull only counts while continuous.
+      if (decay) clearTimeout(decay);
+      decay = setTimeout(reset, 700);
+      if (pull >= PULL_TO_ADVANCE) {
+        const id = nextIdRef.current;
+        advancingRef.current = true;
+        reset();
+        if (id) goToArticle(id);
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => addPull(e.deltaY);
+    const onTouchStart = (e: TouchEvent) => {
+      lastTouchY = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY;
+      if (y == null || lastTouchY == null) return;
+      addPull(lastTouchY - y); // finger travelling up = scrolling further down
+      lastTouchY = y;
+    };
+
+    vp.addEventListener("wheel", onWheel, { passive: true });
+    vp.addEventListener("touchstart", onTouchStart, { passive: true });
+    vp.addEventListener("touchmove", onTouchMove, { passive: true });
+    vp.addEventListener("touchend", reset, { passive: true });
+    vp.addEventListener("touchcancel", reset, { passive: true });
+    return () => {
+      vp.removeEventListener("wheel", onWheel);
+      vp.removeEventListener("touchstart", onTouchStart);
+      vp.removeEventListener("touchmove", onTouchMove);
+      vp.removeEventListener("touchend", reset);
+      vp.removeEventListener("touchcancel", reset);
+      if (decay) clearTimeout(decay);
+    };
+  }, [goToArticle]);
 
   function toggleStar() {
     if (!article) return;
@@ -714,6 +796,15 @@ export function ArticleReader({
                 )
               ) : null}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
+              {article && !loadingContent && (
+                <NextUpFooter
+                  nextId={nextId}
+                  nextTitle={nextId ? titleById[nextId] : undefined}
+                  pullProgress={pullProgress}
+                  onNext={() => nextId && goToArticle(nextId)}
+                  onBackToList={close}
+                />
+              )}
             </>
           )}
         </article>
@@ -728,5 +819,59 @@ export function ArticleReader({
         />
       )}
     </section>
+  );
+}
+
+/**
+ * End-of-article rail: names what's next and fills a progress bar as the reader
+ * keeps scrolling past the bottom, so the auto-advance is visible and
+ * predictable rather than a surprise jump. Also works as a plain button for
+ * anyone who'd rather tap than scroll.
+ */
+function NextUpFooter({
+  nextId,
+  nextTitle,
+  pullProgress,
+  onNext,
+  onBackToList,
+}: {
+  nextId: string | null;
+  nextTitle?: string;
+  pullProgress: number;
+  onNext: () => void;
+  onBackToList: () => void;
+}) {
+  if (!nextId) {
+    return (
+      <div className="not-prose mt-10 border-t border-border pt-5 text-center">
+        <p className="text-sm italic text-muted-foreground">That&apos;s the last article here.</p>
+        <Button size="sm" variant="outline" className="mt-3" onClick={onBackToList}>
+          Back to the list
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="not-prose mt-10 border-t border-border pt-5">
+      <div className="editorial-eyebrow-brand mb-2">§ Next up</div>
+      <button onClick={onNext} className="group/next block w-full text-left">
+        <div
+          className="font-medium leading-snug transition-colors group-hover/next:text-brand"
+          style={{ fontFamily: "var(--app-font-display)" }}
+        >
+          {nextTitle ?? "The next article"}
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          Keep scrolling to open it — or tap here.
+        </div>
+      </button>
+      {/* Fills as the reader pulls past the bottom; at 100% the next article opens. */}
+      <div className="mt-3 h-0.5 w-full overflow-hidden rounded-full bg-border/60" aria-hidden>
+        <div
+          className="h-full rounded-full transition-[width] duration-75 ease-out"
+          style={{ width: `${Math.round(pullProgress * 100)}%`, background: "hsl(var(--brand))" }}
+        />
+      </div>
+    </div>
   );
 }

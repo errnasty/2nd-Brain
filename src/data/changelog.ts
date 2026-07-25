@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-23-s",
+    date: "July 23, 2026",
+    title: "A calmer, uninterrupted reading experience",
+    tag: "fix",
+    summary:
+      "Scrolling the Feeds list no longer marks everything you scroll past as read — that's now an option you can turn on, and it waits until you've actually settled on a spot. Reaching the end of an article and continuing to scroll now opens the next one. And opening an article no longer breaks the navigation tabs.",
+    items: [
+      "Scrolling the list no longer silently clears your unread articles. Turn it back on under Sort & filter → \"Mark read while scrolling\" if you liked it.",
+      "Keep scrolling at the end of an article to slide straight into the next one, with a \"Next up\" preview showing what's coming.",
+      "Fixed being stuck in an article — tapping another tab did nothing until you reloaded the whole app.",
+      "Opening a new article now starts you at the top instead of keeping the previous article's scroll position.",
+    ],
+  },
+  {
     id: "2026-07-23-r",
     date: "July 23, 2026",
     title: "Knowledge map is far easier to read",

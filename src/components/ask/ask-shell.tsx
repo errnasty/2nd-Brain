@@ -77,6 +77,7 @@ import { ThreadList } from "@/components/ask/thread-list";
 import { parseEvents, type AgentProposal } from "@/lib/ai/agent/stream";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { toast } from "sonner";
+import { replaceUrl } from "@/lib/ui/replace-url";
 
 type Source = {
   n: number;
@@ -293,7 +294,7 @@ export function AskShell({
         if (t) {
           setThreadId(id);
           setMessages(t.messages.map(hydrate));
-          window.history.replaceState(null, "", `/ask?thread=${id}`);
+          replaceUrl(`/ask?thread=${id}`);
         }
       } finally {
         setSwitching(false);
@@ -308,7 +309,7 @@ export function AskShell({
     setThreadId(null);
     setMessages([]);
     setError(null);
-    window.history.replaceState(null, "", "/ask");
+    replaceUrl("/ask");
     inputRef.current?.focus();
   }, [streaming]);
 
@@ -474,7 +475,7 @@ export function AskShell({
       const r = await createThread();
       if (!r.ok) return null;
       setThreadId(r.id);
-      window.history.replaceState(null, "", `/ask?thread=${r.id}`);
+      replaceUrl(`/ask?thread=${r.id}`);
       // Optimistically add to the sidebar (title filled from the first question).
       const title = firstQuestion.trim().slice(0, 80) || "New conversation";
       setThreads((prev) => [{ id: r.id, title, updatedAt: new Date().toISOString() }, ...prev]);

@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { ArticleList, type ArticleListItem } from "./article-list";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
 import { lastLocation } from "@/lib/last-location";
+import { replaceUrl } from "@/lib/ui/replace-url";
 
 // The reader (712 lines: panels, TTS, takeaways, next/image…) loads only once
 // an article is actually opened — it's the bulk of /feeds' initial JS. Its
@@ -73,7 +74,7 @@ export function FeedsShell({
       setSelectedId(null);
       const url = new URL(window.location.href);
       url.searchParams.delete("article");
-      window.history.replaceState(null, "", url.toString());
+      replaceUrl(url.toString());
     }
   }, [scopeKey, orderedIds, selectedId]);
 
@@ -83,7 +84,7 @@ export function FeedsShell({
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("article", id);
     else url.searchParams.delete("article");
-    window.history.replaceState(null, "", url.toString());
+    replaceUrl(url.toString());
   }, []);
 
   // Resume: on a bare visit (no ?article), reopen the last article read. The
@@ -95,12 +96,20 @@ export function FeedsShell({
       setSelectedId(saved);
       const url = new URL(window.location.href);
       url.searchParams.set("article", saved);
-      window.history.replaceState(null, "", url.toString());
+      replaceUrl(url.toString());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [listCollapsed, toggleListCollapsed] = useListCollapse("feeds.listCollapsed.v1");
+
+  // Titles for the reader's "Next up" footer. Covers the server-rendered page;
+  // ids paged in later fall back to a generic label rather than blocking.
+  const titleById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const it of items) m[it.id] = it.title;
+    return m;
+  }, [items]);
 
   return (
     <>
@@ -118,6 +127,7 @@ export function FeedsShell({
         <ArticleReader
           selectedId={selectedId}
           orderedIds={orderedIds}
+          titleById={titleById}
           onSelect={onSelect}
           listCollapsed={listCollapsed}
           onToggleList={toggleListCollapsed}

@@ -33,6 +33,7 @@ import type { DueCard, LeechCard } from "@/app/(app)/review/actions";
 import type { QuizListItem } from "@/app/(app)/study/quiz-actions";
 import type { SessionPlan } from "@/app/(app)/study/session-actions";
 import type { GameState } from "@/lib/gamify/state";
+import { replaceUrl } from "@/lib/ui/replace-url";
 
 export type StudyTab = "overview" | "tasks" | "review" | "calendar" | "quiz" | "cards";
 
@@ -94,7 +95,7 @@ export function StudyShell({
       setTab(saved as StudyTab);
       const url = new URL(window.location.href);
       url.searchParams.set("tab", saved);
-      window.history.replaceState(null, "", url.toString());
+      replaceUrl(url.toString());
     }
   }, []);
 
@@ -109,7 +110,7 @@ export function StudyShell({
     lastLocation.setStudyTab(next);
     const url = new URL(window.location.href);
     url.searchParams.set("tab", next);
-    window.history.replaceState(null, "", url.toString());
+    replaceUrl(url.toString());
     // The hub is a client shell — tab data is fetched at page load and tabs
     // don't refetch on switch. Pull fresh server data when entering a data tab
     // so newly-added/-completed tasks and graded cards always show (the "tasks
