@@ -66,6 +66,46 @@ type ArticleData = {
   feedFolderName: string | null;
 };
 
+// ── Next-article warm cache ───────────────────────────────────────────
+// Continuous reading (scroll past the end → next article) is only pleasant if
+// the next article is already there. While you read, we quietly fetch the next
+// one's metadata and body so advancing paints instantly instead of flashing a
+// skeleton. Full-text extraction is cached server-side, so doing it now simply
+// moves the work off the moment you're waiting on it.
+type WarmEntry = { meta?: ArticleData; content?: string };
+const warmCache = new Map<string, WarmEntry>();
+const warmInFlight = new Set<string>();
+const WARM_MAX = 5;
+
+function warmArticle(id: string): void {
+  if (warmCache.has(id) || warmInFlight.has(id)) return;
+  warmInFlight.add(id);
+  const entry: WarmEntry = {};
+  void Promise.allSettled([
+    fetch(`/api/articles/${id}`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<ArticleData>) : null))
+      .then((d) => {
+        if (d) entry.meta = d;
+      }),
+    fetch(`/api/articles/${id}/full-text`, { method: "POST" })
+      .then(async (r) => ({ ok: r.ok, data: await r.json().catch(() => ({})) }))
+      .then(({ ok, data }) => {
+        if (ok && typeof data.content === "string") entry.content = data.content;
+      }),
+  ]).then(() => {
+    warmInFlight.delete(id);
+    // Only cache a usable result; a failed warm should fall through to the
+    // normal load (with its error handling) rather than cache a dud.
+    if (!entry.meta) return;
+    warmCache.set(id, entry);
+    while (warmCache.size > WARM_MAX) {
+      const oldest = warmCache.keys().next().value;
+      if (oldest === undefined) break;
+      warmCache.delete(oldest);
+    }
+  });
+}
+
 export function ArticleReader({
   selectedId,
   orderedIds,
@@ -233,12 +273,23 @@ export function ArticleReader({
   const [pullProgress, setPullProgress] = useState(0);
   const nextIdRef = useRef<string | null>(null);
   nextIdRef.current = nextId;
+  const prevIdRef = useRef<string | null>(null);
+  prevIdRef.current = prevId;
   const advancingRef = useRef(false);
 
   useEffect(() => {
     advancingRef.current = false;
     setPullProgress(0);
   }, [selectedId]);
+
+  // Warm the next article once this one has settled. Delayed so paging quickly
+  // with j/j/j doesn't fire off an extraction for every article skimmed past —
+  // we only prefetch what you look likely to actually reach.
+  useEffect(() => {
+    if (!nextId || loadingContent) return;
+    const t = setTimeout(() => warmArticle(nextId), 1200);
+    return () => clearTimeout(t);
+  }, [nextId, loadingContent]);
 
   useEffect(() => {
     const root = scrollRootRef.current;
@@ -294,6 +345,42 @@ export function ArticleReader({
       vp.removeEventListener("touchend", reset);
       vp.removeEventListener("touchcancel", reset);
       if (decay) clearTimeout(decay);
+    };
+  }, [goToArticle]);
+
+  // Swipe left/right to page between articles. The reader's prev/next buttons
+  // are desktop-only, so on a phone this was the missing way back to the
+  // previous article. Thresholds match the article list's swipe actions: a
+  // decisively horizontal drag, so it never steals a scroll or a text
+  // selection.
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!root) return;
+    const vp = root.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]");
+    if (!vp) return;
+
+    let start: { x: number; y: number } | null = null;
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      start = t ? { x: t.clientX, y: t.clientY } : null;
+    };
+    const onEnd = (e: TouchEvent) => {
+      const s = start;
+      start = null;
+      const t = e.changedTouches[0];
+      if (!s || !t) return;
+      const dx = t.clientX - s.x;
+      const dy = t.clientY - s.y;
+      if (Math.abs(dx) < 70 || Math.abs(dx) <= Math.abs(dy)) return;
+      const id = dx < 0 ? nextIdRef.current : prevIdRef.current;
+      if (id) goToArticle(id);
+    };
+
+    vp.addEventListener("touchstart", onStart, { passive: true });
+    vp.addEventListener("touchend", onEnd, { passive: true });
+    return () => {
+      vp.removeEventListener("touchstart", onStart);
+      vp.removeEventListener("touchend", onEnd);
     };
   }, [goToArticle]);
 
@@ -425,6 +512,40 @@ export function ArticleReader({
     }
 
     let aborted = false;
+
+    // Already warmed while reading the previous article — paint immediately and
+    // skip both round-trips. This is what makes scroll-to-next feel continuous.
+    const warm = warmCache.get(selectedId);
+    if (warm?.meta) {
+      warmCache.delete(selectedId);
+      setArticle(warm.meta);
+      setLoadingMeta(false);
+      const body = warm.content ?? warm.meta.fullText;
+      if (body) {
+        setContent(body);
+        setLoadingContent(false);
+        return;
+      }
+      // Meta was warm but the body wasn't — fall through to fetch just the body.
+      setLoadingContent(true);
+      fetch(`/api/articles/${selectedId}/full-text`, { method: "POST" })
+        .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
+        .then(({ ok, data }) => {
+          if (aborted) return;
+          if (!ok) setExtractError(typeof data.error === "string" ? data.error : "Failed to load");
+          else if (typeof data.content === "string") setContent(data.content);
+          setLoadingContent(false);
+        })
+        .catch((err) => {
+          if (aborted) return;
+          setExtractError(err.message ?? "Failed to load");
+          setLoadingContent(false);
+        });
+      return () => {
+        aborted = true;
+      };
+    }
+
     setLoadingMeta(true);
     setLoadingContent(true);
 
