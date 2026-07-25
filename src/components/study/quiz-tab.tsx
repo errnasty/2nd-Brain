@@ -14,6 +14,7 @@ import {
 } from "@/app/(app)/study/quiz-actions";
 import { QuizPickerDialog } from "./quiz-picker-dialog";
 import { QuizRunner } from "./quiz-runner";
+import { replaceUrl } from "@/lib/ui/replace-url";
 
 export function QuizTab({
   quizzes,
@@ -50,7 +51,7 @@ export function QuizTab({
     setTaking(null);
     const url = new URL(window.location.href);
     url.searchParams.delete("quiz");
-    window.history.replaceState(null, "", url.toString());
+    replaceUrl(url.toString());
   }
 
   async function remove(id: string, title: string) {

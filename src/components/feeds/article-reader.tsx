@@ -66,15 +66,59 @@ type ArticleData = {
   feedFolderName: string | null;
 };
 
+// ── Next-article warm cache ───────────────────────────────────────────
+// Continuous reading (scroll past the end → next article) is only pleasant if
+// the next article is already there. While you read, we quietly fetch the next
+// one's metadata and body so advancing paints instantly instead of flashing a
+// skeleton. Full-text extraction is cached server-side, so doing it now simply
+// moves the work off the moment you're waiting on it.
+type WarmEntry = { meta?: ArticleData; content?: string };
+const warmCache = new Map<string, WarmEntry>();
+const warmInFlight = new Set<string>();
+const WARM_MAX = 5;
+
+function warmArticle(id: string): void {
+  if (warmCache.has(id) || warmInFlight.has(id)) return;
+  warmInFlight.add(id);
+  const entry: WarmEntry = {};
+  void Promise.allSettled([
+    fetch(`/api/articles/${id}`, { cache: "no-store" })
+      .then((r) => (r.ok ? (r.json() as Promise<ArticleData>) : null))
+      .then((d) => {
+        if (d) entry.meta = d;
+      }),
+    fetch(`/api/articles/${id}/full-text`, { method: "POST" })
+      .then(async (r) => ({ ok: r.ok, data: await r.json().catch(() => ({})) }))
+      .then(({ ok, data }) => {
+        if (ok && typeof data.content === "string") entry.content = data.content;
+      }),
+  ]).then(() => {
+    warmInFlight.delete(id);
+    // Only cache a usable result; a failed warm should fall through to the
+    // normal load (with its error handling) rather than cache a dud.
+    if (!entry.meta) return;
+    warmCache.set(id, entry);
+    while (warmCache.size > WARM_MAX) {
+      const oldest = warmCache.keys().next().value;
+      if (oldest === undefined) break;
+      warmCache.delete(oldest);
+    }
+  });
+}
+
 export function ArticleReader({
   selectedId,
   orderedIds,
+  titleById = {},
   onSelect,
   listCollapsed = false,
   onToggleList,
 }: {
   selectedId: string | null;
   orderedIds: string[];
+  /** Titles for the ids in `orderedIds`, so the end-of-article footer can name
+   *  what's coming next. Partial — falls back to a generic label. */
+  titleById?: Record<string, string>;
   onSelect: (id: string | null) => void;
   /** Whether the article list (third bar) is collapsed. */
   listCollapsed?: boolean;
@@ -93,6 +137,8 @@ export function ArticleReader({
   const [ttsState, setTtsState] = useState<"idle" | "speaking" | "paused">("idle");
   const [ttsSupported, setTtsSupported] = useState(false);
   const [progress, setProgress] = useState(0);
+  // Mobile immersive reading: hides the reader toolbar while scrolling forward.
+  const [chromeHidden, setChromeHidden] = useState(false);
   const [takeaways, setTakeaways] = useState<{ tldr: string; keyPoints: string[] } | null>(null);
   const [takeawaysLoading, setTakeawaysLoading] = useState(false);
   const [takeawaysSecs, setTakeawaysSecs] = useState<number | null>(null);
@@ -170,18 +216,24 @@ export function ArticleReader({
     if (!vp) return;
 
     // Restore saved position once per article, after content has laid out.
+    // The viewport is reused across articles, so an article with no saved
+    // progress must be explicitly sent back to the top — otherwise paging to
+    // the next article drops you into the middle of it at the old offset.
     if (content && restoredFor.current !== selectedId) {
       restoredFor.current = selectedId;
+      let target = 0;
       try {
         const saved = parseFloat(localStorage.getItem(`article.progress.${selectedId}`) ?? "0");
         const max = vp.scrollHeight - vp.clientHeight;
-        if (saved > 0.02 && saved < 0.99 && max > 0) vp.scrollTop = saved * max;
+        if (saved > 0.02 && saved < 0.99 && max > 0) target = saved * max;
       } catch {
         // ignore
       }
+      vp.scrollTop = target;
     }
 
     let raf = 0;
+    let lastTop = vp.scrollTop;
     const onScroll = () => {
       if (raf) return;
       raf = requestAnimationFrame(() => {
@@ -189,6 +241,15 @@ export function ArticleReader({
         const max = vp.scrollHeight - vp.clientHeight;
         const p = max > 0 ? Math.min(1, Math.max(0, vp.scrollTop / max)) : 0;
         setProgress(p);
+        // Immersive reading (mobile): the toolbar retreats while you read
+        // forward and comes back the moment you scroll up or return to the
+        // top. Between the app's top bar, this toolbar and the tab bar, a
+        // phone spends a fifth of its screen on chrome mid-article.
+        const top = vp.scrollTop;
+        if (top < 40) setChromeHidden(false);
+        else if (top > lastTop + 6) setChromeHidden(true);
+        else if (top < lastTop - 6) setChromeHidden(false);
+        lastTop = top;
         try {
           localStorage.setItem(`article.progress.${selectedId}`, String(p));
         } catch {
@@ -214,6 +275,127 @@ export function ArticleReader({
 
   const goToArticle = useCallback((id: string | null) => onSelect(id), [onSelect]);
   const close = useCallback(() => goToArticle(null), [goToArticle]);
+
+  // ── Continuous reading ──────────────────────────────────────────────
+  // Reaching the end of an article and continuing to scroll opens the next
+  // one, so a reading session never breaks stride to go back to the list.
+  // It takes a deliberate extra pull past the bottom (not merely arriving
+  // there), so stopping to read the last paragraph never skips you onward.
+  const PULL_TO_ADVANCE = 160;
+  const [pullProgress, setPullProgress] = useState(0);
+  const nextIdRef = useRef<string | null>(null);
+  nextIdRef.current = nextId;
+  const prevIdRef = useRef<string | null>(null);
+  prevIdRef.current = prevId;
+  const advancingRef = useRef(false);
+
+  useEffect(() => {
+    advancingRef.current = false;
+    setPullProgress(0);
+    setChromeHidden(false); // a new article always starts with its toolbar shown
+  }, [selectedId]);
+
+  // Warm the next article once this one has settled. Delayed so paging quickly
+  // with j/j/j doesn't fire off an extraction for every article skimmed past —
+  // we only prefetch what you look likely to actually reach.
+  useEffect(() => {
+    if (!nextId || loadingContent) return;
+    const t = setTimeout(() => warmArticle(nextId), 1200);
+    return () => clearTimeout(t);
+  }, [nextId, loadingContent]);
+
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!root) return;
+    const vp = root.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]");
+    if (!vp) return;
+
+    let pull = 0;
+    let lastTouchY: number | null = null;
+    let decay: ReturnType<typeof setTimeout> | null = null;
+    const atBottom = () => vp.scrollHeight - vp.clientHeight - vp.scrollTop <= 2;
+    const reset = () => {
+      pull = 0;
+      lastTouchY = null;
+      setPullProgress(0);
+    };
+
+    const addPull = (dy: number) => {
+      if (dy <= 0 || advancingRef.current || !nextIdRef.current || !atBottom()) return;
+      pull += dy;
+      setPullProgress(Math.min(1, pull / PULL_TO_ADVANCE));
+      // Let the intent lapse if they stop — a pull only counts while continuous.
+      if (decay) clearTimeout(decay);
+      decay = setTimeout(reset, 700);
+      if (pull >= PULL_TO_ADVANCE) {
+        const id = nextIdRef.current;
+        advancingRef.current = true;
+        reset();
+        if (id) goToArticle(id);
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => addPull(e.deltaY);
+    const onTouchStart = (e: TouchEvent) => {
+      lastTouchY = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY;
+      if (y == null || lastTouchY == null) return;
+      addPull(lastTouchY - y); // finger travelling up = scrolling further down
+      lastTouchY = y;
+    };
+
+    vp.addEventListener("wheel", onWheel, { passive: true });
+    vp.addEventListener("touchstart", onTouchStart, { passive: true });
+    vp.addEventListener("touchmove", onTouchMove, { passive: true });
+    vp.addEventListener("touchend", reset, { passive: true });
+    vp.addEventListener("touchcancel", reset, { passive: true });
+    return () => {
+      vp.removeEventListener("wheel", onWheel);
+      vp.removeEventListener("touchstart", onTouchStart);
+      vp.removeEventListener("touchmove", onTouchMove);
+      vp.removeEventListener("touchend", reset);
+      vp.removeEventListener("touchcancel", reset);
+      if (decay) clearTimeout(decay);
+    };
+  }, [goToArticle]);
+
+  // Swipe left/right to page between articles. The reader's prev/next buttons
+  // are desktop-only, so on a phone this was the missing way back to the
+  // previous article. Thresholds match the article list's swipe actions: a
+  // decisively horizontal drag, so it never steals a scroll or a text
+  // selection.
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!root) return;
+    const vp = root.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]");
+    if (!vp) return;
+
+    let start: { x: number; y: number } | null = null;
+    const onStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      start = t ? { x: t.clientX, y: t.clientY } : null;
+    };
+    const onEnd = (e: TouchEvent) => {
+      const s = start;
+      start = null;
+      const t = e.changedTouches[0];
+      if (!s || !t) return;
+      const dx = t.clientX - s.x;
+      const dy = t.clientY - s.y;
+      if (Math.abs(dx) < 70 || Math.abs(dx) <= Math.abs(dy)) return;
+      const id = dx < 0 ? nextIdRef.current : prevIdRef.current;
+      if (id) goToArticle(id);
+    };
+
+    vp.addEventListener("touchstart", onStart, { passive: true });
+    vp.addEventListener("touchend", onEnd, { passive: true });
+    return () => {
+      vp.removeEventListener("touchstart", onStart);
+      vp.removeEventListener("touchend", onEnd);
+    };
+  }, [goToArticle]);
 
   function toggleStar() {
     if (!article) return;
@@ -343,6 +525,40 @@ export function ArticleReader({
     }
 
     let aborted = false;
+
+    // Already warmed while reading the previous article — paint immediately and
+    // skip both round-trips. This is what makes scroll-to-next feel continuous.
+    const warm = warmCache.get(selectedId);
+    if (warm?.meta) {
+      warmCache.delete(selectedId);
+      setArticle(warm.meta);
+      setLoadingMeta(false);
+      const body = warm.content ?? warm.meta.fullText;
+      if (body) {
+        setContent(body);
+        setLoadingContent(false);
+        return;
+      }
+      // Meta was warm but the body wasn't — fall through to fetch just the body.
+      setLoadingContent(true);
+      fetch(`/api/articles/${selectedId}/full-text`, { method: "POST" })
+        .then(async (res) => ({ ok: res.ok, data: await res.json().catch(() => ({})) }))
+        .then(({ ok, data }) => {
+          if (aborted) return;
+          if (!ok) setExtractError(typeof data.error === "string" ? data.error : "Failed to load");
+          else if (typeof data.content === "string") setContent(data.content);
+          setLoadingContent(false);
+        })
+        .catch((err) => {
+          if (aborted) return;
+          setExtractError(err.message ?? "Failed to load");
+          setLoadingContent(false);
+        });
+      return () => {
+        aborted = true;
+      };
+    }
+
     setLoadingMeta(true);
     setLoadingContent(true);
 
@@ -430,7 +646,16 @@ export function ArticleReader({
 
   return (
     <section className="flex min-w-0 flex-1 flex-col overflow-hidden motion-safe:animate-page-in" data-reader-theme={prefs.theme}>
-      <div className="flex items-center gap-1 border-b border-border px-2 py-2">
+      {/* Collapses (mobile only) while reading forward — see setChromeHidden.
+          max-h caps well above the row's natural ~52px so it never clips. */}
+      <div
+        className={cn(
+          "flex items-center gap-1 overflow-hidden border-b border-border px-2 transition-all duration-200 motion-reduce:transition-none",
+          chromeHidden
+            ? "max-lg:max-h-0 max-lg:border-b-0 max-lg:py-0 max-lg:opacity-0 max-h-20 py-2 lg:opacity-100"
+            : "max-h-20 py-2 opacity-100",
+        )}
+      >
         {/* Mobile-only back: returns to the article list (list is hidden on
             mobile while reading; side-by-side on md+ so no button needed). */}
         <Button size="sm" variant="ghost" onClick={close} className="lg:hidden -ml-1 gap-1 px-2">
@@ -714,6 +939,15 @@ export function ArticleReader({
                 )
               ) : null}
               {article && !loadingContent && <RelatedPanel articleId={article.id} />}
+              {article && !loadingContent && (
+                <NextUpFooter
+                  nextId={nextId}
+                  nextTitle={nextId ? titleById[nextId] : undefined}
+                  pullProgress={pullProgress}
+                  onNext={() => nextId && goToArticle(nextId)}
+                  onBackToList={close}
+                />
+              )}
             </>
           )}
         </article>
@@ -728,5 +962,59 @@ export function ArticleReader({
         />
       )}
     </section>
+  );
+}
+
+/**
+ * End-of-article rail: names what's next and fills a progress bar as the reader
+ * keeps scrolling past the bottom, so the auto-advance is visible and
+ * predictable rather than a surprise jump. Also works as a plain button for
+ * anyone who'd rather tap than scroll.
+ */
+function NextUpFooter({
+  nextId,
+  nextTitle,
+  pullProgress,
+  onNext,
+  onBackToList,
+}: {
+  nextId: string | null;
+  nextTitle?: string;
+  pullProgress: number;
+  onNext: () => void;
+  onBackToList: () => void;
+}) {
+  if (!nextId) {
+    return (
+      <div className="not-prose mt-10 border-t border-border pt-5 text-center">
+        <p className="text-sm italic text-muted-foreground">That&apos;s the last article here.</p>
+        <Button size="sm" variant="outline" className="mt-3" onClick={onBackToList}>
+          Back to the list
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="not-prose mt-10 border-t border-border pt-5">
+      <div className="editorial-eyebrow-brand mb-2">§ Next up</div>
+      <button onClick={onNext} className="group/next block w-full text-left">
+        <div
+          className="font-medium leading-snug transition-colors group-hover/next:text-brand"
+          style={{ fontFamily: "var(--app-font-display)" }}
+        >
+          {nextTitle ?? "The next article"}
+        </div>
+        <div className="mt-1 text-xs text-muted-foreground">
+          Keep scrolling to open it — or tap here.
+        </div>
+      </button>
+      {/* Fills as the reader pulls past the bottom; at 100% the next article opens. */}
+      <div className="mt-3 h-0.5 w-full overflow-hidden rounded-full bg-border/60" aria-hidden>
+        <div
+          className="h-full rounded-full transition-[width] duration-75 ease-out"
+          style={{ width: `${Math.round(pullProgress * 100)}%`, background: "hsl(var(--brand))" }}
+        />
+      </div>
+    </div>
   );
 }

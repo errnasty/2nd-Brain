@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { ArticleList, type ArticleListItem } from "./article-list";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
 import { lastLocation } from "@/lib/last-location";
+import { replaceUrl } from "@/lib/ui/replace-url";
 
 // The reader (712 lines: panels, TTS, takeaways, next/image…) loads only once
 // an article is actually opened — it's the bulk of /feeds' initial JS. Its
@@ -73,7 +74,7 @@ export function FeedsShell({
       setSelectedId(null);
       const url = new URL(window.location.href);
       url.searchParams.delete("article");
-      window.history.replaceState(null, "", url.toString());
+      replaceUrl(url.toString());
     }
   }, [scopeKey, orderedIds, selectedId]);
 
@@ -83,7 +84,7 @@ export function FeedsShell({
     const url = new URL(window.location.href);
     if (id) url.searchParams.set("article", id);
     else url.searchParams.delete("article");
-    window.history.replaceState(null, "", url.toString());
+    replaceUrl(url.toString());
   }, []);
 
   // Resume: on a bare visit (no ?article), reopen the last article read. The
@@ -95,12 +96,27 @@ export function FeedsShell({
       setSelectedId(saved);
       const url = new URL(window.location.href);
       url.searchParams.set("article", saved);
-      window.history.replaceState(null, "", url.toString());
+      replaceUrl(url.toString());
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const [listCollapsed, toggleListCollapsed] = useListCollapse("feeds.listCollapsed.v1");
+
+  // The list publishes what's actually on screen — which grows as infinite
+  // scroll appends pages. Reading through with j/k or scroll-to-next follows
+  // that, so a session no longer dead-ends at the first server page's last
+  // article; `orderedIds` is just the seed for the first paint.
+  const [liveRows, setLiveRows] = useState<{ id: string; title: string }[] | null>(null);
+  const readingOrder = liveRows && liveRows.length > 0 ? liveRows.map((r) => r.id) : orderedIds;
+
+  // Titles for the reader's "Next up" footer.
+  const titleById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const it of items) m[it.id] = it.title;
+    for (const r of liveRows ?? []) m[r.id] = r.title;
+    return m;
+  }, [items, liveRows]);
 
   return (
     <>
@@ -112,12 +128,14 @@ export function FeedsShell({
         feedId={feedId}
         folderId={folderId}
         onSelect={onSelect}
+        onOrderChange={setLiveRows}
         collapsed={listCollapsed}
       />
       {selectedId ? (
         <ArticleReader
           selectedId={selectedId}
-          orderedIds={orderedIds}
+          orderedIds={readingOrder}
+          titleById={titleById}
           onSelect={onSelect}
           listCollapsed={listCollapsed}
           onToggleList={toggleListCollapsed}

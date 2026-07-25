@@ -41,6 +41,7 @@ import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
 import { toast } from "sonner";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { pushRecent } from "@/lib/directory/recently-viewed";
+import { replaceUrl } from "@/lib/ui/replace-url";
 import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
 import { FolderBulkActionBar } from "./folder-bulk-action-bar";
@@ -269,7 +270,7 @@ export function DirectoryShell({
           setSelectedId(null);
           const url = new URL(window.location.href);
           url.searchParams.delete("item");
-          window.history.replaceState(null, "", url.toString());
+          replaceUrl(url.toString());
         }
       })
       .catch(() => {});
@@ -292,7 +293,7 @@ export function DirectoryShell({
       } else {
         url.searchParams.delete("item");
       }
-      window.history.replaceState(null, "", url.toString());
+      replaceUrl(url.toString());
     },
     [allItems, hydratedItem],
   );
