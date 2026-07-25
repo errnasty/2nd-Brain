@@ -18,12 +18,18 @@ export type XpSource =
   | "deck_finished";
 
 /** Base XP per source. card_graded is computed separately (scales with grade);
- *  quiz_completed's caller passes an explicit `amount` scaled by score. */
+ *  quiz_completed's caller passes an explicit `amount` scaled by score.
+ *
+ *  Weighted towards recall, not consumption. Reading is the input; remembering
+ *  is the outcome. Paying well for article_read rewards volume, which rewards
+ *  skimming — you can farm it without learning anything. So reading earns a
+ *  token amount and the sources that require actually retrieving something
+ *  (grading, making cards, quizzes, finishing a deck) carry the weight. */
 export const XP_RULES: Record<XpSource, number> = {
   task_done: 15,
   card_graded: 6, // base; see cardGradeXp
-  cards_made: 10,
-  article_read: 5,
+  cards_made: 15,
+  article_read: 2,
   article_saved: 10,
   note_created: 10,
   doc_uploaded: 20,
@@ -31,8 +37,8 @@ export const XP_RULES: Record<XpSource, number> = {
   research: 25,
   curriculum: 25,
   quiz_made: 15,
-  quiz_completed: 10, // fallback only — callers pass a score-scaled `amount`
-  deck_finished: 20,
+  quiz_completed: 15, // fallback only — callers pass a score-scaled `amount`
+  deck_finished: 30,
 };
 
 /** Human label for the activity feed. */

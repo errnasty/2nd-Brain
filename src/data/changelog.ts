@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25-b",
+    date: "July 25, 2026",
+    title: "Points now reward remembering, not just reading",
+    tag: "improvement",
+    summary:
+      "Reading an article earns a token amount, while reviewing cards, making cards, quizzes and finishing decks are worth considerably more. Getting through 30 articles isn't the same as learning from them.",
+  },
+  {
     id: "2026-07-25-a",
     date: "July 25, 2026",
     title: "A quick recall check in your daily brief",
