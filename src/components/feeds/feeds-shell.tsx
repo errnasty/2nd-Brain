@@ -103,13 +103,20 @@ export function FeedsShell({
 
   const [listCollapsed, toggleListCollapsed] = useListCollapse("feeds.listCollapsed.v1");
 
-  // Titles for the reader's "Next up" footer. Covers the server-rendered page;
-  // ids paged in later fall back to a generic label rather than blocking.
+  // The list publishes what's actually on screen — which grows as infinite
+  // scroll appends pages. Reading through with j/k or scroll-to-next follows
+  // that, so a session no longer dead-ends at the first server page's last
+  // article; `orderedIds` is just the seed for the first paint.
+  const [liveRows, setLiveRows] = useState<{ id: string; title: string }[] | null>(null);
+  const readingOrder = liveRows && liveRows.length > 0 ? liveRows.map((r) => r.id) : orderedIds;
+
+  // Titles for the reader's "Next up" footer.
   const titleById = useMemo(() => {
     const m: Record<string, string> = {};
     for (const it of items) m[it.id] = it.title;
+    for (const r of liveRows ?? []) m[r.id] = r.title;
     return m;
-  }, [items]);
+  }, [items, liveRows]);
 
   return (
     <>
@@ -121,12 +128,13 @@ export function FeedsShell({
         feedId={feedId}
         folderId={folderId}
         onSelect={onSelect}
+        onOrderChange={setLiveRows}
         collapsed={listCollapsed}
       />
       {selectedId ? (
         <ArticleReader
           selectedId={selectedId}
-          orderedIds={orderedIds}
+          orderedIds={readingOrder}
           titleById={titleById}
           onSelect={onSelect}
           listCollapsed={listCollapsed}

@@ -86,6 +86,7 @@ export function ArticleList({
   feedId,
   folderId,
   onSelect,
+  onOrderChange,
   collapsed = false,
 }: {
   items: ArticleListItem[];
@@ -95,6 +96,11 @@ export function ArticleList({
   feedId: string | null;
   folderId: string | null;
   onSelect: (id: string | null) => void;
+  /** Reports the order actually on screen (including pages appended by
+   *  infinite scroll and active search results) so the reader's next/prev and
+   *  continuous reading follow the real list rather than the first server
+   *  page. */
+  onOrderChange?: (rows: { id: string; title: string }[]) => void;
   /** Hide the list on desktop (an article is open and the reader is widened). */
   collapsed?: boolean;
 }) {
@@ -392,6 +398,26 @@ export function ArticleList({
     }
     return optimistic;
   }, [results, optimistic]);
+
+  // Publish the on-screen order upward. Keyed on the id sequence so appending
+  // a page (or running a search) republishes, while read/star toggles — which
+  // don't reorder anything — don't churn the reader.
+  const orderKey = displayed.map((i) => i.id).join(",");
+  useEffect(() => {
+    onOrderChange?.(displayed.map((i) => ({ id: i.id, title: i.title })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the id sequence; `displayed` is a fresh array each render
+  }, [orderKey]);
+
+  // Reading near the end of the loaded set pulls in the next page. The list's
+  // own infinite-scroll sentinel only fires when the list is on screen, which
+  // it isn't while you're reading on a phone — without this, reading straight
+  // through would stop dead at the last loaded article even though more exist.
+  const selectedIdx = selectedId ? displayed.findIndex((i) => i.id === selectedId) : -1;
+  useEffect(() => {
+    if (selectedIdx < 0 || results !== null) return;
+    if (selectedIdx >= displayed.length - 3) void loadMore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- loadMore self-guards on loadingMore/hasMore
+  }, [selectedIdx, displayed.length, results]);
 
   function openArticle(id: string) {
     onSelect(id);

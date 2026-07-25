@@ -29,10 +29,10 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     id: "2026-07-23-t",
     date: "July 23, 2026",
-    title: "Articles open instantly, and you can swipe between them",
+    title: "Read straight through, instantly, without leaving the article",
     tag: "improvement",
     summary:
-      "While you're reading, the next article is quietly loaded in the background — so scrolling into it is instant instead of showing a loading placeholder. On a phone you can now swipe left or right to move between articles.",
+      "While you're reading, the next article is quietly loaded in the background — so scrolling into it is instant instead of showing a loading placeholder. Reading now also keeps pulling in more articles as you go, instead of stopping at the end of the first batch. And on a phone you can swipe left or right to move between articles.",
   },
   {
     id: "2026-07-23-s",
