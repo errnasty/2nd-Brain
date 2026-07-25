@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import {
@@ -47,9 +48,19 @@ import {
 import type { DirectoryFolder } from "@/lib/db/schema";
 import type { FolderTreeItem } from "@/lib/directory/query";
 import { usePromptText } from "@/components/ui/app-dialogs";
-import { DeleteFolderDialog } from "./delete-folder-dialog";
-import { ExportDialog } from "./export-dialog";
-import { AutoOrganizeDialog } from "./auto-organize-dialog";
+// Dialogs are rare, one-off actions — deferred so the folder tree isn't paying
+// for them on every Directory visit. Each mounts on first open.
+const DeleteFolderDialog = dynamic(
+  () => import("./delete-folder-dialog").then((m) => m.DeleteFolderDialog),
+  { ssr: false },
+);
+const ExportDialog = dynamic(() => import("./export-dialog").then((m) => m.ExportDialog), {
+  ssr: false,
+});
+const AutoOrganizeDialog = dynamic(
+  () => import("./auto-organize-dialog").then((m) => m.AutoOrganizeDialog),
+  { ssr: false },
+);
 import { getRecent, pushRecent, type RecentEntry } from "@/lib/directory/recently-viewed";
 import { getSmartViews, saveSmartView, deleteSmartView, type SmartView } from "@/lib/directory/smart-views";
 
@@ -320,8 +331,8 @@ export function DirectoryNav({
           </Button>
         </div>
       </div>
-      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
-      <AutoOrganizeDialog open={organizeOpen} onOpenChange={setOrganizeOpen} />
+      {exportOpen && <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />}
+      {organizeOpen && <AutoOrganizeDialog open={organizeOpen} onOpenChange={setOrganizeOpen} />}
       <Separator />
 
       <div className="px-3 pt-2">

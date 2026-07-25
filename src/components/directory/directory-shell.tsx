@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
@@ -42,13 +43,31 @@ import { toast } from "sonner";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { pushRecent } from "@/lib/directory/recently-viewed";
 import { replaceUrl } from "@/lib/ui/replace-url";
-import { ItemViewer } from "./item-viewer";
 import { BulkActionBar } from "./bulk-action-bar";
 import { FolderBulkActionBar } from "./folder-bulk-action-bar";
-import { DirectoryBoard } from "./directory-board";
-import { GapsDialog } from "./gaps-dialog";
-import { CurriculumDialog } from "./curriculum-dialog";
-import { SaveUrlDialog } from "./save-url-dialog";
+
+// Everything below only appears once the user opens something — an item, the
+// board view, or a dialog. Statically imported they rode along in /directory's
+// first load for every visit, and the viewer is the heavy one: markdown
+// rendering, the rabbithole, doc-query and connections panels. Deferred, the
+// list paints on a much smaller bundle; the chunk arrives on first use. Same
+// treatment /feeds already gives its article reader.
+const ItemViewer = dynamic(() => import("./item-viewer").then((m) => m.ItemViewer), {
+  ssr: false,
+  loading: () => <section className="hidden flex-1 lg:flex" aria-busy="true" />,
+});
+const DirectoryBoard = dynamic(() => import("./directory-board").then((m) => m.DirectoryBoard), {
+  ssr: false,
+  loading: () => <div className="flex-1" aria-busy="true" />,
+});
+const GapsDialog = dynamic(() => import("./gaps-dialog").then((m) => m.GapsDialog), { ssr: false });
+const CurriculumDialog = dynamic(
+  () => import("./curriculum-dialog").then((m) => m.CurriculumDialog),
+  { ssr: false },
+);
+const SaveUrlDialog = dynamic(() => import("./save-url-dialog").then((m) => m.SaveUrlDialog), {
+  ssr: false,
+});
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
 import { lastLocation } from "@/lib/last-location";
@@ -792,15 +811,23 @@ export function DirectoryShell({
         )}
       </section>
 
-      <ItemViewer
-        item={selectedItem}
-        onClose={() => selectItem(null)}
-        onRequestDelete={(id) => deleteItemsWithUndo([id])}
-        startInEdit={!!selectedItem && selectedItem.id === freshItemId}
-        onStartInEditConsumed={() => setFreshItemId(null)}
-        listCollapsed={listCollapsed}
-        onToggleList={toggleListCollapsed}
-      />
+      {/* The viewer's own "nothing selected" placeholder is inlined here so the
+          chunk is only fetched once something is actually open. */}
+      {selectedItem ? (
+        <ItemViewer
+          item={selectedItem}
+          onClose={() => selectItem(null)}
+          onRequestDelete={(id) => deleteItemsWithUndo([id])}
+          startInEdit={selectedItem.id === freshItemId}
+          onStartInEditConsumed={() => setFreshItemId(null)}
+          listCollapsed={listCollapsed}
+          onToggleList={toggleListCollapsed}
+        />
+      ) : (
+        <section className="hidden flex-1 items-center justify-center text-sm text-muted-foreground lg:flex">
+          Select an item to read or edit
+        </section>
+      )}
 
       <BulkActionBar
         selectedIds={Array.from(checkedIds)}
@@ -819,24 +846,29 @@ export function DirectoryShell({
         onChanged={() => router.refresh()}
       />
 
-      <GapsDialog
-        open={gapsOpen}
-        onOpenChange={setGapsOpen}
-        folder={activeFolder}
-        tagIds={activeTagIds}
-      />
+      {/* Mounted on first open only — each dialog already does its own work in
+          an `open` effect, so mounting at open time changes nothing but when
+          the code is downloaded. */}
+      {gapsOpen && (
+        <GapsDialog
+          open={gapsOpen}
+          onOpenChange={setGapsOpen}
+          folder={activeFolder}
+          tagIds={activeTagIds}
+        />
+      )}
 
-      <CurriculumDialog
-        open={curriculumOpen}
-        onOpenChange={setCurriculumOpen}
-        folder={activeFolder}
-      />
+      {curriculumOpen && (
+        <CurriculumDialog
+          open={curriculumOpen}
+          onOpenChange={setCurriculumOpen}
+          folder={activeFolder}
+        />
+      )}
 
-      <SaveUrlDialog
-        open={saveUrlOpen}
-        onOpenChange={setSaveUrlOpen}
-        folder={activeFolder}
-      />
+      {saveUrlOpen && (
+        <SaveUrlDialog open={saveUrlOpen} onOpenChange={setSaveUrlOpen} folder={activeFolder} />
+      )}
     </>
   );
 }

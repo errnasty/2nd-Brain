@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-25",
+    date: "July 25, 2026",
+    title: "The Directory opens faster",
+    tag: "improvement",
+    summary:
+      "The Directory now downloads noticeably less before it can show your library. The item reader, the board view and the dialogs are fetched the moment you actually open one, instead of on every visit.",
+  },
+  {
     id: "2026-07-23-v",
     date: "July 23, 2026",
     title: "Read news in any language",
