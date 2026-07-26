@@ -145,3 +145,67 @@ describe("leech threshold", () => {
     expect(Number.isInteger(LEECH_LAPSES)).toBe(true);
   });
 });
+
+describe("a reviewed card always moves forward", () => {
+  // The reported symptom: "cards should disappear after reviewing, I keep
+  // getting the same cards every day". Raw FSRS schedules a first Hard at one
+  // day and the Hard penalty keeps stability nearly flat on repeats, so an
+  // honestly-graded card could stay on a one-day cadence indefinitely.
+
+  it("a first Hard buys more than a single day", () => {
+    expect(scheduleFsrs(null, 2, 0, NOW).intervalDays).toBeGreaterThan(1);
+  });
+
+  it("every successful rating on a fresh card clears the one-day floor", () => {
+    for (const rating of [2, 3, 4] as FsrsRating[]) {
+      expect(scheduleFsrs(null, rating, 0, NOW).intervalDays).toBeGreaterThan(1);
+    }
+  });
+
+  it("Easy still buys much longer than Hard on a fresh card", () => {
+    expect(scheduleFsrs(null, 4, 0, NOW).intervalDays).toBeGreaterThan(
+      scheduleFsrs(null, 2, 0, NOW).intervalDays,
+    );
+  });
+
+  it("a success never reschedules sooner than the interval it replaces", () => {
+    const state = { stability: 1, difficulty: 9 }; // a hard, low-stability card
+    for (const rating of [2, 3, 4] as FsrsRating[]) {
+      const r = scheduleFsrs(state, rating, 1, NOW, 6);
+      expect(r.intervalDays).toBeGreaterThan(6);
+    }
+  });
+
+  it("repeated Hard grades keep stretching instead of sticking at one day", () => {
+    // Grade the same difficult card Hard ten times running; the gap must grow.
+    let state = { stability: 1, difficulty: 9 };
+    let interval = 0;
+    const seen: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      const r = scheduleFsrs(state, 2, interval, NOW, interval);
+      expect(r.intervalDays).toBeGreaterThan(interval);
+      interval = r.intervalDays;
+      state = { stability: r.stability, difficulty: r.difficulty };
+      seen.push(interval);
+    }
+    expect(seen[seen.length - 1]).toBeGreaterThan(seen[0]);
+    expect(new Set(seen).size).toBe(seen.length); // never repeats a gap
+  });
+
+  it("a lapse still comes back tomorrow, however long the old interval was", () => {
+    const r = scheduleFsrs({ stability: 50, difficulty: 5 }, 1, 50, NOW, 90);
+    expect(r.lapsed).toBe(true);
+    expect(r.intervalDays).toBe(1);
+  });
+
+  it("still respects the maximum interval ceiling", () => {
+    const r = scheduleFsrs({ stability: 5000, difficulty: 1 }, 4, 10, NOW, 400);
+    expect(r.intervalDays).toBeLessThanOrEqual(MAX_INTERVAL_DAYS);
+  });
+
+  it("treats a missing previous interval as no constraint", () => {
+    const withZero = scheduleFsrs({ stability: 10, difficulty: 5 }, 3, 10, NOW, 0);
+    const withNone = scheduleFsrs({ stability: 10, difficulty: 5 }, 3, 10, NOW);
+    expect(withZero.intervalDays).toBe(withNone.intervalDays);
+  });
+});

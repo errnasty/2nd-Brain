@@ -188,6 +188,21 @@ export async function toggleStarredAction(articleId: string, starred: boolean) {
     .update(articles)
     .set({ starred })
     .where(and(eq(articles.id, articleId), eq(articles.userId, user.id)));
+  // Starring is a deliberate judgement about one article, so it earns a little.
+  // Keyed on the article, so it pays once ever — un-starring and re-starring
+  // the same piece can't farm it. Fail-soft: XP must never break the toggle.
+  if (starred) {
+    try {
+      await awardXp(user.id, {
+        source: "article_starred",
+        articleId,
+        refKind: "article_starred",
+        refId: articleId,
+      });
+    } catch (err) {
+      console.warn("star XP failed:", err instanceof Error ? err.message : err);
+    }
+  }
   // Same as above — UI is already optimistic.
 }
 
@@ -204,6 +219,23 @@ export async function setReadLaterAction(input: { articleIds: string[]; readLate
     .update(articles)
     .set({ readLater: input.readLater })
     .where(and(eq(articles.userId, user.id), inArray(articles.id, input.articleIds)));
+  // Triaging something into the read-later queue earns a little, once per
+  // article ever. Sequential rather than parallel: a bulk save of fifty
+  // articles shouldn't open fifty concurrent XP transactions.
+  if (input.readLater) {
+    for (const articleId of input.articleIds) {
+      try {
+        await awardXp(user.id, {
+          source: "article_read_later",
+          articleId,
+          refKind: "article_read_later",
+          refId: articleId,
+        });
+      } catch (err) {
+        console.warn("read-later XP failed:", err instanceof Error ? err.message : err);
+      }
+    }
+  }
   return { ok: true as const };
 }
 

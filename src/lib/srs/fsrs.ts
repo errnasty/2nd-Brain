@@ -22,6 +22,18 @@ export const REQUEST_RETENTION = 0.9;
 /** Ceiling so a long-lived card can never disappear for years. */
 export const MAX_INTERVAL_DAYS = 365;
 
+/**
+ * Floor, in days, for a successful review — indexed by rating (2=Hard, 3=Good,
+ * 4=Easy).
+ *
+ * Raw FSRS puts a first "Hard" at one day, and the Hard penalty (w15) means
+ * stability barely grows on repeats, so a card answered honestly-but-not-easily
+ * can sit at a one-day interval indefinitely. The scheduler is behaving as
+ * designed; the reader just sees the same cards every morning forever. Getting
+ * a card right has to buy time.
+ */
+const MIN_SUCCESS_INTERVAL: Record<2 | 3 | 4, number> = { 2: 2, 3: 3, 4: 7 };
+
 /** 1=Again (lapse) · 2=Hard · 3=Good · 4=Easy */
 export type FsrsRating = 1 | 2 | 3 | 4;
 
@@ -99,12 +111,15 @@ function forgetStability(s: number, d: number, r: number): number {
 /**
  * Apply one FSRS review. `state` is null for a card's first-ever review.
  * `elapsedDays` is time since the previous review (0 for first review).
+ * `previousIntervalDays` is the interval this review is replacing (0 if none) —
+ * a correct answer never schedules the card sooner than that.
  */
 export function scheduleFsrs(
   state: FsrsState | null,
   rating: FsrsRating,
   elapsedDays: number,
   now: Date = new Date(),
+  previousIntervalDays = 0,
 ): FsrsResult {
   let stability: number;
   let difficulty: number;
@@ -123,7 +138,22 @@ export function scheduleFsrs(
 
   // A lapse comes back tomorrow regardless of its (reduced) stability — the
   // session UI additionally re-queues it for an immediate same-day retry.
-  const intervalDays = rating === 1 ? 1 : nextIntervalDays(stability);
+  //
+  // Anything else must move forward: at least the rating's floor, and strictly
+  // longer than the interval it is replacing. Without the second rule a card
+  // graded Hard every time keeps its one-day interval for ever, which reads as
+  // "reviewing does nothing".
+  const intervalDays =
+    rating === 1
+      ? 1
+      : Math.min(
+          MAX_INTERVAL_DAYS,
+          Math.max(
+            nextIntervalDays(stability),
+            MIN_SUCCESS_INTERVAL[rating],
+            Math.floor(Math.max(0, previousIntervalDays)) + 1,
+          ),
+        );
   return {
     stability,
     difficulty,

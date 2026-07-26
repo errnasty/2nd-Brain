@@ -12,6 +12,7 @@ import { aiAvailable } from "@/lib/ai/provider";
 import { DEFAULT_QUIZ_COUNT, DEFAULT_STUDY_DIFFICULTY } from "@/lib/ai/study-options";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { awardXp } from "@/lib/gamify/award";
+import { quizXp } from "@/lib/gamify/rules";
 import { dbErrorMessage } from "@/lib/db/errors";
 import { fetchDirectoryPage } from "@/lib/directory/query";
 import { getUserSettings } from "@/lib/settings/store";
@@ -220,12 +221,12 @@ export async function submitQuizAttemptAction(input: { quizId: string; answers: 
       })
       .returning({ id: quizAttempts.id });
 
-    // XP scales with score% (mirrors card_graded scaling with recall quality):
-    // 10 base + up to 20 more for a perfect score.
-    const pct = total > 0 ? score / total : 0;
+    // Strongly score-scaled: a quiz is marked against the right answer, unlike
+    // a self-reported card grade, so what you actually got right decides most
+    // of the reward. See quizXp.
     const xp = await awardXp(user.id, {
       source: "quiz_completed",
-      amount: 10 + Math.round(pct * 20),
+      amount: quizXp(score, total),
       refKind: "quiz_attempt",
       refId: row.id,
     });

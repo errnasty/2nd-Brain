@@ -8,6 +8,8 @@ export type XpSource =
   | "cards_made"
   | "article_read"
   | "article_saved"
+  | "article_starred"
+  | "article_read_later"
   | "note_created"
   | "doc_uploaded"
   | "distilled"
@@ -20,26 +22,33 @@ export type XpSource =
   | "daily_goal";
 
 /** Base XP per source. card_graded is computed separately (scales with grade);
- *  quiz_completed's caller passes an explicit `amount` scaled by score.
+ *  quiz_completed's caller passes an explicit `amount` from quizXp().
  *
  *  Weighted towards recall, not consumption. Reading is the input; remembering
  *  is the outcome. Paying well for article_read rewards volume, which rewards
  *  skimming — you can farm it without learning anything. So reading earns a
- *  token amount and the sources that require actually retrieving something
- *  (grading, making cards, quizzes, finishing a deck) carry the weight. */
+ *  modest amount and the sources that require actually retrieving something
+ *  (grading, making cards, quizzes, finishing a deck) carry the weight.
+ *
+ *  Engaging with an article — starring it, sending it to read-later — pays a
+ *  little on top, because those are deliberate acts on one specific piece
+ *  rather than scrolling. Each is awarded once per article ever (refKind +
+ *  refId), so toggling a star on and off cannot farm it. */
 export const XP_RULES: Record<XpSource, number> = {
   task_done: 15,
   card_graded: 8, // base; see cardGradeXp
   cards_made: 18,
-  article_read: 2,
+  article_read: 4,
   article_saved: 10,
+  article_starred: 5,
+  article_read_later: 3,
   note_created: 10,
   doc_uploaded: 20,
   distilled: 18,
   research: 25,
   curriculum: 25,
   quiz_made: 15,
-  quiz_completed: 20, // fallback only — callers pass a score-scaled `amount`
+  quiz_completed: 20, // fallback only — callers pass quizXp(score, total)
   deck_finished: 30,
   session_complete: 40, // finishing a composed "Today's session" end to end
   daily_goal: 50, // auto-granted the moment the daily goal is crossed
@@ -52,6 +61,8 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   cards_made: "made flashcards",
   article_read: "read an article",
   article_saved: "saved an article",
+  article_starred: "starred an article",
+  article_read_later: "saved an article for later",
   note_created: "wrote a note",
   doc_uploaded: "uploaded a document",
   distilled: "distilled an item",
@@ -64,10 +75,33 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   daily_goal: "hit the daily goal",
 };
 
-/** A flashcard review scales with recall quality (0–5): 5–20 XP. */
+/**
+ * A flashcard review scales with recall quality (0–5): 5–15 XP.
+ *
+ * Deliberately below a quiz: one card is one retrieval, and a review session is
+ * dozens of them (with the momentum multiplier on top). A quiz is a single
+ * graded run across a whole topic, so it should be worth several cards.
+ */
 export function cardGradeXp(quality: number): number {
   const q = Math.max(0, Math.min(5, Math.round(quality)));
-  return 5 + q * 3;
+  return 5 + q * 2;
+}
+
+/**
+ * A quiz attempt: 12 XP for turning up, up to 50 for a perfect run.
+ *
+ * Much more score-sensitive than a card grade, because a card's grade is
+ * self-reported ("that felt easy") while a quiz score is checked against the
+ * right answer. Getting it wrong should be worth noticeably less than getting
+ * it right, which is only fair when something is actually marking you.
+ */
+export const QUIZ_XP_BASE = 12;
+export const QUIZ_XP_MAX = 50;
+
+export function quizXp(score: number, total: number): number {
+  if (total <= 0) return QUIZ_XP_BASE;
+  const pct = Math.max(0, Math.min(1, score / total));
+  return QUIZ_XP_BASE + Math.round(pct * (QUIZ_XP_MAX - QUIZ_XP_BASE));
 }
 
 /** Which `counters` key a source bumps (for achievements). null = no counter. */
@@ -77,6 +111,8 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   cards_made: null,
   article_read: "articlesRead",
   article_saved: null,
+  article_starred: null,
+  article_read_later: null,
   note_created: "notesCreated",
   doc_uploaded: "docsUploaded",
   distilled: "distills",

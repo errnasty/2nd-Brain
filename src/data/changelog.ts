@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-26-b",
+    date: "July 26, 2026",
+    title: "Cards you get right stop coming back tomorrow",
+    tag: "improvement",
+    summary:
+      "A card graded anything other than “Again” now always waits longer than it did last time, so answering it correctly actually buys you a break instead of seeing the same handful every morning. Points have been rebalanced to match.",
+    items: [
+      "“Hard” no longer means “see you tomorrow” — it now buys at least a couple of days, and the gap keeps stretching every time you get the card right.",
+      "“Again” still brings the card back the next day, and still re-appears later in the same session.",
+      "Quizzes are worth considerably more, and much more of it depends on your score — up to 50 points for a perfect run, since a quiz is actually marked rather than self-rated.",
+      "Individual card reviews are worth slightly less, to balance that out.",
+      "Reading an article pays a bit more, and starring one or sending it to read-later now earns a little too — once per article, so flicking a star on and off doesn't count.",
+    ],
+  },
+  {
     id: "2026-07-26-a",
     date: "July 26, 2026",
     title: "Simplified articles look like articles again",
