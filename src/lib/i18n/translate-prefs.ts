@@ -12,8 +12,12 @@ import { LANGUAGE_NAMES, type LanguageCode } from "./detect-language";
  */
 
 const PREFS_KEY = "reader.translate.v1";
-const CACHE_PREFIX = "reader.translation.";
-const CACHE_INDEX = "reader.translation.index.v1";
+// v2: translations now come from a machine-translation engine rather than a
+// language model. Entries cached under the old prefix are model output and
+// would otherwise be served forever, hiding the change on every article
+// already read. Bumping the prefix retires them.
+const CACHE_PREFIX = "reader.translation.v2.";
+const CACHE_INDEX = "reader.translation.index.v2";
 const CACHE_MAX = 30;
 
 export type TranslatePrefs = {

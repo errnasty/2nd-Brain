@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunkHtml } from "./translate";
+import { chunkHtml } from "./chunk-html";
 
 describe("chunkHtml", () => {
   it("leaves short HTML as a single chunk", () => {

@@ -56,6 +56,7 @@ import {
   type TranslatePrefs,
 } from "@/lib/i18n/translate-prefs";
 import { getCachedSimplified, putCachedSimplified } from "@/lib/reader/simplify-cache";
+import { walkChunks } from "./chunked-rewrite";
 import { getHighlights } from "@/lib/reader/highlights";
 import { useShortcuts } from "@/components/reader/use-shortcuts";
 import { RelatedPanel } from "@/components/reader/related-panel";
@@ -363,29 +364,40 @@ export function ArticleReader({
       }
       setTranslating(true);
       try {
-        const res = await fetch(`/api/articles/${articleId}/translate`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ target }),
-        });
-        const data = await res.json().catch(() => ({}));
+        // Chunk-addressed: the server translates one slice per request, so the
+        // article fills in from the top instead of waiting on one long call
+        // that the host would kill before it finished.
+        const result = await walkChunks(
+          `/api/articles/${articleId}/translate`,
+          { target },
+          {
+            isStale: () => articleId !== latestIdRef.current,
+            onProgress: (partial) => {
+              setTranslation(partial);
+              setShowOriginal(false);
+            },
+          },
+        );
         // Paging away mid-translation: drop the result rather than pasting a
         // different article's text over what's now on screen.
-        if (articleId !== latestIdRef.current) return;
-        if (res.status === 409) {
+        if (result.status === "stale" || articleId !== latestIdRef.current) return;
+        if (result.status === "conflict") {
           setSourceLang(target); // already in the target language — stop offering
+          setTranslation(null);
           return;
         }
-        if (!res.ok || typeof data.content !== "string") {
-          toast.error(typeof data.error === "string" ? data.error : "Couldn't translate this article");
+        if (result.status === "error") {
+          setTranslation(null);
+          toast.error(result.message);
           return;
         }
-        const value = { title: typeof data.title === "string" ? data.title : "", content: data.content };
-        putCachedTranslation(articleId, target, value);
+        const value = { title: result.title, content: result.content };
         setTranslation(value);
         setShowOriginal(false);
-      } catch {
-        if (articleId === latestIdRef.current) toast.error("Couldn't translate this article");
+        // A part-finished translation is still worth reading, but caching it
+        // would silently serve the truncated version forever.
+        if (result.partial) toast.error("Only part of this article could be translated.");
+        else putCachedTranslation(articleId, target, value);
       } finally {
         if (articleId === latestIdRef.current) setTranslating(false);
       }
@@ -415,21 +427,36 @@ export function ArticleReader({
     }
     setSimplifying(true);
     try {
-      const res = await fetch(`/api/articles/${articleId}/simplify`, { method: "POST" });
-      const data = await res.json().catch(() => ({}));
+      // One model call per request, walked from the client — a whole-article
+      // rewrite in a single request cannot finish inside the host's function
+      // timeout, which is why this used to fail on anything long.
+      const result = await walkChunks(
+        `/api/articles/${articleId}/simplify`,
+        {},
+        {
+          isStale: () => articleId !== latestIdRef.current,
+          onProgress: (partial) => {
+            setSimplified(partial);
+            setShowSimplified(true);
+          },
+        },
+      );
       // Paging away mid-rewrite: drop the result rather than pasting a
       // different article's text over what's now on screen.
-      if (articleId !== latestIdRef.current) return;
-      if (!res.ok || typeof data.content !== "string") {
-        toast.error(typeof data.error === "string" ? data.error : "Couldn't simplify this article");
+      if (result.status === "stale" || articleId !== latestIdRef.current) return;
+      if (result.status !== "ok") {
+        setSimplified(null);
+        setShowSimplified(false);
+        toast.error(result.status === "error" ? result.message : "Couldn't simplify this article");
         return;
       }
-      const value = { title: typeof data.title === "string" ? data.title : "", content: data.content };
-      putCachedSimplified(articleId, value);
+      const value = { title: result.title, content: result.content };
       setSimplified(value);
       setShowSimplified(true);
-    } catch {
-      if (articleId === latestIdRef.current) toast.error("Couldn't simplify this article");
+      // Don't cache a truncated rewrite — that would serve the cut-off version
+      // on every later visit with no way to ask for the rest.
+      if (result.partial) toast.error("Only part of this article could be simplified.");
+      else putCachedSimplified(articleId, value);
     } finally {
       if (articleId === latestIdRef.current) setSimplifying(false);
     }
@@ -1016,7 +1043,6 @@ export function ArticleReader({
                 sourceLang={sourceLang}
                 target={tPrefs.target}
                 auto={tPrefs.auto}
-                needsTranslation={needsTranslation}
                 translating={translating}
                 hasTranslation={translation !== null}
                 showingOriginal={showOriginal}
@@ -1260,16 +1286,21 @@ function ReadingLevelBar({
 }
 
 /**
- * Translation strip under the headline. Appears only when the article is in a
- * language other than the one you read in, and once translated offers a
- * one-tap flip back to the original — machine translation is an aid, not a
- * replacement, so the source is always a click away.
+ * Translation strip under the headline.
+ *
+ * Hidden only when the article is confidently already in your reading language.
+ * When detection is unsure it still offers the button rather than disappearing:
+ * silently hiding the control was indistinguishable from the feature being
+ * broken, and the translation engine detects the source language better than a
+ * stopword heuristic can anyway.
+ *
+ * Once translated, the original is always one tap away — machine translation is
+ * an aid, not a replacement.
  */
 function TranslationBar({
   sourceLang,
   target,
   auto,
-  needsTranslation,
   translating,
   hasTranslation,
   showingOriginal,
@@ -1281,7 +1312,6 @@ function TranslationBar({
   sourceLang: LanguageCode | null;
   target: LanguageCode;
   auto: boolean;
-  needsTranslation: boolean;
   translating: boolean;
   hasTranslation: boolean;
   showingOriginal: boolean;
@@ -1290,7 +1320,9 @@ function TranslationBar({
   onSetTarget: (target: LanguageCode) => void;
   onToggleAuto: () => void;
 }) {
-  if (!needsTranslation && !hasTranslation) return null;
+  // Known to already be in the reading language, and nothing translated yet:
+  // the only case where the strip is genuinely noise.
+  if (sourceLang === target && !hasTranslation) return null;
   return (
     <div className="not-prose mt-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
       <Languages className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -1299,7 +1331,9 @@ function TranslationBar({
           ? showingOriginal
             ? `Original — ${sourceLang ? languageName(sourceLang) : "source"}`
             : `Translated to ${languageName(target)}`
-          : `This article is in ${sourceLang ? languageName(sourceLang) : "another language"}.`}
+          : sourceLang
+            ? `This article is in ${languageName(sourceLang)}.`
+            : "Not in your reading language?"}
       </span>
 
       {hasTranslation ? (

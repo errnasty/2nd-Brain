@@ -3,22 +3,34 @@ import { and, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles } from "@/lib/db/schema";
 import { getApiUser } from "@/lib/auth";
-import { translateArticle } from "@/lib/ai/translate";
+import { chunkHtml } from "@/lib/html/chunk-html";
+import { translateHtml, translateText } from "@/lib/i18n/machine-translate";
 import { cleanHtml } from "@/lib/sanitize";
 import { detectLanguage, LANGUAGE_NAMES } from "@/lib/i18n/detect-language";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
 
 /**
- * Translate an article into the reader's language, preserving its markup.
+ * Translate one chunk of an article with a real machine-translation engine.
  *
- * Returns 409 when the article already reads as the target language, so the
- * client can mark it "no translation needed" instead of paying for a no-op.
- * The result is sanitized again on the way out: it's model-generated HTML
- * built from third-party source markup, so it gets the same treatment as any
- * other untrusted body before the reader injects it.
+ * Two deliberate properties:
+ *
+ * 1. **No model call.** Translation is deterministic work with a correct
+ *    answer; an LLM costs tokens, is slower by an order of magnitude, and can
+ *    decide to summarise instead. See lib/i18n/machine-translate.
+ *
+ * 2. **One chunk per request.** This deploys to Netlify, where a synchronous
+ *    function is killed at ~10s regardless of any `maxDuration` export (that
+ *    directive is Vercel-only). Whole-article translation cannot fit in that
+ *    budget, so the client walks the chunks and renders them as they land.
+ *    Chunking is derived from the stored body, so chunk N is the same slice on
+ *    every request without any server-side session state.
  */
+
+/** MT is ~20x faster per character than a model, so chunks can be far larger
+ *  than the model path's — while still leaving headroom under the 10s cap. */
+const MT_CHUNK_CHARS = 8000;
+
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const { user, error } = await getApiUser();
@@ -29,6 +41,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!(target in LANGUAGE_NAMES)) {
     return NextResponse.json({ error: "Unsupported target language" }, { status: 400 });
   }
+  const chunkIndex = Number.isInteger(body.chunk) && body.chunk >= 0 ? (body.chunk as number) : 0;
 
   const [article] = await db
     .select({ title: articles.title, fullText: articles.fullText, excerpt: articles.excerpt })
@@ -50,13 +63,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     );
   }
 
-  const result = await translateArticle(article.title, source, target);
-  if (!result) return NextResponse.json({ error: "Couldn't translate this article" }, { status: 502 });
+  const chunks = chunkHtml(source, MT_CHUNK_CHARS);
+  if (chunkIndex >= chunks.length) {
+    return NextResponse.json({ error: "No such chunk" }, { status: 416 });
+  }
 
-  return NextResponse.json({
-    title: result.title,
-    content: cleanHtml(result.content),
-    sourceLang: detected?.code ?? null,
-    target,
-  });
+  // An unsure detector is not a reason to refuse: hand the engine `null` and
+  // let it auto-detect, which it does better than a stopword heuristic anyway.
+  const sourceLang = detected?.code ?? null;
+
+  try {
+    // The title rides along with the first chunk so the header doesn't sit in
+    // the source language while the body is already translated.
+    const [content, title] = await Promise.all([
+      translateHtml(chunks[chunkIndex], target, { source: sourceLang, budgetMs: 7000 }),
+      chunkIndex === 0 && article.title.trim()
+        ? translateText(article.title, target, { source: sourceLang, budgetMs: 7000 })
+        : Promise.resolve(null),
+    ]);
+
+    return NextResponse.json({
+      // Re-sanitized on the way out: the body came from a third-party feed and
+      // has been through an external service, so it gets the same treatment as
+      // any other untrusted markup before the reader injects it.
+      content: cleanHtml(content),
+      title,
+      chunkIndex,
+      chunkCount: chunks.length,
+      sourceLang,
+      target,
+    });
+  } catch (err) {
+    console.warn("translate chunk failed:", err instanceof Error ? err.message : err);
+    return NextResponse.json(
+      { error: "The translation service didn't respond. Try again in a moment." },
+      { status: 502 },
+    );
+  }
 }
