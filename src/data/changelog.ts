@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-26",
+    date: "July 26, 2026",
+    title: "Translate and simplify actually work now",
+    tag: "fix",
+    summary:
+      "Both features failed on anything longer than a few paragraphs — the work couldn't finish before the server cut it off. They now rewrite an article section by section, so the text fills in as it arrives instead of failing with nothing to show.",
+    items: [
+      "Translation no longer goes through an AI model. It uses a proper translation engine: much faster, consistent every time, and it can't decide to summarise your article instead.",
+      "The translate option now appears whenever an article might not be in your language, rather than staying hidden when it wasn't sure.",
+      "If a long article only partly finishes, you keep the part that did instead of losing all of it.",
+    ],
+  },
+  {
     id: "2026-07-25-h",
     date: "July 25, 2026",
     title: "Every page starts up lighter",
