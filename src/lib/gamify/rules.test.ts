@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   cardGradeXp,
+  quizXp,
+  QUIZ_XP_BASE,
+  QUIZ_XP_MAX,
   momentumMultiplier,
   momentumStep,
   streakMultiplier,
@@ -12,11 +15,66 @@ import {
 } from "./rules";
 
 describe("cardGradeXp", () => {
-  it("scales 5..20 with quality, clamped", () => {
+  it("scales 5..15 with quality, clamped", () => {
     expect(cardGradeXp(0)).toBe(5);
-    expect(cardGradeXp(5)).toBe(20);
+    expect(cardGradeXp(5)).toBe(15);
     expect(cardGradeXp(-3)).toBe(5);
-    expect(cardGradeXp(99)).toBe(20);
+    expect(cardGradeXp(99)).toBe(15);
+  });
+});
+
+describe("quizXp", () => {
+  it("pays the base for a zero score and the max for a perfect one", () => {
+    expect(quizXp(0, 10)).toBe(QUIZ_XP_BASE);
+    expect(quizXp(10, 10)).toBe(QUIZ_XP_MAX);
+  });
+
+  it("scales in between with the proportion answered correctly", () => {
+    expect(quizXp(5, 10)).toBe(31); // 12 + round(0.5 * 38)
+    expect(quizXp(8, 10)).toBe(42);
+    expect(quizXp(2, 10)).toBe(20);
+  });
+
+  it("rewards a better score more, monotonically", () => {
+    let prev = -1;
+    for (let score = 0; score <= 10; score++) {
+      const xp = quizXp(score, 10);
+      expect(xp).toBeGreaterThan(prev);
+      prev = xp;
+    }
+  });
+
+  it("beats a single perfect card recall from half marks upward", () => {
+    // Below half it deliberately does not: a quiz you got nothing right on
+    // should not out-earn a card you actually remembered.
+    expect(quizXp(4, 10)).toBeLessThan(cardGradeXp(5) * 2);
+    for (let score = 5; score <= 10; score++) {
+      expect(quizXp(score, 10)).toBeGreaterThan(cardGradeXp(5));
+    }
+  });
+
+  it("pays several cards' worth for a perfect run", () => {
+    expect(quizXp(10, 10)).toBeGreaterThan(cardGradeXp(5) * 3);
+  });
+
+  it("handles an empty or nonsense quiz without dividing by zero", () => {
+    expect(quizXp(0, 0)).toBe(QUIZ_XP_BASE);
+    expect(quizXp(5, 0)).toBe(QUIZ_XP_BASE);
+    expect(quizXp(-2, 10)).toBe(QUIZ_XP_BASE);
+    expect(quizXp(99, 10)).toBe(QUIZ_XP_MAX);
+  });
+});
+
+describe("the economy stays weighted towards recall", () => {
+  it("reading an article is worth less than reviewing a card", () => {
+    expect(XP_RULES.article_read).toBeLessThan(cardGradeXp(0));
+  });
+
+  it("interacting with an article pays, but less than saving it", () => {
+    expect(XP_RULES.article_starred).toBeGreaterThan(0);
+    expect(XP_RULES.article_read_later).toBeGreaterThan(0);
+    expect(XP_RULES.article_starred).toBeLessThan(XP_RULES.article_saved);
+    expect(XP_RULES.article_read_later).toBeLessThan(XP_RULES.article_starred);
   });
 });
 

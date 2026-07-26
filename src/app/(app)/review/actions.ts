@@ -182,7 +182,10 @@ export async function gradeCardAction(input: { id: string; quality: number }) {
       (reviewedBefore ? new Date(card.dueDate.getTime() - card.intervalDays * 86_400_000) : now);
     const elapsedDays = Math.max(0, (now.getTime() - lastReview.getTime()) / 86_400_000);
 
-    const next = scheduleFsrs(state, rating, elapsedDays, now);
+    // The previous interval is passed so a correct answer can never reschedule
+    // the card sooner than last time — otherwise the same cards come back every
+    // single day no matter how often they're reviewed.
+    const next = scheduleFsrs(state, rating, elapsedDays, now, card.intervalDays);
     await db
       .update(directoryFlashcards)
       .set({
