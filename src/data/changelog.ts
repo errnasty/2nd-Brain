@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-26-a",
+    date: "July 26, 2026",
+    title: "Simplified articles look like articles again",
+    tag: "fix",
+    summary:
+      "A plainer version could come back with stray asterisks around phrases instead of bold text, and occasionally with a whole paragraph sitting where the headline should be. Both are fixed, and anything already simplified will be redone properly the next time you open it.",
+  },
+  {
     id: "2026-07-26",
     date: "July 26, 2026",
     title: "Translate and simplify actually work now",

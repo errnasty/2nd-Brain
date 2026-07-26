@@ -10,8 +10,12 @@
  * the origin's quota.
  */
 
-const CACHE_PREFIX = "reader.simplified.";
-const CACHE_INDEX = "reader.simplified.index.v1";
+// v2: earlier entries were stored before model output was normalized, so they
+// can contain literal Markdown (`**bold**`) in the body and a paragraph of
+// prose where the headline should be. Bumping the prefix retires them instead
+// of serving the broken version forever on already-simplified articles.
+const CACHE_PREFIX = "reader.simplified.v2.";
+const CACHE_INDEX = "reader.simplified.index.v2";
 const CACHE_MAX = 30;
 
 export type CachedSimplified = { title: string; content: string };

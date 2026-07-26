@@ -1,6 +1,7 @@
 import { generateText } from "ai";
 import { aiAvailable } from "./provider";
 import { userFastModel } from "./user-model";
+import { normalizeModelHtml, sanitizeRewrittenTitle } from "./rewrite-output";
 
 /**
  * Rewrite article HTML at a plainer reading level while leaving its markup
@@ -18,13 +19,6 @@ import { userFastModel } from "./user-model";
  *  large enough that a normal article is a handful of requests, not dozens. */
 export const SIMPLIFY_CHUNK_CHARS = 2200;
 
-/** Models like to wrap output in ```html fences even when told not to. */
-function stripFence(s: string): string {
-  const t = s.trim();
-  const m = t.match(/^```(?:html)?\s*\n?([\s\S]*?)\n?```$/i);
-  return (m ? m[1] : t).trim();
-}
-
 const SYSTEM_PROMPT = `You rewrite news articles at a simpler reading level, for a reader who is smart but unfamiliar with the subject (or reading in a second language).
 
 You are given ONE SECTION of a longer article. Rewrite just that section. Do not
@@ -32,6 +26,8 @@ add an introduction or a conclusion, and do not refer to the rest of the piece.
 
 Rules:
 - Output ONLY the rewritten HTML. No preamble, no notes, no code fences.
+- HTML, never Markdown. Emphasis is <strong> and <em>; it is NEVER **bold** or
+  *italic*. Inline code is <code>, never backticks.
 - Preserve the HTML structure EXACTLY: same tags, same attributes, same order.
   Rewrite only human-readable text between tags.
 - Never alter URLs, href/src values, code, or content inside <code>/<pre>.
@@ -56,15 +52,22 @@ export async function simplifyChunk(html: string): Promise<string | null> {
   try {
     const model = await userFastModel();
     const { text } = await generateText({ model, system: SYSTEM_PROMPT, prompt: html });
-    return stripFence(text);
+    // The prompt asks for HTML; this is what makes it true. Models emit
+    // Markdown emphasis regardless of instruction, and `**like this**` renders
+    // as literal asterisks in the reader.
+    return normalizeModelHtml(text);
   } catch (err) {
     console.warn("simplifyChunk failed:", err instanceof Error ? err.message : err);
     return null;
   }
 }
 
-/** Rewrite the headline. Null on failure — the original headline still reads
- *  fine, so this is never worth failing the whole request over. */
+/**
+ * Rewrite the headline. Null whenever the result is anything other than a
+ * plausible headline — including on failure. The original headline already
+ * reads fine, so a rejected rewrite costs nothing, while an accepted bad one
+ * drops a paragraph of prose into the article's <h1>.
+ */
 export async function simplifyTitle(title: string): Promise<string | null> {
   if (!aiAvailable() || !title.trim()) return null;
   try {
@@ -72,10 +75,10 @@ export async function simplifyTitle(title: string): Promise<string | null> {
     const { text } = await generateText({
       model,
       system:
-        "You rewrite news headlines in plainer language. Keep the meaning and any names or numbers. Output ONLY the rewritten headline — no quotes, no notes.",
+        "You rewrite a single news headline in plainer language. Keep the meaning and any names or numbers. Output ONLY the rewritten headline, on one line: no quotes, no notes, no explanation, no Markdown, and never more than one sentence.",
       prompt: title,
     });
-    return text.trim() || null;
+    return sanitizeRewrittenTitle(text, title);
   } catch (err) {
     console.warn("simplifyTitle failed:", err instanceof Error ? err.message : err);
     return null;
