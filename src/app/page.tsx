@@ -85,6 +85,12 @@ export default async function LandingPage() {
             <Link href="/guide" className="hidden text-muted-foreground hover:text-foreground sm:inline">
               Guide
             </Link>
+            <Link
+              href="/download"
+              className="hidden text-muted-foreground hover:text-foreground sm:inline"
+            >
+              Android
+            </Link>
             <Link href="/login" className="text-muted-foreground hover:text-foreground">
               Sign in
             </Link>
@@ -513,6 +519,7 @@ export default async function LandingPage() {
             <div className="editorial-eyebrow mb-2.5 font-medium text-foreground">Company</div>
             <div className="flex flex-col gap-1.5 font-serif text-sm">
               <Link href="/guide" className="hover:text-foreground">Guide</Link>
+              <Link href="/download" className="hover:text-foreground">Android app</Link>
               <Link href="/guide" className="hover:text-foreground">Roadmap</Link>
               <Link href="/guide" className="hover:text-foreground">Changelog</Link>
               <a href="https://github.com" className="hover:text-foreground" target="_blank" rel="noopener noreferrer">GitHub</a>

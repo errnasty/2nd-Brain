@@ -1,0 +1,33 @@
+{
+  "packageId": "io.github.errnasty.secondbrain",
+  "host": "remarkable-boba-9e956e.netlify.app",
+  "name": "Second Brain",
+  "launcherName": "2nd Brain",
+  "display": "standalone",
+  "themeColor": "#000000",
+  "themeColorDark": "#000000",
+  "navigationColor": "#000000",
+  "navigationColorDark": "#000000",
+  "navigationDividerColor": "#000000",
+  "navigationDividerColorDark": "#000000",
+  "backgroundColor": "#000000",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://remarkable-boba-9e956e.netlify.app/icon-512.png",
+  "maskableIconUrl": "https://remarkable-boba-9e956e.netlify.app/icon-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "android"
+  },
+  "appVersionName": "1",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://remarkable-boba-9e956e.netlify.app/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "orientation": "default"
+}

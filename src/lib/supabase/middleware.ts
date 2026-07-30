@@ -57,6 +57,13 @@ export async function updateSession(request: NextRequest) {
     // redirects a logged-in visitor to /today.
     pathname === "/" ||
     pathname.startsWith("/guide") ||
+    pathname.startsWith("/download") ||
+    // Belt-and-braces: the matcher in src/middleware.ts already keeps
+    // /.well-known out of this function entirely. Repeated here because the
+    // failure it guards against — Android's Digital Asset Links verifier
+    // getting a redirect instead of JSON — surfaces only as a permanent
+    // browser address bar over the Android app, with nothing in any log.
+    pathname.startsWith("/.well-known") ||
     pathname.startsWith("/login") ||
     pathname.startsWith("/signup") ||
     pathname.startsWith("/forgot-password") ||

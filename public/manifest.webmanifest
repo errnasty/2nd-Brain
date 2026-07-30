@@ -1,8 +1,10 @@
 {
+  "id": "/",
   "name": "Second Brain",
   "short_name": "2nd Brain",
   "description": "Your RSS reader, knowledge base, and AI briefing engine.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#000000",

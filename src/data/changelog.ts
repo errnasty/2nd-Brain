@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-30-b",
+    date: "July 30, 2026",
+    title: "There's an Android app now",
+    tag: "feature",
+    summary:
+      "Second Brain can be installed on Android as a proper app — its own icon, full screen, no browser bars. It's a couple of megabytes and it never needs updating: it always runs the current version, so anything that ships appears the next time you open it.",
+    items: [
+      "Get it from the Android page, linked in the site header and footer.",
+      "Pages you've already opened stay readable with no connection, and the app opens instead of showing a browser error.",
+      "Signing in works exactly as it does on the web, and stays signed in between launches.",
+      "On iPhone, Safari's Share → Add to Home Screen gets you most of the same thing.",
+    ],
+  },
+  {
     id: "2026-07-30",
     date: "July 30, 2026",
     title: "Today is now a real brief, written desk by desk",
