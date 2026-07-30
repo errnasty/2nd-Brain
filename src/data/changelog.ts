@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-30",
+    date: "July 30, 2026",
+    title: "Today is now a real brief, written desk by desk",
+    tag: "feature",
+    summary:
+      "Instead of naming two or three articles and lumping the rest into “4 items on AI”, Today now sorts your unread queue into desks — Geopolitics, AI, Markets, Security and more — and writes a proper section on each, citing the articles as it goes. It builds in pieces so you can read the lead while the rest is still being written.",
+    items: [
+      "Choose how deep to go: Concise, Standard, or Deep. Deep covers every desk in your queue, notes where your sources disagree, and ends each desk with the question today's reading doesn't settle.",
+      "Follow the desks you care about — Geopolitics and AI, say — and they lead the brief and get written up first. Your choice is saved to your account, so it holds on every device.",
+      "The lead now argues why each story matters rather than restating the headline, and at Deep it tells you the specific thing to watch next.",
+      "Any section that fails now has its own Retry button, so one hiccup no longer costs you the whole brief.",
+      "A line at the end tells you honestly what was still unread and didn't get written up, with a one-tap way to cover it.",
+    ],
+  },
+  {
     id: "2026-07-26-b",
     date: "July 26, 2026",
     title: "Cards you get right stop coming back tomorrow",

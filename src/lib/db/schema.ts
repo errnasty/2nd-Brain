@@ -886,6 +886,13 @@ export type UserSettingsData = {
   // Seeds ThinkTank suggestions. Shallow-merge caveat: always send the whole
   // array. Additive jsonb key — no migration needed.
   interests?: string[];
+  // How much detail the Daily Brief goes into — see BRIEF_LEVEL_CONFIG in
+  // src/lib/today/brief-plan.ts. Unset = "standard". Additive jsonb key.
+  briefLevel?: "concise" | "standard" | "deep";
+  // Desk ids (src/lib/today/topics.ts) the user follows, in priority order:
+  // these lead the brief and get a section first. Shallow-merge caveat: always
+  // send the whole array. Additive jsonb key — no migration needed.
+  briefTopics?: string[];
 };
 
 export const userSettings = pgTable(
