@@ -4,16 +4,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CitedMarkdown, type Citation } from "@/components/ui/cited-markdown";
 import {
+  AlertTriangle,
   Bookmark,
   Brain,
   Check,
   CheckCheck,
+  Compass,
   ExternalLink,
   GraduationCap,
   History,
+  Layers,
   Loader2,
   Newspaper,
   RefreshCw,
+  RotateCw,
   Settings,
   Sparkles,
   X,
@@ -23,6 +27,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -35,6 +40,14 @@ import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
 import { fetchRecallCardsAction, gradeCardAction, type RecallCard } from "@/app/(app)/review/actions";
+import { updateUserSettingsAction } from "@/lib/settings/actions";
+import {
+  BRIEF_LEVELS,
+  BRIEF_LEVEL_CONFIG,
+  DEFAULT_BRIEF_LEVEL,
+  type BriefLevel,
+} from "@/lib/today/brief-plan";
+import { BRIEF_TOPICS } from "@/lib/today/topics";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -112,6 +125,78 @@ Identify any articles that appear to be clickbait, standard PR announcements, hi
 
 Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
 
+// ── Sectioned generation ────────────────────────────────────────────────
+// The brief is planned server-side with no model involved, then generated one
+// section at a time — one short request each. That's what lets it be far more
+// detailed than a single call could manage on a host that kills long functions
+// (see the comments in src/app/api/brief/route.ts), and it means a section that
+// fails costs only that section.
+
+type PlanSection = {
+  key: string;
+  kind: "lead" | "topic" | "skip";
+  topicId?: string;
+  label: string;
+  refs: number[];
+};
+
+type Desk = { topicId: string; label: string; count: number; included: boolean };
+
+type BriefPlanResponse = {
+  fingerprint: string;
+  count: number;
+  windowLabel: string;
+  level: BriefLevel;
+  priority: string[];
+  sections: PlanSection[];
+  desks: Desk[];
+  sources: BriefSource[];
+};
+
+type BlockStatus = "pending" | "streaming" | "done" | "error";
+
+/** One rendered chunk of the brief. A hydrated brief arrives as a single
+ *  `stored` block whose text already contains its own headings. */
+type Block = {
+  key: string;
+  kind: PlanSection["kind"] | "stored";
+  /** Heading rendered above the text; empty for a stored brief. */
+  label: string;
+  refs: number[];
+  text: string;
+  status: BlockStatus;
+  error?: string;
+};
+
+function blockMarkdown(b: Block): string {
+  const text = b.text.trim();
+  if (!text) return "";
+  return b.label ? `### ${b.label}\n\n${text}` : text;
+}
+
+/** The whole brief as one markdown document — what gets cached and archived. */
+function assembleBrief(blocks: Block[]): string {
+  return blocks.map(blockMarkdown).filter(Boolean).join("\n\n");
+}
+
+/** Run `fn` over `items` with at most `limit` in flight. Keeps a deep brief's
+ *  wall-clock down without firing eight requests at once. */
+async function runWithLimit<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next;
+      next += 1;
+      await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+}
+
 /** Server-stored brief handed to the client for instant paint (no fetch). */
 export type InitialBrief = {
   content: string;
@@ -119,18 +204,25 @@ export type InitialBrief = {
   usage: Usage | null;
   generatedAt: string;
   fingerprint: string | null;
+  /** The stored brief was generated under different depth/desk settings. */
+  settingsChanged?: boolean;
 };
 
 export function DailyBrief({
   name,
   initialBrief,
+  level: initialLevel,
+  followedTopics: initialTopics,
 }: {
   name?: string;
   initialBrief?: InitialBrief | null;
+  level?: BriefLevel;
+  followedTopics?: string[];
 }) {
   const router = useRouter();
-  const [content, setContent] = useState("");
+  const [blocks, setBlocks] = useState<Block[]>([]);
   const [sources, setSources] = useState<BriefSource[]>([]);
+  const [desks, setDesks] = useState<Desk[]>([]);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [newArticles, setNewArticles] = useState(false);
@@ -143,10 +235,14 @@ export function DailyBrief({
   // fresh one streams in behind it (new-day auto-regenerate).
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Ordinary "nothing to brief on" state — not a failure. */
+  const [note, setNote] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
   const [savedPrompt, setSavedPrompt] = useState("");
+  const [level, setLevel] = useState<BriefLevel>(initialLevel ?? DEFAULT_BRIEF_LEVEL);
+  const [followed, setFollowed] = useState<string[]>(initialTopics ?? []);
   const hasMounted = useRef(false);
   // Set synchronously when we hydrate a same-day brief from cache. A ref (not
   // state) so the auto-stream effect below — which runs in the SAME commit as
@@ -154,17 +250,29 @@ export function DailyBrief({
   // false `hydratedFromCache` state, which made the brief re-stream every load.
   const cacheHydratedRef = useRef(false);
   // Latest saved prompt, readable synchronously. The auto-stream effect captures
-  // `stream` from the first render (savedPrompt still ""), so without this the
-  // first brief of the day would generate with the DEFAULT prompt, ignoring a
-  // user's saved custom prompt.
+  // `generate` from the first render (savedPrompt still ""), so without this the
+  // first brief of the day would generate sectioned, ignoring a user's saved
+  // custom prompt.
   const savedPromptRef = useRef("");
-  // Set during mount hydration when the stored brief is from a prior day, so
-  // the auto-stream effect refreshes it in the background instead of leaving
-  // yesterday's brief up.
+  // Set during mount hydration when the stored brief is from a prior day (or was
+  // generated under different settings), so the auto-stream effect refreshes it
+  // in the background instead of leaving yesterday's brief up.
   const backgroundRegenRef = useRef(false);
+  // The plan the on-screen sections came from — retry needs it.
+  const planRef = useRef<BriefPlanResponse | null>(null);
+  // Token totals summed across a generation's section calls.
+  const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
+  // Bumped on every new generation so a late chunk from an abandoned one is
+  // dropped instead of writing into the new brief.
+  const runRef = useRef(0);
+  // Whether the blocks on screen came from a generation in THIS session — only
+  // those get written back to the cache/archive.
+  const producedRef = useRef(false);
+  const generatedAtRef = useRef<Date | null>(null);
+  const levelRef = useRef<BriefLevel>(initialLevel ?? DEFAULT_BRIEF_LEVEL);
 
   // Load saved prompt + brief on mount. Priority: the server-stored brief
-  // (authoritative, cross-device) → localStorage cache → fresh stream.
+  // (authoritative, cross-device) → localStorage cache → fresh generation.
   const [hydratedFromCache, setHydratedFromCache] = useState(false);
   useEffect(() => {
     if (hasMounted.current) return;
@@ -180,22 +288,30 @@ export function DailyBrief({
 
     // Hydrate a stored brief (from the server prop, else localStorage) so the
     // page paints instantly. Returns true when something was shown.
-    function hydrate(
-      b: { content: string; generatedAt: string; sources?: BriefSource[]; usage?: Usage | null; fingerprint?: string | null },
-    ): boolean {
+    function hydrate(b: {
+      content: string;
+      generatedAt: string;
+      sources?: BriefSource[];
+      usage?: Usage | null;
+      fingerprint?: string | null;
+      settingsChanged?: boolean;
+    }): boolean {
       if (!b.content) return false;
       const genDate = new Date(b.generatedAt);
       cacheHydratedRef.current = true;
-      setContent(b.content);
+      producedRef.current = false;
+      setBlocks([
+        { key: "stored", kind: "stored", label: "", refs: [], text: b.content, status: "done" },
+      ]);
       setSources(b.sources ?? []);
       setUsage(b.usage ?? null);
       setFingerprint(b.fingerprint ?? null);
       setGeneratedAt(genDate);
       setLoading(false);
       setHydratedFromCache(true);
-      // Prior day → refresh in the background (auto-regenerate on first open of
-      // the day), showing this brief until the new one streams in.
-      if (!isSameDay(genDate, new Date())) backgroundRegenRef.current = true;
+      // Prior day, or generated under different depth/desk settings → refresh in
+      // the background, showing this brief until the new one streams in.
+      if (!isSameDay(genDate, new Date()) || b.settingsChanged) backgroundRegenRef.current = true;
       return true;
     }
 
@@ -233,152 +349,394 @@ export function DailyBrief({
     }
   }, [initialBrief]);
 
-  const stream = useCallback(async (promptOverride?: string, force = false, background = false) => {
-    setLoading(true);
-    setError(null);
-    // Background refresh keeps the stored brief on screen until the fresh one
-    // starts streaming (progressively replaced), instead of flashing a skeleton.
-    if (!background) {
-      setContent("");
-      setSources([]);
-      setUsage(null);
-    }
-    setRefreshing(background);
-    setNewArticles(false);
-    setReadIds(new Set());
-    setSavedIds(new Set());
-    try {
-      const systemPrompt = (promptOverride ?? savedPromptRef.current).trim();
-      const res = await fetch("/api/brief", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...(systemPrompt ? { systemPrompt } : {}), force }),
-        cache: "no-store",
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        setError(text || `HTTP ${res.status}`);
-        setLoading(false);
-        return;
-      }
-      if (!res.body) {
-        setError("No response body");
-        setLoading(false);
-        return;
-      }
-
-      const briefFingerprint = res.headers.get("x-brief-fingerprint");
-      if (briefFingerprint) setFingerprint(briefFingerprint);
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let acc = "";
-
-      // Coalesce renders to one per animation frame instead of one per chunk —
-      // ReactMarkdown re-parses the whole doc on each render, so per-token
-      // updates would re-parse hundreds of times during a long brief.
-      let frameQueued = false;
-      const flush = () => {
-        frameQueued = false;
-        setContent(displayText(acc));
-      };
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        acc += decoder.decode(value, { stream: true });
-        if (!frameQueued) {
-          frameQueued = true;
-          requestAnimationFrame(flush);
-        }
-      }
-      flush(); // commit the final chunk
-
-      // Parse trailing sentinels: source map + token usage.
-      let briefSources: BriefSource[] = [];
-      let briefUsage: Usage | null = null;
-      const bIdx = acc.indexOf(BRIEFSOURCES_SENTINEL);
-      const uIdx = acc.indexOf(USAGE_SENTINEL);
-      if (bIdx >= 0) {
-        const end = uIdx > bIdx ? uIdx : acc.length;
-        try {
-          briefSources = JSON.parse(acc.slice(bIdx + BRIEFSOURCES_SENTINEL.length, end)) as BriefSource[];
-          setSources(briefSources);
-        } catch {
-          // ignore malformed sources
-        }
-      }
-      if (uIdx >= 0) {
-        try {
-          briefUsage = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
-          setUsage(briefUsage);
-        } catch {
-          // ignore malformed usage
-        }
-      }
-
-      const displayContent = displayText(acc);
-      const finishedAt = new Date();
-      setGeneratedAt(finishedAt);
-      // Persist the completed brief so the page hydrates instantly next visit
-      try {
-        localStorage.setItem(
-          BRIEF_CACHE_KEY,
-          JSON.stringify({
-            content: displayContent,
-            generatedAt: finishedAt.toISOString(),
-            sources: briefSources,
-            usage: briefUsage,
-            fingerprint: briefFingerprint,
-          }),
-        );
-      } catch {
-        // quota errors — silently ignore
-      }
-      // Append to the dated archive (most-recent first, capped).
-      if (displayContent.trim()) {
-        const entry: BriefEntry = {
-          generatedAt: finishedAt.toISOString(),
-          content: displayContent,
-          sources: briefSources,
-          usage: briefUsage,
-          fingerprint: briefFingerprint,
-        };
-        setHistory((prev) => {
-          const next = [entry, ...prev].slice(0, MAX_HISTORY);
-          try {
-            localStorage.setItem(BRIEF_HISTORY_KEY, JSON.stringify(next));
-          } catch {
-            // ignore quota
-          }
-          return next;
-        });
-      }
-    } catch (err) {
-      // A background refresh failing must not blow away the brief already
-      // on screen — just drop the refreshing state.
-      if (!background) setError(err instanceof Error ? err.message : "Failed to load brief");
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+  /** Update one block in place (streaming text, status, error). */
+  const patchBlock = useCallback((key: string, patch: Partial<Block>) => {
+    setBlocks((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)));
   }, []);
 
-  // Auto-stream on mount only when nothing was hydrated. When a stored brief WAS
-  // hydrated but it's from a prior day, refresh it in the background instead.
-  // The ref check catches the same-commit case where `hydratedFromCache` state
-  // hasn't flushed yet; the state check handles later re-runs.
+  /**
+   * Generate one section. Each call is a short, self-contained request: a
+   * bounded slice of the queue in, a capped number of tokens out. Returns
+   * "replan" when the unread set moved under us, so the caller can re-plan
+   * rather than write a section against shifted `[n]` numbering.
+   */
+  const streamSection = useCallback(
+    async (section: PlanSection, plan: BriefPlanResponse, run: number): Promise<"ok" | "replan"> => {
+      patchBlock(section.key, { status: "streaming", text: "", error: undefined });
+      try {
+        const res = await fetch("/api/brief", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            section: section.key,
+            level: plan.level,
+            fingerprint: plan.fingerprint,
+          }),
+          cache: "no-store",
+        });
+        if (res.status === 409) return "replan";
+        if (!res.ok || !res.body) {
+          const text = await res.text().catch(() => "");
+          if (run === runRef.current) {
+            patchBlock(section.key, {
+              status: "error",
+              error: text || `HTTP ${res.status}`,
+            });
+          }
+          return "ok";
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let acc = "";
+        // Coalesce renders to one per animation frame instead of one per chunk —
+        // ReactMarkdown re-parses the whole block on each render.
+        let frameQueued = false;
+        const flush = () => {
+          frameQueued = false;
+          if (run === runRef.current) patchBlock(section.key, { text: displayText(acc) });
+        };
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          if (!frameQueued) {
+            frameQueued = true;
+            requestAnimationFrame(flush);
+          }
+        }
+        flush();
+
+        const uIdx = acc.indexOf(USAGE_SENTINEL);
+        if (uIdx >= 0) {
+          try {
+            const parsed = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
+            usageRef.current = {
+              promptTokens: usageRef.current.promptTokens + (parsed.promptTokens ?? 0),
+              completionTokens: usageRef.current.completionTokens + (parsed.completionTokens ?? 0),
+              totalTokens: usageRef.current.totalTokens + (parsed.totalTokens ?? 0),
+            };
+            if (run === runRef.current) setUsage({ ...usageRef.current });
+          } catch {
+            // ignore malformed usage
+          }
+        }
+        if (run === runRef.current) {
+          const body = displayText(acc).trim();
+          patchBlock(section.key, {
+            status: body ? "done" : "error",
+            text: body,
+            error: body ? undefined : "Nothing came back for this section.",
+          });
+        }
+        return "ok";
+      } catch (err) {
+        if (run === runRef.current) {
+          patchBlock(section.key, {
+            status: "error",
+            error: err instanceof Error ? err.message : "Section failed",
+          });
+        }
+        return "ok";
+      }
+    },
+    [patchBlock],
+  );
+
+  /**
+   * Plan the brief, then fill it in section by section. The plan itself costs
+   * no model call, so the outline (and every desk's item count) is on screen
+   * before the first token arrives.
+   */
+  const generateSectioned = useCallback(
+    async (opts: { levelOverride?: BriefLevel; background?: boolean; replanned?: boolean } = {}) => {
+      const run = runRef.current + 1;
+      runRef.current = run;
+      const chosenLevel = opts.levelOverride ?? levelRef.current;
+      setLoading(true);
+      setError(null);
+      setNote(null);
+      setRefreshing(opts.background === true);
+      setNewArticles(false);
+      if (!opts.replanned) {
+        setReadIds(new Set());
+        setSavedIds(new Set());
+      }
+      usageRef.current = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      generatedAtRef.current = null;
+      producedRef.current = true;
+
+      try {
+        const planRes = await fetch(`/api/brief?plan=1&level=${chosenLevel}`, { cache: "no-store" });
+        if (!planRes.ok) {
+          const text = await planRes.text().catch(() => "");
+          setError(text || `HTTP ${planRes.status}`);
+          return;
+        }
+        const plan = (await planRes.json()) as BriefPlanResponse;
+        if (run !== runRef.current) return;
+        planRef.current = plan;
+        setFingerprint(plan.fingerprint);
+        setSources(plan.sources ?? []);
+        setDesks(plan.desks ?? []);
+        if (!plan.sections || plan.sections.length === 0) {
+          producedRef.current = false;
+          setBlocks([]);
+          setNote("No unread articles to brief on. Add some feeds and sync them, then come back.");
+          return;
+        }
+        setBlocks(
+          plan.sections.map((s) => ({
+            key: s.key,
+            kind: s.kind,
+            label: s.label,
+            refs: s.refs,
+            text: "",
+            status: "pending" as BlockStatus,
+          })),
+        );
+
+        // The lead goes first and alone: it's the part the reader actually waits
+        // for, so it should never queue behind a desk section.
+        const [lead, ...rest] = plan.sections;
+        let replan = (await streamSection(lead, plan, run)) === "replan";
+        if (!replan && run === runRef.current) {
+          await runWithLimit(rest, 2, async (s) => {
+            if (run !== runRef.current || replan) return;
+            if ((await streamSection(s, plan, run)) === "replan") replan = true;
+          });
+        }
+
+        // A sync landed mid-generation: the article numbering moved, so re-plan
+        // once against the new queue rather than leaving mismatched citations.
+        if (replan && !opts.replanned && run === runRef.current) {
+          await generateSectioned({ ...opts, replanned: true });
+          return;
+        }
+      } catch (err) {
+        // A background refresh failing must not blow away the brief already on
+        // screen — just drop the refreshing state.
+        if (!opts.background) setError(err instanceof Error ? err.message : "Failed to load brief");
+      } finally {
+        if (run === runRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [streamSection],
+  );
+
+  /**
+   * The single-pass path, used when the user has saved their own brief prompt:
+   * their framing, one call, the whole queue. Kept because only the author of a
+   * custom prompt knows what shape they asked for — it can't be split into
+   * sections on their behalf.
+   */
+  const streamLegacy = useCallback(
+    async (promptOverride?: string, force = false, background = false) => {
+      const run = runRef.current + 1;
+      runRef.current = run;
+      setLoading(true);
+      setError(null);
+      setNote(null);
+      if (!background) setBlocks([]);
+      setRefreshing(background);
+      setNewArticles(false);
+      setReadIds(new Set());
+      setSavedIds(new Set());
+      producedRef.current = true;
+      generatedAtRef.current = null;
+      planRef.current = null;
+      setDesks([]);
+      try {
+        const systemPrompt = (promptOverride ?? savedPromptRef.current).trim();
+        const res = await fetch("/api/brief", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ systemPrompt, force }),
+          cache: "no-store",
+        });
+        if (!res.ok || !res.body) {
+          setError((await res.text().catch(() => "")) || `HTTP ${res.status}`);
+          return;
+        }
+        const briefFingerprint = res.headers.get("x-brief-fingerprint");
+        if (briefFingerprint) setFingerprint(briefFingerprint);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let acc = "";
+        let frameQueued = false;
+        const flush = () => {
+          frameQueued = false;
+          if (run !== runRef.current) return;
+          setBlocks([
+            {
+              key: "custom",
+              kind: "stored",
+              label: "",
+              refs: [],
+              text: displayText(acc),
+              status: "streaming",
+            },
+          ]);
+        };
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          acc += decoder.decode(value, { stream: true });
+          if (!frameQueued) {
+            frameQueued = true;
+            requestAnimationFrame(flush);
+          }
+        }
+        flush();
+        if (run !== runRef.current) return;
+
+        const bIdx = acc.indexOf(BRIEFSOURCES_SENTINEL);
+        const uIdx = acc.indexOf(USAGE_SENTINEL);
+        if (bIdx >= 0) {
+          const end = uIdx > bIdx ? uIdx : acc.length;
+          try {
+            setSources(
+              JSON.parse(acc.slice(bIdx + BRIEFSOURCES_SENTINEL.length, end)) as BriefSource[],
+            );
+          } catch {
+            // ignore malformed sources
+          }
+        }
+        if (uIdx >= 0) {
+          try {
+            const parsed = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
+            usageRef.current = parsed;
+            setUsage(parsed);
+          } catch {
+            // ignore malformed usage
+          }
+        }
+        setBlocks([
+          {
+            key: "custom",
+            kind: "stored",
+            label: "",
+            refs: [],
+            text: displayText(acc),
+            status: "done",
+          },
+        ]);
+      } catch (err) {
+        if (!background) setError(err instanceof Error ? err.message : "Failed to load brief");
+      } finally {
+        if (run === runRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [],
+  );
+
+  /** Generate the brief the way this user has configured it. */
+  const generate = useCallback(
+    (opts: { levelOverride?: BriefLevel; background?: boolean; force?: boolean } = {}) => {
+      if (savedPromptRef.current.trim()) {
+        return streamLegacy(undefined, opts.force ?? false, opts.background ?? false);
+      }
+      return generateSectioned({
+        levelOverride: opts.levelOverride,
+        background: opts.background,
+      });
+    },
+    [generateSectioned, streamLegacy],
+  );
+
+  // Auto-generate on mount only when nothing was hydrated. When a stored brief
+  // WAS hydrated but it's from a prior day (or different settings), refresh it
+  // in the background instead. The ref check catches the same-commit case where
+  // `hydratedFromCache` state hasn't flushed yet.
   useEffect(() => {
     if (cacheHydratedRef.current || hydratedFromCache) {
       if (backgroundRegenRef.current) {
         backgroundRegenRef.current = false;
-        stream(undefined, false, true);
+        generate({ background: true });
       }
       return;
     }
-    stream();
+    generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hydratedFromCache]);
+
+  /**
+   * Persist a finished brief: the localStorage cache (instant paint), the dated
+   * archive, and the server row that lets a second device paint instantly too.
+   * Runs when every section has settled — including after a retry, so a
+   * repaired section makes it into the stored copy.
+   */
+  useEffect(() => {
+    if (!producedRef.current) return;
+    if (blocks.length === 0) return;
+    if (blocks.some((b) => b.status === "pending" || b.status === "streaming")) return;
+    const content = assembleBrief(blocks);
+    if (!content.trim()) return;
+
+    const when = generatedAtRef.current ?? new Date();
+    generatedAtRef.current = when;
+    setGeneratedAt(when);
+
+    const entry: BriefEntry = {
+      generatedAt: when.toISOString(),
+      content,
+      sources,
+      usage: usageRef.current.totalTokens > 0 ? { ...usageRef.current } : null,
+      fingerprint,
+    };
+    try {
+      localStorage.setItem(BRIEF_CACHE_KEY, JSON.stringify(entry));
+    } catch {
+      // quota errors — silently ignore
+    }
+    setHistory((prev) => {
+      // Replace rather than prepend when a retry re-persists the same brief.
+      const next = [entry, ...prev.filter((e) => e.generatedAt !== entry.generatedAt)].slice(
+        0,
+        MAX_HISTORY,
+      );
+      try {
+        localStorage.setItem(BRIEF_HISTORY_KEY, JSON.stringify(next));
+      } catch {
+        // ignore quota
+      }
+      return next;
+    });
+    // Cross-device / cross-reload reuse. Best-effort: a failed store just means
+    // the next visit regenerates.
+    if (fingerprint) {
+      void fetch("/api/brief/store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fingerprint,
+          level: planRef.current?.level ?? levelRef.current,
+          content,
+          sources,
+          usage: entry.usage,
+        }),
+      }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks]);
+
+  /** Retry a single failed section — the whole point of generating in pieces. */
+  const retrySection = useCallback(
+    (key: string) => {
+      const plan = planRef.current;
+      const section = plan?.sections.find((s) => s.key === key);
+      if (!plan || !section) return;
+      void streamSection(section, plan, runRef.current);
+    },
+    [streamSection],
+  );
 
   // Today's study tasks (from study plans saved to the Directory) — surfaced at
   // the top of the brief so the plan stays visible day-to-day.
@@ -404,11 +762,11 @@ export function DailyBrief({
     function onVisible() {
       if (document.visibilityState !== "visible") return;
       if (loading || !generatedAt) return;
-      if (!isSameDay(generatedAt, new Date())) stream();
+      if (!isSameDay(generatedAt, new Date())) generate();
     }
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [loading, generatedAt, stream]);
+  }, [loading, generatedAt, generate]);
 
   // Showing a cached brief? Cheaply ask the server whether the unread set has
   // drifted (id-only fingerprint, no model). If so, nudge to regenerate
@@ -478,6 +836,37 @@ export function DailyBrief({
     }
   }, [savedIds]);
 
+  /** Change how much detail the brief goes into, then rebuild it. */
+  const changeLevel = useCallback(
+    (next: BriefLevel) => {
+      if (next === level) return;
+      setLevel(next);
+      levelRef.current = next;
+      void updateUserSettingsAction({ briefLevel: next }).catch(() => {
+        toast.error("Couldn't save your depth preference");
+      });
+      void generate({ levelOverride: next });
+    },
+    [generate, level],
+  );
+
+  /** Follow/unfollow a desk: followed desks lead the brief and get a section
+   *  first. Saved server-side, so it holds across devices. */
+  const toggleDesk = useCallback(
+    (topicId: string) => {
+      const next = followed.includes(topicId)
+        ? followed.filter((t) => t !== topicId)
+        : [...followed, topicId];
+      setFollowed(next);
+      // Whole array — the settings blob is shallow-merged.
+      void updateUserSettingsAction({ briefTopics: next }).catch(() => {
+        toast.error("Couldn't save your desks");
+      });
+      void generate();
+    },
+    [followed, generate],
+  );
+
   function savePrompt() {
     try {
       const trimmed = customPrompt.trim();
@@ -486,9 +875,10 @@ export function DailyBrief({
       savedPromptRef.current = trimmed;
       setSavedPrompt(trimmed);
       setSettingsOpen(false);
-      toast.success(trimmed ? "Custom prompt saved" : "Reset to default prompt");
-      // Regenerate with new prompt (force — bypass server cache)
-      stream(trimmed, true);
+      toast.success(trimmed ? "Custom prompt saved" : "Reset to the sectioned brief");
+      // Regenerate with the new framing (force — bypass the server cache).
+      if (trimmed) void streamLegacy(trimmed, true);
+      else void generateSectioned();
     } catch {
       toast.error("Couldn't save prompt");
     }
@@ -501,19 +891,29 @@ export function DailyBrief({
   // Load an archived brief into view (read-only snapshot; Regenerate still
   // fetches fresh). Doesn't touch the live cache or history.
   function viewEntry(e: BriefEntry) {
-    setContent(e.content);
+    runRef.current += 1; // abandon anything still streaming
+    producedRef.current = false;
+    planRef.current = null;
+    setBlocks([
+      { key: "archive", kind: "stored", label: "", refs: [], text: e.content, status: "done" },
+    ]);
     setSources(e.sources ?? []);
     setUsage(e.usage ?? null);
     setFingerprint(e.fingerprint ?? null);
     setGeneratedAt(new Date(e.generatedAt));
+    setDesks([]);
     setNewArticles(false);
     setReadIds(new Set());
     setError(null);
+    setNote(null);
     setLoading(false);
   }
 
+  const started = blocks.length > 0;
+  const initialLoading = loading && !started;
   const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
   const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
+  const omittedDesks = desks.filter((d) => !d.included && d.count > 0);
 
   // Editorial masthead — derived from "now". State (not a bare Date) so the
   // greeting/date can refresh: a PWA left open overnight was still saying
@@ -536,11 +936,14 @@ export function DailyBrief({
   const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
   const greeting = greetingFor(now);
 
-  // Turn the model's [n] references into tappable inline citations. Only once
-  // streaming has finished (sources arrive with the trailing sentinel), so
-  // partial mid-stream text isn't rewritten or mis-linked.
-  const citations: Citation[] =
-    !loading ? sources.map((s) => ({ n: s.n, href: `/feeds?article=${s.id}`, title: s.title })) : [];
+  // Turn the model's [n] references into tappable inline citations. The source
+  // map arrives with the PLAN, before any text, so citations are live from the
+  // first token instead of waiting for the whole brief to finish.
+  const citations: Citation[] = sources.map((s) => ({
+    n: s.n,
+    href: `/feeds?article=${s.id}`,
+    title: s.title,
+  }));
 
   return (
     <article className="mx-auto max-w-[1080px] px-1">
@@ -559,7 +962,14 @@ export function DailyBrief({
         <div className="not-prose mt-3.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5" style={{ color: "hsl(var(--brand))" }} />
           {loading && !refreshing ? (
-            <span>Generating today&apos;s brief…</span>
+            <span>
+              {started
+                ? `Writing section ${Math.min(
+                    blocks.filter((b) => b.status !== "pending").length,
+                    blocks.length,
+                  )} of ${blocks.length}…`
+                : "Planning today's brief…"}
+            </span>
           ) : generatedAt ? (
             <>
               <span>
@@ -586,9 +996,13 @@ export function DailyBrief({
                   {newArticles ? "new articles — regenerate" : "stale — regenerate"}
                 </span>
               )}
-              {savedPrompt && (
+              {savedPrompt ? (
                 <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
                   custom prompt
+                </span>
+              ) : (
+                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
+                  {BRIEF_LEVEL_CONFIG[level].label.toLowerCase()}
                 </span>
               )}
             </>
@@ -597,7 +1011,7 @@ export function DailyBrief({
       </header>
 
       {/* ── Action bar ───────────────────────────────────────────── */}
-      {/* flex-wrap: on narrow phones the three buttons overflow the viewport
+      {/* flex-wrap: on narrow phones the buttons overflow the viewport
           otherwise (Regenerate was clipped off-screen); wrapped rows keep
           everything tappable. */}
       <div className="not-prose mb-7 flex justify-end">
@@ -634,6 +1048,84 @@ export function DailyBrief({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
+
+          {/* Desks the brief leads with. Server-stored, so it holds per person
+              rather than per browser. Hidden while a custom prompt is in force:
+              that path is a single pass with the user's own framing, so neither
+              desks nor depth apply to it. */}
+          {!savedPrompt && (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="ghost" title="Choose the desks you follow">
+                    <Compass className="mr-1.5 h-3.5 w-3.5" />
+                    Desks
+                    {followed.length > 0 && (
+                      <span className="ml-1.5 rounded bg-brand/15 px-1 text-[10px] text-brand">
+                        {followed.length}
+                      </span>
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-72">
+                  <DropdownMenuLabel>Desks you follow</DropdownMenuLabel>
+                  <p className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+                    Followed desks lead the brief and are written up first.
+                  </p>
+                  <DropdownMenuSeparator />
+                  {BRIEF_TOPICS.map((t) => {
+                    const count = desks.find((d) => d.topicId === t.id)?.count ?? 0;
+                    return (
+                      <DropdownMenuCheckboxItem
+                        key={t.id}
+                        checked={followed.includes(t.id)}
+                        onCheckedChange={() => toggleDesk(t.id)}
+                        onSelect={(e) => e.preventDefault()}
+                      >
+                        <span className="flex-1">{t.label}</span>
+                        {count > 0 && (
+                          <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
+                            {count}
+                          </span>
+                        )}
+                      </DropdownMenuCheckboxItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Depth. Each level is more SECTIONS, never one longer call — that's
+                  what keeps every request inside the host's function budget. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="ghost" title="How much detail the brief goes into">
+                    <Layers className="mr-1.5 h-3.5 w-3.5" />
+                    {BRIEF_LEVEL_CONFIG[level].label}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-72">
+                  <DropdownMenuLabel>Depth</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {BRIEF_LEVELS.map((l) => (
+                    <DropdownMenuItem
+                      key={l}
+                      onClick={() => changeLevel(l)}
+                      className="flex flex-col items-start gap-0.5"
+                    >
+                      <span className="flex w-full items-center justify-between gap-2">
+                        <span className="font-medium">{BRIEF_LEVEL_CONFIG[l].label}</span>
+                        {l === level && <Check className="h-3.5 w-3.5" />}
+                      </span>
+                      <span className="text-[11px] leading-snug text-muted-foreground">
+                        {BRIEF_LEVEL_CONFIG[l].blurb}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
+
           <Button
             size="sm"
             variant="ghost"
@@ -643,7 +1135,12 @@ export function DailyBrief({
             <Settings className="mr-1.5 h-3.5 w-3.5" />
             Prompt
           </Button>
-          <Button size="sm" variant="brand" onClick={() => stream(undefined, true)} disabled={loading}>
+          <Button
+            size="sm"
+            variant="brand"
+            onClick={() => generate({ force: true })}
+            disabled={loading}
+          >
             {loading ? (
               <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -694,8 +1191,9 @@ export function DailyBrief({
             </button>
           </div>
           <p className="mb-3 text-xs text-muted-foreground">
-            This replaces the default editor prompt. The model still receives your unread articles —
-            you control the framing.
+            Leave this empty for the sectioned brief (a lead, a write-up per desk, a quick-clear
+            list). Fill it in and the brief becomes a single pass with your framing instead —
+            your prompt, the whole queue, one section.
           </p>
           <Textarea
             value={customPrompt}
@@ -728,7 +1226,13 @@ export function DailyBrief({
         </div>
       )}
 
-      {loading && !content && (
+      {note && !error && (
+        <div className="not-prose mb-7 rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+          {note}
+        </div>
+      )}
+
+      {initialLoading && (
         <div className="space-y-3">
           <Skeleton className="h-5 w-2/3" />
           <Skeleton className="h-4 w-full" />
@@ -742,25 +1246,90 @@ export function DailyBrief({
       )}
 
       {/* ── Brief body ───────────────────────────────────────────── */}
-      {content && (
+      {/* One block per planned section, in plan order. Sections stream in
+          independently, so the lead is readable while the desks are still
+          being written — and a section that fails retries on its own. */}
+      {started && (
         <div className="prose-brief max-w-[68ch] text-[1.05rem] leading-[1.65]">
-          <CitedMarkdown citations={citations} onNavigate={(href) => router.push(href)}>
-            {content}
-          </CitedMarkdown>
-          {loading && (
-            <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
-          )}
+          {blocks.map((b) => (
+            <section
+              key={b.key}
+              // Each section is its own markdown root, so `h3:first-child`
+              // zeroes every heading's top margin — the rhythm between sections
+              // has to live on the wrapper instead.
+              className={cn("mt-9 first:mt-0", b.status === "pending" && "opacity-60")}
+            >
+              {b.text.trim() ? (
+                <CitedMarkdown citations={citations} onNavigate={(href) => router.push(href)}>
+                  {blockMarkdown(b)}
+                </CitedMarkdown>
+              ) : (
+                b.label && <h3>{b.label}</h3>
+              )}
+              {b.status === "streaming" && (
+                <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
+              )}
+              {b.status === "pending" && (
+                <div className="not-prose space-y-2 py-1">
+                  <Skeleton className="h-3.5 w-full" />
+                  <Skeleton className="h-3.5 w-4/5" />
+                </div>
+              )}
+              {b.status === "error" && (
+                <div className="not-prose my-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-muted-foreground">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span className="flex-1">
+                    This section didn&apos;t come through
+                    {b.error ? ` — ${b.error}` : ""}.
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-6 gap-1 px-2 text-[11px]"
+                    onClick={() => retrySection(b.key)}
+                  >
+                    <RotateCw className="h-3 w-3" /> Retry
+                  </Button>
+                </div>
+              )}
+            </section>
+          ))}
         </div>
       )}
 
+      {/* Desks this depth level left out — the honest version of "there's more
+          in your queue than this brief covered". */}
+      {!loading && omittedDesks.length > 0 && (
+        <p className="not-prose mt-6 text-xs text-muted-foreground">
+          Also unread, not written up:{" "}
+          {omittedDesks.map((d, i) => (
+            <span key={d.topicId}>
+              {i > 0 ? ", " : ""}
+              {d.label} ({d.count})
+            </span>
+          ))}
+          {level !== "deep" && (
+            <>
+              {" · "}
+              <button
+                onClick={() => changeLevel("deep")}
+                className="underline decoration-border underline-offset-2 hover:decoration-foreground"
+              >
+                go deep to cover them
+              </button>
+            </>
+          )}
+        </p>
+      )}
+
       {/* ── Recall check ────────────────────────────────────────── */}
-      {!loading && <RecallCheck />}
+      {!initialLoading && <RecallCheck />}
 
       {/* ── Weekly synthesis ────────────────────────────────────── */}
-      {!loading && <WeeklySynthesisSection />}
+      {!initialLoading && <WeeklySynthesisSection />}
 
       {/* ── Sources ─────────────────────────────────────────────── */}
-      {!loading && sources.length > 0 && (
+      {sources.length > 0 && (
         <section className="not-prose mt-10">
           <div className="editorial-section-row mb-3">
             <span className="editorial-eyebrow-brand inline-flex items-center gap-2">
@@ -841,7 +1410,7 @@ export function DailyBrief({
       )}
 
       {/* ── Colophon ────────────────────────────────────────────── */}
-      {!loading && content && (
+      {!loading && started && (
         <footer className="not-prose mt-12 flex items-center justify-between border-t border-border pt-4 editorial-eyebrow">
           <span>End of brief · No. {volumeNo}</span>
           <span>
