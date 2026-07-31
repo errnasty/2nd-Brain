@@ -134,16 +134,29 @@ Keep your tone sharp, objective, and extremely concise. Output in clean Markdown
 
 type PlanSection = {
   key: string;
-  kind: "lead" | "topic" | "skip";
+  kind: "lead" | "topic" | "skip" | "external";
   topicId?: string;
   label: string;
   refs: number[];
+  /** Groups of refs that are one story told by several outlets. */
+  stories?: { refs: number[]; sourceCount: number }[];
+  /** Stories from outside the user's feeds, cited as [E1], [E2], … */
+  externals?: {
+    n: number;
+    title: string;
+    outlet: string | null;
+    url: string;
+    topicId: string | null;
+    sourceCount: number;
+  }[];
 };
 
 type Desk = { topicId: string; label: string; count: number; included: boolean };
 
 type BriefPlanResponse = {
   fingerprint: string;
+  /** Order-dependent hash — changes when the trending cron re-ranks the queue. */
+  order?: string;
   count: number;
   windowLabel: string;
   level: BriefLevel;
@@ -166,6 +179,8 @@ type Block = {
   text: string;
   status: BlockStatus;
   error?: string;
+  /** External sources for an "external" block, so its [En] refs can resolve. */
+  externals?: PlanSection["externals"];
 };
 
 function blockMarkdown(b: Block): string {
@@ -371,6 +386,7 @@ export function DailyBrief({
             section: section.key,
             level: plan.level,
             fingerprint: plan.fingerprint,
+            order: plan.order,
           }),
           cache: "no-store",
         });
@@ -491,6 +507,7 @@ export function DailyBrief({
             kind: s.kind,
             label: s.label,
             refs: s.refs,
+            externals: s.externals,
             text: "",
             status: "pending" as BlockStatus,
           })),
@@ -939,11 +956,24 @@ export function DailyBrief({
   // Turn the model's [n] references into tappable inline citations. The source
   // map arrives with the PLAN, before any text, so citations are live from the
   // first token instead of waiting for the whole brief to finish.
-  const citations: Citation[] = sources.map((s) => ({
-    n: s.n,
-    href: `/feeds?article=${s.id}`,
-    title: s.title,
-  }));
+  const citations: Citation[] = [
+    ...sources.map((s) => ({
+      n: s.n,
+      href: `/feeds?article=${s.id}`,
+      title: s.title,
+    })),
+    // "Outside your feeds" cites stories the app has no article row for, so
+    // those chips open the publisher rather than routing into the reader.
+    ...blocks.flatMap((b) =>
+      (b.externals ?? []).map((e) => ({
+        n: e.n,
+        prefix: "E" as const,
+        href: e.url,
+        title: e.outlet ? `${e.title} (${e.outlet})` : e.title,
+        external: true,
+      })),
+    ),
+  ];
 
   return (
     <article className="mx-auto max-w-[1080px] px-1">

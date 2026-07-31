@@ -5,16 +5,20 @@ import {
   briefSettingsKey,
   findSection,
   isBriefLevel,
+  deskRefs,
   leadCandidateRefs,
   planBrief,
+  storyGroupsFor,
   type PlanArticle,
 } from "./brief-plan";
 import { OTHER_TOPIC_ID } from "./topics";
 import {
   MAX_SECTION_TOKENS,
+  externalBlock,
   sectionArticleBlock,
   sectionMaxTokens,
   sectionSystemPrompt,
+  storyBlock,
 } from "./brief-prompts";
 
 /** A queue with several clear desks and a few unclassifiable items. */
@@ -214,5 +218,179 @@ describe("sectionArticleBlock", () => {
     const skip = findSection(planBrief(queue(), { level: "concise" }), "skip")!;
     const block = sectionArticleBlock(skip, inputs, "concise");
     expect(block).toBe("[1] (Feed A) First\n\n[2] (Feed B) Second");
+  });
+});
+
+// ── Story clustering in the plan ────────────────────────────────────────
+// The trending pass groups syndicated copy into one cluster. The planner has to
+// spend its limited slots on distinct STORIES rather than on repeated tellings
+// of the same one — that's most of where the brief's extra coverage comes from.
+
+/** Five articles: three are the same story, two are separate. */
+function clusteredQueue(): PlanArticle[] {
+  return [
+    { title: "NATO weighs fresh sanctions on Russia", clusterId: "c1", trendScore: 0.9 },
+    { title: "Sanctions package advances in Brussels", clusterId: "c1", trendScore: 0.9 },
+    { title: "Russia sanctions move forward, say envoys", clusterId: "c1", trendScore: 0.9 },
+    { title: "OpenAI ships smaller open weights model", clusterId: "c2", trendScore: 0.4 },
+    { title: "Ransomware crew breaches a hospital network", clusterId: "c3", trendScore: 0.2 },
+  ];
+}
+
+describe("storyGroupsFor", () => {
+  it("returns only refs that share a cluster, sorted", () => {
+    const groups = storyGroupsFor(clusteredQueue(), [1, 2, 3, 4, 5]);
+    expect(groups).toEqual([{ refs: [1, 2, 3], sourceCount: 3 }]);
+  });
+
+  it("ignores unclustered articles entirely", () => {
+    const items: PlanArticle[] = [{ title: "a" }, { title: "b" }];
+    expect(storyGroupsFor(items, [1, 2])).toEqual([]);
+  });
+
+  it("only reports the refs it was given", () => {
+    expect(storyGroupsFor(clusteredQueue(), [1, 4, 5])).toEqual([]);
+  });
+});
+
+describe("leadCandidateRefs with clusters", () => {
+  it("offers each story once rather than three copies of the hottest one", () => {
+    const refs = leadCandidateRefs(clusteredQueue(), { count: 3 });
+    expect(refs).toHaveLength(3);
+    // One from c1 (whichever ranked first), plus c2 and c3.
+    expect(refs).toContain(4);
+    expect(refs).toContain(5);
+    expect(refs.filter((r) => r <= 3)).toHaveLength(1);
+  });
+
+  it("ranks a hot story above a cold one that is otherwise stronger", () => {
+    const items: PlanArticle[] = [
+      { title: "A long considered essay", wordCount: 2000, hasFullText: true, trendScore: 0 },
+      { title: "Breaking: everyone is covering this", trendScore: 0.95 },
+    ];
+    expect(leadCandidateRefs(items, { count: 1 })).toEqual([2]);
+  });
+
+  it("still works when nothing has been scored yet", () => {
+    const refs = leadCandidateRefs(queue(), { count: 4 });
+    expect(refs).toHaveLength(4);
+    expect(new Set(refs).size).toBe(4);
+  });
+});
+
+describe("deskRefs", () => {
+  it("caps tellings per story so a desk covers more developments", () => {
+    const items: PlanArticle[] = [
+      ...Array.from({ length: 6 }, (_, i) => ({
+        title: `Wire copy ${i}`,
+        clusterId: "big",
+      })),
+      { title: "A second development", clusterId: "other" },
+      { title: "A third development", clusterId: "third" },
+    ];
+    const refs = deskRefs(items, [1, 2, 3, 4, 5, 6, 7, 8], 5);
+    // Three of the six wire copies, then both other stories — instead of five
+    // copies of one story and nothing else.
+    expect(refs).toEqual([1, 2, 3, 7, 8]);
+  });
+
+  it("respects the article cap", () => {
+    const items = clusteredQueue();
+    expect(deskRefs(items, [1, 2, 3, 4, 5], 2)).toHaveLength(2);
+  });
+
+  it("passes unclustered refs through untouched", () => {
+    const items: PlanArticle[] = Array.from({ length: 4 }, (_, i) => ({ title: `a${i}` }));
+    expect(deskRefs(items, [1, 2, 3, 4], 3)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("planBrief with clusters and externals", () => {
+  it("annotates sections with their same-story groups", () => {
+    const plan = planBrief(clusteredQueue(), { level: "deep" });
+    const skip = findSection(plan, "skip");
+    expect(skip?.stories).toEqual([{ refs: [1, 2, 3], sourceCount: 3 }]);
+  });
+
+  it("adds an external section when candidates are supplied", () => {
+    const plan = planBrief(queue(), {
+      level: "standard",
+      externals: [
+        { title: "A huge story you missed", url: "https://x.com/1", outlet: "Reuters" },
+        { title: "Another one", url: "https://x.com/2" },
+      ],
+    });
+    const external = findSection(plan, "external");
+    expect(external?.kind).toBe("external");
+    // Own numbering space: externals must never claim an [n] that resolves to
+    // an article in the user's queue.
+    expect(external?.refs).toEqual([]);
+    expect(external?.externals?.map((e) => e.n)).toEqual([1, 2]);
+  });
+
+  it("omits the external section at a level that does not include one", () => {
+    const plan = planBrief(queue(), {
+      level: "concise",
+      externals: [{ title: "A huge story", url: "https://x.com/1" }],
+    });
+    expect(findSection(plan, "external")).toBeNull();
+  });
+
+  it("omits the external section when there are no candidates", () => {
+    const plan = planBrief(queue(), { level: "deep", externals: [] });
+    expect(findSection(plan, "external")).toBeNull();
+  });
+
+  it("caps externals at the level's allowance", () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({
+      title: `Story ${i}`,
+      url: `https://x.com/${i}`,
+    }));
+    const plan = planBrief(queue(), { level: "standard", externals: many });
+    expect(findSection(plan, "external")?.externals).toHaveLength(
+      BRIEF_LEVEL_CONFIG.standard.externalPicks,
+    );
+  });
+});
+
+describe("external section prompt", () => {
+  const plan = planBrief(queue(), {
+    level: "deep",
+    externals: [{ title: "A huge story", url: "https://x.com/1", outlet: "Reuters" }],
+  });
+  const section = findSection(plan, "external")!;
+
+  it("tells the model to use E-numbers and never a plain one", () => {
+    const prompt = sectionSystemPrompt(section, "deep");
+    expect(prompt).toContain("[E2]");
+    expect(prompt.toLowerCase()).toContain("never cite a plain number");
+  });
+
+  // No article text was fetched for these — the prompt has to say so, or the
+  // model will confidently expand a headline into detail it was never given.
+  it("warns that only headlines are available", () => {
+    expect(sectionSystemPrompt(section, "deep")).toContain("only headlines");
+  });
+
+  it("stays within the section token ceiling", () => {
+    expect(sectionMaxTokens(section, "deep")).toBeLessThanOrEqual(MAX_SECTION_TOKENS);
+  });
+
+  it("renders each external with its E-number", () => {
+    expect(externalBlock(section)).toContain("[E1] (Reuters) A huge story");
+  });
+});
+
+describe("storyBlock", () => {
+  it("states the groups once, not per member", () => {
+    const plan = planBrief(clusteredQueue(), { level: "deep" });
+    const block = storyBlock(findSection(plan, "skip")!);
+    expect(block).toContain("[1] [2] [3] — one story, 3 outlets");
+    expect(block.match(/one story/g)).toHaveLength(1);
+  });
+
+  it("is empty when no story has more than one telling", () => {
+    const plan = planBrief(queue(), { level: "deep" });
+    expect(storyBlock(findSection(plan, "skip")!)).toBe("");
   });
 });
