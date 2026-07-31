@@ -125,6 +125,17 @@ export const articles = pgTable(
     readLater: boolean("read_later").default(false).notNull(),
     imageUrl: text("image_url"),
     wordCount: integer("word_count"),
+    // ── Trending (derived, written by the trending cron) ────────────────
+    // How hot this story is right now: cross-feed corroboration × velocity ×
+    // recency, plus external heat and personal relevance. See
+    // `src/lib/trending/score.ts`. Zero until the cron has scored it, so every
+    // ordering that uses it MUST tie-break on publish_date — that way an
+    // unscored database (a fresh install, or the desktop app, where no cron
+    // runs) degrades cleanly to newest-first instead of to arbitrary order.
+    trendScore: real("trend_score").default(0).notNull(),
+    /** The story this article is one telling of (`story_clusters.id`). */
+    clusterId: uuid("cluster_id"),
+    trendScoredAt: timestamp("trend_scored_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -162,6 +173,16 @@ export const articles = pgTable(
       .where(sql`not ${t.starred} and not ${t.readLater}`),
     // Supports the desktop⇄cloud sync pull ("changed since cursor").
     userUpdatedIdx: index("articles_user_updated_idx").on(t.userId, t.updatedAt),
+    // The Feeds default view (unread, trending-first) and the brief's queue
+    // read. publish_date is in the index so the tie-break on unscored rows is
+    // served by the same scan.
+    userTrendIdx: index("articles_user_trend_idx").on(
+      t.userId,
+      t.readStatus,
+      t.trendScore.desc(),
+      t.publishDate.desc(),
+    ),
+    clusterIdx: index("articles_cluster_idx").on(t.clusterId),
   }),
 );
 
@@ -239,6 +260,126 @@ export const articleEmbeddings = pgTable(
     userIdx: index("article_embeddings_user_idx").on(t.userId),
   }),
 );
+
+// ── Trending ────────────────────────────────────────────────────────────
+// All four tables are DERIVED: everything in them is recomputed by the
+// trending cron from articles + public signals, so none of them are synced to
+// desktop and any of them can be truncated without data loss.
+
+/**
+ * One real-world story, as told by one or more of a user's feeds. Built by
+ * clustering recent articles on their embeddings, so "Reuters, the FT and
+ * three blogs all covered this" becomes a single row with source_count = 5 —
+ * which is the corroboration signal trending is mostly made of.
+ *
+ * Per-user, because articles are per-user rows: two users subscribed to
+ * different outlets legitimately see different source counts for the same
+ * story, and that difference is the point.
+ */
+export const storyClusters = pgTable(
+  "story_clusters",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    /** Best headline among the members — what the brief calls the story. */
+    title: text("title").notNull(),
+    /** Canonical link: the highest-scoring member's url. */
+    url: text("url"),
+    /** DISTINCT feeds covering it. The anti-spam core of the score: one outlet
+     *  posting five times cannot manufacture corroboration. */
+    sourceCount: integer("source_count").default(1).notNull(),
+    articleCount: integer("article_count").default(1).notNull(),
+    firstSeen: timestamp("first_seen", { withTimezone: true }).defaultNow().notNull(),
+    lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow().notNull(),
+    /** Articles/hour against this cluster's own baseline — burst detection. */
+    velocity: real("velocity").default(0).notNull(),
+    /** External heat (GDELT volume, HN points, Google News rank …), normalized. */
+    externalVolume: real("external_volume").default(0).notNull(),
+    /** Similarity to the user's own notes, cards and followed desks. */
+    personalScore: real("personal_score").default(0).notNull(),
+    /** The blended figure. See `src/lib/trending/score.ts`. */
+    score: real("score").default(0).notNull(),
+    /** Desk id from `src/lib/today/topics.ts`, or "other". */
+    topicId: text("topic_id"),
+    computedAt: timestamp("computed_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userScoreIdx: index("story_clusters_user_score_idx").on(t.userId, t.score.desc()),
+    userSeenIdx: index("story_clusters_user_seen_idx").on(t.userId, t.lastSeen.desc()),
+  }),
+);
+
+/**
+ * Trending terms harvested from public signals (GDELT, Google News, Google
+ * Trends, Hacker News). GLOBAL, not per-user: "what the world is talking about"
+ * is the same question for everyone, so one fetch per cron run serves every
+ * user instead of N fetches hammering the same free endpoints.
+ */
+export const trendingTerms = pgTable(
+  "trending_terms",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Normalized (lowercased, punctuation-stripped) — see topics.ts. */
+    term: text("term").notNull(),
+    /** Which signal produced it: gdelt | gnews | trends | hn. */
+    source: text("source").notNull(),
+    /** 0–1 within its source, so no one signal can dominate the blend. */
+    weight: real("weight").default(0).notNull(),
+    topicId: text("topic_id"),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    termSourceUnique: uniqueIndex("trending_terms_term_source_unique").on(t.term, t.source),
+    fetchedIdx: index("trending_terms_fetched_idx").on(t.fetchedAt.desc()),
+  }),
+);
+
+/**
+ * Big stories from the public signals, kept so the brief can show what the
+ * user's own feeds MISSED. Global for the same reason as `trending_terms`.
+ * Nothing here is ever mixed into the user's article queue — it only feeds the
+ * separate "Top stories you're missing" section.
+ */
+export const externalStories = pgTable(
+  "external_stories",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    url: text("url").notNull(),
+    title: text("title").notNull(),
+    /** Publication name, where the signal gives one. */
+    outlet: text("outlet"),
+    source: text("source").notNull(),
+    topicId: text("topic_id"),
+    /** How big the story is in its source's own units, normalized to 0–1. */
+    volume: real("volume").default(0).notNull(),
+    /** Distinct outlets the signal saw covering it, when it reports that. */
+    sourceCount: integer("source_count").default(1).notNull(),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+    fetchedAt: timestamp("fetched_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    urlUnique: uniqueIndex("external_stories_url_unique").on(t.url),
+    fetchedIdx: index("external_stories_fetched_idx").on(t.fetchedAt.desc(), t.volume.desc()),
+    topicIdx: index("external_stories_topic_idx").on(t.topicId, t.volume.desc()),
+  }),
+);
+
+/**
+ * Per-user cursor for the trending cron. The cron is time-boxed (Netlify kills
+ * functions at ~10s — see `src/lib/rss/sync.ts`), so it processes users
+ * oldest-run-first and stops when the budget runs out; the next run continues
+ * from where it stopped. Exactly the resumption strategy feed sync uses.
+ */
+export const trendingRuns = pgTable("trending_runs", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => profiles.id, { onDelete: "cascade" }),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }).defaultNow().notNull(),
+  clusters: integer("clusters").default(0).notNull(),
+  scored: integer("scored").default(0).notNull(),
+});
 
 // ── Directory: unified permanent storage ────────────────────────────────
 // `folders` continues to be used for *feed* organization. The Directory uses

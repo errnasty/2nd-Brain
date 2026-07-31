@@ -46,7 +46,17 @@ const TABLES: TableCfg[] = [
   { name: "folders", pk: ["id"], userCol: "user_id", exclude: [] },
   { name: "feeds", pk: ["id"], userCol: "user_id", exclude: [] },
   { name: "tags", pk: ["id"], userCol: "user_id", exclude: [] },
-  { name: "articles", pk: ["id"], userCol: "user_id", exclude: [] },
+  // Trending columns are excluded: they're derived from the *whole* article
+  // set by the trending cron, which only runs against the cloud DB. Syncing
+  // them would push zeros from desktop over real cloud scores, and every cron
+  // run would bump updated_at on every article and drag the entire table
+  // across the wire again. Each side computes (or doesn't) its own.
+  {
+    name: "articles",
+    pk: ["id"],
+    userCol: "user_id",
+    exclude: ["trend_score", "cluster_id", "trend_scored_at"],
+  },
   { name: "documents", pk: ["id"], userCol: "user_id", exclude: [] },
   { name: "document_chunks", pk: ["id"], userCol: "user_id", exclude: ["embedding"] },
   { name: "directory_folders", pk: ["id"], userCol: "user_id", exclude: [] },
