@@ -40,6 +40,8 @@ export const ACHIEVEMENTS: Achievement[] = [
   { key: "goal_10", name: "Goal getter", desc: "Hit the daily goal 10 times", emoji: "🎯", test: (s) => c(s, "goalsHit") >= 10 },
   { key: "goal_50", name: "Metronome", desc: "Hit the daily goal 50 times", emoji: "⏱️", test: (s) => c(s, "goalsHit") >= 50 },
   { key: "sessions_10", name: "Regular", desc: "Finish 10 daily sessions", emoji: "🗓️", test: (s) => c(s, "sessionsDone") >= 10 },
+  { key: "briefs_10", name: "Well briefed", desc: "Read 10 daily briefs end to end", emoji: "📰", test: (s) => c(s, "briefsRead") >= 10 },
+  { key: "briefs_50", name: "Desk editor", desc: "Read 50 daily briefs end to end", emoji: "🗞️", test: (s) => c(s, "briefsRead") >= 50 },
   { key: "skill_adept", name: "Specializing", desc: "Take a skill to Adept (Lv7)", emoji: "🔷", test: (s) => s.maxSkillLevel >= 7 },
   { key: "skill_expert", name: "Expertise", desc: "Take a skill to Expert (Lv12)", emoji: "🔮", test: (s) => s.maxSkillLevel >= 12 },
   { key: "skill_virtuoso", name: "Virtuoso", desc: "Take a skill to Legendary (Lv20)", emoji: "🌠", test: (s) => s.maxSkillLevel >= 20 },

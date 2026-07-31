@@ -19,7 +19,10 @@ export type XpSource =
   | "quiz_completed"
   | "deck_finished"
   | "session_complete"
-  | "daily_goal";
+  | "daily_goal"
+  | "brief_read"
+  | "brief_complete"
+  | "brief_source_opened";
 
 /** Base XP per source. card_graded is computed separately (scales with grade);
  *  quiz_completed's caller passes an explicit `amount` from quizXp().
@@ -52,6 +55,18 @@ export const XP_RULES: Record<XpSource, number> = {
   deck_finished: 30,
   session_complete: 40, // finishing a composed "Today's session" end to end
   daily_goal: 50, // auto-granted the moment the daily goal is crossed
+  // Daily Brief. brief_read is the budget for ONE section, SPLIT across the
+  // folders its articles came from — see `briefSectionSplit`. So a section
+  // covering three Data Science articles and one Geopolitics article pays ~4
+  // into Data Science and ~2 into Geopolitics, not 6 into each.
+  //
+  // Reading a whole standard brief comes to roughly 6x5 + 15 = 45, which sits
+  // just above session_complete (40) against a 100 daily goal. That is
+  // deliberate: reading the brief end to end is a comparable daily habit to
+  // finishing a study session, and should feel like one.
+  brief_read: 6,
+  brief_complete: 15,
+  brief_source_opened: 2,
 };
 
 /** Human label for the activity feed. */
@@ -73,6 +88,9 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   deck_finished: "finished a ThinkTank deck",
   session_complete: "finished today's session",
   daily_goal: "hit the daily goal",
+  brief_read: "read a brief section",
+  brief_complete: "read the whole daily brief",
+  brief_source_opened: "opened a source from the brief",
 };
 
 /**
@@ -123,6 +141,11 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   deck_finished: null,
   session_complete: "sessionsDone",
   daily_goal: "goalsHit",
+  // Only completion bumps a counter. Counting sections read would inflate the
+  // achievement roughly fivefold per brief and make "briefs read" meaningless.
+  brief_read: null,
+  brief_complete: "briefsRead",
+  brief_source_opened: null,
 };
 
 export const DAILY_GOAL = 100;
@@ -162,4 +185,77 @@ export function momentumMultiplier(recentGrades: number): number {
 /** The combo step shown in the HUD (0 = no combo, 1.. = "x2 combo" and up). */
 export function momentumStep(recentGrades: number): number {
   return Math.min(Math.max(0, recentGrades), MOMENTUM_CAP);
+}
+
+// ── Daily Brief: splitting one section's XP across folders ──────────────
+
+/**
+ * Divide a section's XP budget among the folders its articles came from,
+ * proportionally to how much of the section each folder accounted for.
+ *
+ * The point is that reading a brief feeds the SKILLS the reading was actually
+ * about. A section covering three Data Science articles and one Geopolitics
+ * article should move the Data Science skill about three times as far — which
+ * it can only do if the budget is divided rather than granted per folder.
+ *
+ * Two properties this has to hold, and neither is automatic:
+ *
+ *   - The parts must sum to exactly `total`. Rounding each share independently
+ *     overshoots (4.5 + 1.5 → 5 + 2 = 7 from a budget of 6), which quietly
+ *     inflates the whole economy in proportion to how many folders a reader
+ *     spreads across. Largest-remainder apportionment fixes the sum.
+ *   - Every contributing folder should get at least 1, or a folder with one
+ *     article in a busy section silently earns nothing and the feature looks
+ *     broken to the person who noticed their article was in there.
+ *
+ * When there are more folders than XP to go round, the minimum wins over
+ * proportionality: the largest contributors get 1 each until the budget is
+ * spent. Handing out zeros to satisfy exact shares would be the worse failure.
+ */
+export function splitXpByWeight(weights: number[], total: number): number[] {
+  const n = weights.length;
+  if (n === 0 || total <= 0) return new Array<number>(n).fill(0);
+
+  const safe = weights.map((w) => Math.max(0, w));
+  const sum = safe.reduce((a, b) => a + b, 0);
+  if (sum <= 0) return new Array<number>(n).fill(0);
+
+  // More folders than there is XP: pay the biggest contributors 1 each.
+  if (n > total) {
+    const order = safe
+      .map((w, i) => ({ i, w }))
+      .sort((a, b) => (b.w !== a.w ? b.w - a.w : a.i - b.i))
+      .slice(0, total);
+    const out = new Array<number>(n).fill(0);
+    for (const { i } of order) out[i] = 1;
+    return out;
+  }
+
+  const exact = safe.map((w) => (w / sum) * total);
+  const out = exact.map((e) => Math.floor(e));
+  let left = total - out.reduce((a, b) => a + b, 0);
+
+  // Largest remainder first, so the sum lands exactly on `total`.
+  const byRemainder = exact
+    .map((e, i) => ({ i, rem: e - Math.floor(e) }))
+    .sort((a, b) => (b.rem !== a.rem ? b.rem - a.rem : a.i - b.i));
+  for (let k = 0; k < byRemainder.length && left > 0; k += 1) {
+    out[byRemainder[k].i] += 1;
+    left -= 1;
+  }
+
+  // Lift any zeroed folder to 1, taking from whoever can most afford it. The
+  // n <= total check above guarantees this terminates with everyone on 1+.
+  for (let i = 0; i < n; i += 1) {
+    if (out[i] > 0) continue;
+    let donor = -1;
+    for (let j = 0; j < n; j += 1) {
+      if (out[j] >= 2 && (donor === -1 || out[j] > out[donor])) donor = j;
+    }
+    if (donor === -1) break;
+    out[donor] -= 1;
+    out[i] += 1;
+  }
+
+  return out;
 }
