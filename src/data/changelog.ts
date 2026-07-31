@@ -27,6 +27,27 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-31-d",
+    date: "July 31, 2026",
+    title: "Decks no longer get stuck saying “Building…”",
+    tag: "fix",
+    summary:
+      "A ThinkTank deck whose build died, or which finished without producing any cards, would sit on a spinner forever — and quietly re-check the server every few seconds while it did. Those decks now say what actually happened and offer a Retry.",
+  },
+  {
+    id: "2026-07-31-c",
+    date: "July 31, 2026",
+    title: "A progress bar that follows you down the brief",
+    tag: "improvement",
+    summary:
+      "The Daily Brief now has a progress bar pinned to the top of the screen, split into one segment per desk, filling as you scroll. Each desk's segment is as wide as that desk is long, so the bar is a real map of the brief rather than an even split.",
+    items: [
+      "Segments turn brand-coloured once a desk has actually counted as read, so you can tell “I scrolled past this” from “this counted”.",
+      "Your progress and the XP you've earned now survive leaving the page — come back to Today later and the bar is where you left it.",
+      "Brief XP is now paid per article rather than per section: every article the brief covers pays into the skill of the folder it came from.",
+    ],
+  },
+  {
     id: "2026-07-31-b",
     date: "July 31, 2026",
     title: "Reading the brief now feeds your skills",

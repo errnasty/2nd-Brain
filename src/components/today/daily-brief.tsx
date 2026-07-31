@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CitedMarkdown, type Citation } from "@/components/ui/cited-markdown";
 import {
@@ -49,6 +49,7 @@ import {
 } from "@/lib/today/brief-plan";
 import { BRIEF_TOPICS } from "@/lib/today/topics";
 import { useBriefReading } from "@/components/today/use-brief-reading";
+import { BriefProgressBar } from "@/components/today/brief-progress-bar";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -976,6 +977,54 @@ export function DailyBrief({
   const readCount = sectionKeys.filter((k) => reading.readKeys.has(k)).length;
   const briefComplete = readableCount > 0 && readCount >= readableCount;
 
+  // ── Scroll-driven progress bar ────────────────────────────────────────
+  // The bar needs the element that actually scrolls. The Today page owns it
+  // (a server component, so it can't hand down a ref), and hard-coding a
+  // selector would break the moment that layout changes — so walk up from our
+  // own root and find the nearest ancestor that scrolls.
+  const rootRef = useRef<HTMLElement | null>(null);
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const [scrollReady, setScrollReady] = useState(false);
+  useEffect(() => {
+    let node = rootRef.current?.parentElement ?? null;
+    while (node) {
+      const overflowY = getComputedStyle(node).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") break;
+      node = node.parentElement;
+    }
+    scrollRef.current = node ?? document.scrollingElement as HTMLElement | null;
+    setScrollReady(Boolean(scrollRef.current));
+  }, []);
+
+  // Section elements, for measuring where each desk sits in the document.
+  const sectionEls = useRef(new Map<string, HTMLElement>());
+  const getSectionEl = useCallback((key: string) => sectionEls.current.get(key) ?? null, []);
+
+  /** One ref callback per section: records the element AND arms dwell tracking. */
+  const sectionRef = useCallback(
+    (key: string) => (el: HTMLElement | null) => {
+      if (el) sectionEls.current.set(key, el);
+      else sectionEls.current.delete(key);
+      return reading.register(key)(el);
+    },
+    [reading],
+  );
+
+  // Memoized: this is an effect dependency in the bar, and rebuilding the
+  // array every render would tear down and re-attach its scroll listeners on
+  // every streamed token.
+  const progressSections = useMemo(
+    () =>
+      blocks
+        .filter((b) => b.kind !== "stored")
+        .map((b) => ({
+          key: b.key,
+          label: b.label,
+          read: reading.readKeys.has(b.key),
+        })),
+    [blocks, reading.readKeys],
+  );
+
   // Turn the model's [n] references into tappable inline citations. The source
   // map arrives with the PLAN, before any text, so citations are live from the
   // first token instead of waiting for the whole brief to finish.
@@ -999,7 +1048,7 @@ export function DailyBrief({
   ];
 
   return (
-    <article className="mx-auto max-w-[1080px] px-1">
+    <article ref={rootRef} className="mx-auto max-w-[1080px] px-1">
       {/* ── Masthead ──────────────────────────────────────────────── */}
       <header className="editorial-rule mb-7 pb-4">
         <div className="mb-3 flex items-baseline justify-between gap-4 editorial-eyebrow">
@@ -1299,34 +1348,32 @@ export function DailyBrief({
       )}
 
       {/* ── Reading progress ─────────────────────────────────────── */}
-      {/* One tick per section, filling as each is actually read. It sits above
-          the body rather than floating, so it's a quiet record of where you are
-          rather than a bar nagging you to finish. */}
+      {/* The bar itself is sticky at the top of the scroll area (see
+          BriefProgressBar); this row carries the numbers, which belong next to
+          the content rather than pinned over it. */}
+      {started && scrollReady && (
+        <BriefProgressBar
+          sections={progressSections}
+          scrollRef={scrollRef}
+          getSectionEl={getSectionEl}
+        />
+      )}
+
       {started && sectionKeys.length > 0 && (
-        <div className="not-prose mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-y border-border/50 py-2.5 text-[11px] text-muted-foreground">
-          <div className="flex items-center gap-1" aria-hidden>
-            {sectionKeys.map((key) => (
-              <span
-                key={key}
-                className={cn(
-                  "h-1 w-6 rounded-full transition-colors duration-500",
-                  reading.readKeys.has(key)
-                    ? "bg-brand"
-                    : isSectionReadable(key)
-                      ? "bg-foreground/20"
-                      : "bg-foreground/10",
-                )}
-              />
-            ))}
-          </div>
+        <div className="not-prose mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] text-muted-foreground">
           <span>
             {briefComplete
               ? "Brief read"
-              : `${readCount} of ${Math.max(readableCount, sectionKeys.length)} sections read`}
+              : `${readCount} of ${Math.max(readableCount, sectionKeys.length)} desks read`}
           </span>
           {reading.earned > 0 && (
             <span className="inline-flex items-center gap-1 text-brand">
               <Sparkles className="h-3 w-3" />+{reading.earned} XP
+            </span>
+          )}
+          {reading.capped && (
+            <span title="You've hit today's ceiling for brief XP — reading still counts, it just stops paying.">
+              daily brief XP maxed
             </span>
           )}
           {reading.streak !== null && reading.streak > 1 && (
@@ -1346,7 +1393,7 @@ export function DailyBrief({
           {blocks.map((b) => (
             <section
               key={b.key}
-              ref={b.kind === "stored" ? undefined : reading.register(b.key)}
+              ref={b.kind === "stored" ? undefined : sectionRef(b.key)}
               // Each section is its own markdown root, so `h3:first-child`
               // zeroes every heading's top margin — the rhythm between sections
               // has to live on the wrapper instead.
