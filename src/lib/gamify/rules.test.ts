@@ -12,6 +12,8 @@ import {
   XP_RULES,
   SOURCE_LABEL,
   SOURCE_COUNTER,
+  DAILY_GOAL,
+  splitXpByWeight,
 } from "./rules";
 
 describe("cardGradeXp", () => {
@@ -115,5 +117,68 @@ describe("rules tables are complete + consistent", () => {
       expect(SOURCE_LABEL[key]).toBeTruthy();
       expect(key in SOURCE_COUNTER).toBe(true);
     }
+  });
+});
+
+describe("splitXpByWeight", () => {
+  it("divides in proportion to each folder's share", () => {
+    expect(splitXpByWeight([3, 1], 8)).toEqual([6, 2]);
+  });
+
+  // Rounding each share independently overshoots (4.5 + 1.5 → 5 + 2 = 7 from a
+  // budget of 6), which would inflate the economy for anyone reading across
+  // several folders.
+  it("always sums to exactly the budget", () => {
+    for (const weights of [[3, 1], [1, 1, 1], [5, 3, 2], [7, 2, 1], [1, 2, 3, 4]]) {
+      for (const total of [6, 15, 7, 10]) {
+        const parts = splitXpByWeight(weights, total);
+        expect(parts.reduce((a, b) => a + b, 0)).toBe(total);
+      }
+    }
+  });
+
+  // A folder with one article in a busy section earning nothing looks broken to
+  // the person who noticed their article was in there.
+  it("never zeroes a contributing folder when the budget allows", () => {
+    const parts = splitXpByWeight([20, 1], 6);
+    expect(parts.every((p) => p >= 1)).toBe(true);
+    expect(parts.reduce((a, b) => a + b, 0)).toBe(6);
+  });
+
+  it("pays the largest contributors first when there is less XP than folders", () => {
+    const parts = splitXpByWeight([5, 4, 3, 2, 1], 3);
+    expect(parts).toEqual([1, 1, 1, 0, 0]);
+    expect(parts.reduce((a, b) => a + b, 0)).toBe(3);
+  });
+
+  it("gives a single folder the whole budget", () => {
+    expect(splitXpByWeight([4], 6)).toEqual([6]);
+  });
+
+  it("returns zeros for empty, zero-weight or zero-budget input", () => {
+    expect(splitXpByWeight([], 6)).toEqual([]);
+    expect(splitXpByWeight([1, 2], 0)).toEqual([0, 0]);
+    expect(splitXpByWeight([0, 0], 6)).toEqual([0, 0]);
+  });
+
+  it("is deterministic for equal weights", () => {
+    expect(splitXpByWeight([1, 1, 1], 7)).toEqual(splitXpByWeight([1, 1, 1], 7));
+    expect(splitXpByWeight([1, 1, 1], 7).reduce((a, b) => a + b, 0)).toBe(7);
+  });
+});
+
+describe("brief XP economy", () => {
+  it("keeps a full standard brief in the same range as a study session", () => {
+    // 5 desks + lead + skip ≈ 7 sections, plus the completion bonus.
+    const wholeBrief = 7 * XP_RULES.brief_read + XP_RULES.brief_complete;
+    expect(wholeBrief).toBeGreaterThan(XP_RULES.session_complete);
+    expect(wholeBrief).toBeLessThan(DAILY_GOAL);
+  });
+
+  // Reading is the input, remembering is the outcome — a brief section must
+  // not out-earn actually retrieving something.
+  it("pays a section less than making cards or finishing a deck", () => {
+    expect(XP_RULES.brief_read).toBeLessThan(XP_RULES.cards_made);
+    expect(XP_RULES.brief_read).toBeLessThan(XP_RULES.deck_finished);
   });
 });

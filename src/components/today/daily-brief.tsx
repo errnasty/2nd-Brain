@@ -48,6 +48,7 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import { BRIEF_TOPICS } from "@/lib/today/topics";
+import { useBriefReading } from "@/components/today/use-brief-reading";
 import { toast } from "sonner";
 
 type BriefSource = {
@@ -134,16 +135,29 @@ Keep your tone sharp, objective, and extremely concise. Output in clean Markdown
 
 type PlanSection = {
   key: string;
-  kind: "lead" | "topic" | "skip";
+  kind: "lead" | "topic" | "skip" | "external";
   topicId?: string;
   label: string;
   refs: number[];
+  /** Groups of refs that are one story told by several outlets. */
+  stories?: { refs: number[]; sourceCount: number }[];
+  /** Stories from outside the user's feeds, cited as [E1], [E2], … */
+  externals?: {
+    n: number;
+    title: string;
+    outlet: string | null;
+    url: string;
+    topicId: string | null;
+    sourceCount: number;
+  }[];
 };
 
 type Desk = { topicId: string; label: string; count: number; included: boolean };
 
 type BriefPlanResponse = {
   fingerprint: string;
+  /** Order-dependent hash — changes when the trending cron re-ranks the queue. */
+  order?: string;
   count: number;
   windowLabel: string;
   level: BriefLevel;
@@ -166,6 +180,8 @@ type Block = {
   text: string;
   status: BlockStatus;
   error?: string;
+  /** External sources for an "external" block, so its [En] refs can resolve. */
+  externals?: PlanSection["externals"];
 };
 
 function blockMarkdown(b: Block): string {
@@ -371,6 +387,7 @@ export function DailyBrief({
             section: section.key,
             level: plan.level,
             fingerprint: plan.fingerprint,
+            order: plan.order,
           }),
           cache: "no-store",
         });
@@ -491,6 +508,7 @@ export function DailyBrief({
             kind: s.kind,
             label: s.label,
             refs: s.refs,
+            externals: s.externals,
             text: "",
             status: "pending" as BlockStatus,
           })),
@@ -936,14 +954,49 @@ export function DailyBrief({
   const dateLine = now.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" });
   const greeting = greetingFor(now);
 
+  // Reading rewards. Sections earn XP into the SKILL of the folder their
+  // articles came from, so a brief that was mostly Data Science moves Data
+  // Science. A section counts only after it has been genuinely dwelt on — see
+  // use-brief-reading.ts.
+  const sectionKeys = blocks.filter((b) => b.kind !== "stored").map((b) => b.key);
+  const isSectionReadable = useCallback(
+    (key: string) => {
+      const block = blocks.find((b) => b.key === key);
+      return Boolean(block && block.status === "done" && block.text.trim().length > 0);
+    },
+    [blocks],
+  );
+  const reading = useBriefReading({
+    sectionKeys,
+    isReadable: isSectionReadable,
+    level,
+    enabled: started && sectionKeys.length > 0,
+  });
+  const readableCount = sectionKeys.filter(isSectionReadable).length;
+  const readCount = sectionKeys.filter((k) => reading.readKeys.has(k)).length;
+  const briefComplete = readableCount > 0 && readCount >= readableCount;
+
   // Turn the model's [n] references into tappable inline citations. The source
   // map arrives with the PLAN, before any text, so citations are live from the
   // first token instead of waiting for the whole brief to finish.
-  const citations: Citation[] = sources.map((s) => ({
-    n: s.n,
-    href: `/feeds?article=${s.id}`,
-    title: s.title,
-  }));
+  const citations: Citation[] = [
+    ...sources.map((s) => ({
+      n: s.n,
+      href: `/feeds?article=${s.id}`,
+      title: s.title,
+    })),
+    // "Outside your feeds" cites stories the app has no article row for, so
+    // those chips open the publisher rather than routing into the reader.
+    ...blocks.flatMap((b) =>
+      (b.externals ?? []).map((e) => ({
+        n: e.n,
+        prefix: "E" as const,
+        href: e.url,
+        title: e.outlet ? `${e.title} (${e.outlet})` : e.title,
+        external: true,
+      })),
+    ),
+  ];
 
   return (
     <article className="mx-auto max-w-[1080px] px-1">
@@ -1245,6 +1298,45 @@ export function DailyBrief({
         </div>
       )}
 
+      {/* ── Reading progress ─────────────────────────────────────── */}
+      {/* One tick per section, filling as each is actually read. It sits above
+          the body rather than floating, so it's a quiet record of where you are
+          rather than a bar nagging you to finish. */}
+      {started && sectionKeys.length > 0 && (
+        <div className="not-prose mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 border-y border-border/50 py-2.5 text-[11px] text-muted-foreground">
+          <div className="flex items-center gap-1" aria-hidden>
+            {sectionKeys.map((key) => (
+              <span
+                key={key}
+                className={cn(
+                  "h-1 w-6 rounded-full transition-colors duration-500",
+                  reading.readKeys.has(key)
+                    ? "bg-brand"
+                    : isSectionReadable(key)
+                      ? "bg-foreground/20"
+                      : "bg-foreground/10",
+                )}
+              />
+            ))}
+          </div>
+          <span>
+            {briefComplete
+              ? "Brief read"
+              : `${readCount} of ${Math.max(readableCount, sectionKeys.length)} sections read`}
+          </span>
+          {reading.earned > 0 && (
+            <span className="inline-flex items-center gap-1 text-brand">
+              <Sparkles className="h-3 w-3" />+{reading.earned} XP
+            </span>
+          )}
+          {reading.streak !== null && reading.streak > 1 && (
+            <span className="inline-flex items-center gap-1">
+              🔥 {reading.streak}-day brief streak
+            </span>
+          )}
+        </div>
+      )}
+
       {/* ── Brief body ───────────────────────────────────────────── */}
       {/* One block per planned section, in plan order. Sections stream in
           independently, so the lead is readable while the desks are still
@@ -1254,17 +1346,56 @@ export function DailyBrief({
           {blocks.map((b) => (
             <section
               key={b.key}
+              ref={b.kind === "stored" ? undefined : reading.register(b.key)}
               // Each section is its own markdown root, so `h3:first-child`
               // zeroes every heading's top margin — the rhythm between sections
               // has to live on the wrapper instead.
               className={cn("mt-9 first:mt-0", b.status === "pending" && "opacity-60")}
             >
               {b.text.trim() ? (
-                <CitedMarkdown citations={citations} onNavigate={(href) => router.push(href)}>
+                <CitedMarkdown
+                  citations={citations}
+                  onNavigate={(href) => {
+                    // Opening a cited source credits that article's own folder,
+                    // which is usually a different skill from the section's mix.
+                    const id = href.startsWith("/feeds?article=")
+                      ? href.slice("/feeds?article=".length)
+                      : null;
+                    if (id) reading.reportSourceOpened(id);
+                    router.push(href);
+                  }}
+                >
                   {blockMarkdown(b)}
                 </CitedMarkdown>
               ) : (
                 b.label && <h3>{b.label}</h3>
+              )}
+              {/* What this section paid, and into which skill. Shown after the
+                  fact rather than promised up front — the point is to notice
+                  where your attention went, not to shop for XP. */}
+              {(reading.gains.get(b.key)?.length ?? 0) > 0 && (
+                <div className="not-prose mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                  {reading.gains.get(b.key)!.map((g) => (
+                    <span
+                      key={g.name}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5",
+                        g.leveledUp
+                          ? "border-brand/40 bg-brand/10 text-brand"
+                          : "border-border/60 bg-muted/40",
+                      )}
+                      title={
+                        g.leveledUp
+                          ? `${g.name} levelled up`
+                          : `+${g.amount} XP into ${g.name}`
+                      }
+                    >
+                      <span aria-hidden>{g.emoji ?? "📚"}</span>
+                      +{g.amount} {g.name}
+                      {g.leveledUp && <Sparkles className="h-3 w-3" />}
+                    </span>
+                  ))}
+                </div>
               )}
               {b.status === "streaming" && (
                 <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-foreground/40 align-middle" />
@@ -1294,6 +1425,39 @@ export function DailyBrief({
               )}
             </section>
           ))}
+        </div>
+      )}
+
+      {/* A quiet end-of-brief marker. The brief has no natural bottom — it just
+          stops — so finishing it should feel like finishing something. */}
+      {started && briefComplete && (
+        <div className="not-prose mt-8 rounded-lg border border-brand/30 bg-brand/5 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <CheckCheck className="h-4 w-4 shrink-0 text-brand" />
+            <span className="font-medium">That&apos;s the brief.</span>
+            {reading.earned > 0 && (
+              <span className="text-muted-foreground">
+                +{reading.earned} XP across{" "}
+                {new Set([...reading.gains.values()].flat().map((g) => g.name)).size || 1}{" "}
+                {new Set([...reading.gains.values()].flat().map((g) => g.name)).size === 1
+                  ? "skill"
+                  : "skills"}
+                .
+              </span>
+            )}
+            {reading.streak !== null && reading.streak > 1 && (
+              <span className="text-muted-foreground">
+                🔥 {reading.streak} days running.
+              </span>
+            )}
+          </div>
+          {unreadSourceIds.length > 0 && (
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {unreadSourceIds.length} cited{" "}
+              {unreadSourceIds.length === 1 ? "article is" : "articles are"} still unread — the
+              sources below are one tap away.
+            </p>
+          )}
         </div>
       )}
 

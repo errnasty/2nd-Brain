@@ -16,23 +16,28 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import {
+  externalBlock,
   sectionArticleBlock,
   sectionMaxTokens,
   sectionPreamble,
   sectionSystemPrompt,
+  storyBlock,
 } from "@/lib/today/brief-prompts";
 import {
   bodyCharLimit,
   briefFingerprint,
+  briefOrderFingerprint,
   briefSourceMap,
+  fetchBodies,
   fetchPlanRows,
-  fetchSectionRows,
   queueLimit,
   stripHtml,
   toArticleInputs,
   toPlanArticles,
   unreadBriefIds,
 } from "@/lib/today/brief-queue";
+import { loadExternalStories } from "@/lib/trending/signals";
+import { TITLE_SHINGLE_THRESHOLD, jaccard, titleShingles } from "@/lib/trending/cluster";
 import type { BriefSourceRef } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
@@ -120,13 +125,24 @@ export async function GET(req: Request) {
   const levelParam = params.get("level");
   const level = isBriefLevel(levelParam) ? levelParam : prefs.level;
   const priority = prefs.priority;
-  const { rows, windowLabel } = await fetchPlanRows(
-    userId,
-    queueLimit(BRIEF_LEVEL_CONFIG[level].articleLimit),
-  );
-  const plan = planBrief(toPlanArticles(rows), { level, priority });
+  const cfg = BRIEF_LEVEL_CONFIG[level];
+  const [{ rows, windowLabel }, externals] = await Promise.all([
+    fetchPlanRows(userId, queueLimit(cfg.articleLimit)),
+    // Fail-soft and independent: no trending run yet, or all four public
+    // signals down, simply means no "outside your feeds" section today.
+    cfg.externalPicks > 0
+      ? loadExternalStories(EXTERNAL_CANDIDATE_POOL).catch(() => [])
+      : Promise.resolve([]),
+  ]);
+  const plan = planBrief(toPlanArticles(rows), {
+    level,
+    priority,
+    externals: pickExternals(externals, rows, priority),
+  });
+  const ids = rows.map((r) => r.id);
   return Response.json({
-    fingerprint: briefFingerprint(rows.map((r) => r.id)),
+    fingerprint: briefFingerprint(ids),
+    order: briefOrderFingerprint(ids),
     count: rows.length,
     windowLabel,
     level,
@@ -137,12 +153,66 @@ export async function GET(req: Request) {
   });
 }
 
+/**
+ * External stories considered before ranking. Wider than any level uses, so the
+ * "already in your feeds" filter below still has candidates left after it
+ * discards the overlap.
+ */
+const EXTERNAL_CANDIDATE_POOL = 40;
+
+/**
+ * Narrow the global external stories down to this user's genuine blind spots.
+ *
+ * The section's entire claim is "your feeds did not carry this", so a story
+ * already sitting in the user's queue has to be dropped — showing it would be
+ * both wrong and exactly the duplication clustering exists to remove. Overlap
+ * is detected on normalized title shingles, the same cheap signal the
+ * clustering pass uses for syndicated copy, which needs no embedding for text
+ * the app deliberately never fetched.
+ */
+function pickExternals(
+  externals: {
+    title: string;
+    url: string;
+    outlet: string | null;
+    topicId: string | null;
+    volume: number;
+    sourceCount: number;
+  }[],
+  rows: { title: string }[],
+  priority: string[],
+) {
+  if (externals.length === 0) return [];
+  const owned = rows.map((r) => titleShingles(r.title));
+  const followed = new Set(priority);
+
+  return externals
+    .filter((e) => {
+      const shingles = titleShingles(e.title);
+      return !owned.some((o) => jaccard(o, shingles) >= TITLE_SHINGLE_THRESHOLD);
+    })
+    .map((e) => ({
+      title: e.title,
+      url: e.url,
+      outlet: e.outlet,
+      topicId: e.topicId,
+      sourceCount: e.sourceCount,
+      volume: e.volume,
+      // A blind spot on a desk the user actively follows is more worth being
+      // told about than one on a desk they never read.
+      rank: e.volume + (e.topicId && followed.has(e.topicId) ? 0.5 : 0),
+    }))
+    .sort((a, b) => b.rank - a.rank);
+}
+
 type PostBody = {
-  /** A section key from the plan ("lead", "topic:ai", "skip"). */
+  /** A section key from the plan ("lead", "topic:ai", "skip", "external"). */
   section?: string;
   level?: string;
-  /** The fingerprint the client planned against, to catch drift. */
+  /** The id-SET fingerprint the client planned against. */
   fingerprint?: string;
+  /** The id-ORDER fingerprint — catches a trending re-rank of the same set. */
+  order?: string;
   /** Legacy single-pass mode: the user's own framing for the whole brief. */
   systemPrompt?: string;
   force?: boolean;
@@ -203,11 +273,12 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
   const cfg = BRIEF_LEVEL_CONFIG[level];
   const bodyChars = bodyCharLimit(cfg.bodyChars);
 
-  const { rows, windowLabel } = await fetchSectionRows(
-    userId,
-    queueLimit(cfg.articleLimit),
-    bodyChars * RAW_FULLTEXT_MULTIPLIER,
-  );
+  // Plan against the LIGHT rows — no bodies. The pool is now up to 120
+  // articles while a section cites at most a dozen, so fetching every body to
+  // use ten of them would ship close to a megabyte out of Postgres on a request
+  // that also has to run a model call inside ten seconds. Bodies come after the
+  // section is known, for its refs only.
+  const { rows, windowLabel } = await fetchPlanRows(userId, queueLimit(cfg.articleLimit));
   if (rows.length === 0) {
     return new Response(
       "No unread articles to brief on. Add some feeds and sync them, then come back.",
@@ -215,27 +286,65 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     );
   }
 
-  const fingerprint = briefFingerprint(rows.map((r) => r.id));
-  // The client planned against a specific unread set. If a sync landed in
-  // between, its [n] numbers no longer mean what it thinks — send it back to
-  // re-plan rather than writing a section against shifted numbering.
-  if (body.fingerprint && body.fingerprint !== fingerprint) {
-    return Response.json({ error: "queue-changed", fingerprint }, { status: 409 });
+  const ids = rows.map((r) => r.id);
+  const fingerprint = briefFingerprint(ids);
+  const order = briefOrderFingerprint(ids);
+  // Two ways the queue can move under a half-generated brief, both of which
+  // invalidate its [n] numbering: a sync changed the SET, or the trending cron
+  // re-ranked the same set. Either way the client re-plans; only the first is
+  // ever surfaced to the user as "new articles".
+  if (
+    (body.fingerprint && body.fingerprint !== fingerprint) ||
+    (body.order && body.order !== order)
+  ) {
+    return Response.json({ error: "queue-changed", fingerprint, order }, { status: 409 });
   }
 
-  const plan = planBrief(toPlanArticles(rows), { level, priority: prefs.priority });
+  const planArticles = toPlanArticles(rows);
+  // The external section needs its candidates back to regenerate the same
+  // [E n] numbering the plan handed the client. Only fetched when this level
+  // actually has that section.
+  const externals =
+    cfg.externalPicks > 0 && body.section === "external"
+      ? pickExternals(
+          await loadExternalStories(EXTERNAL_CANDIDATE_POOL).catch(() => []),
+          rows,
+          prefs.priority,
+        )
+      : [];
+
+  const plan = planBrief(planArticles, { level, priority: prefs.priority, externals });
   const section = body.section ? findSection(plan, body.section) : plan.sections[0];
   if (!section) {
     return new Response("No such brief section", { status: 404 });
   }
 
-  const inputs = toArticleInputs(rows, section.refs);
   const deskCount = plan.desks.find((d) => d.topicId === section.topicId)?.count;
   const preamble = sectionPreamble(section, {
     windowLabel,
     totalCount: rows.length,
     deskCount,
   });
+
+  let inputBlock: string;
+  if (section.kind === "external") {
+    inputBlock = externalBlock(section);
+  } else {
+    // Skip works off titles alone, which is what makes covering the whole queue
+    // in one call affordable — fetching 120 bodies for it would undo that.
+    const bodies =
+      section.kind === "skip"
+        ? new Map<string, string | null>()
+        : await fetchBodies(
+            userId,
+            section.refs.map((n) => rows[n - 1]?.id).filter((id): id is string => Boolean(id)),
+            bodyChars * RAW_FULLTEXT_MULTIPLIER,
+          );
+    const stories = storyBlock(section);
+    inputBlock = [sectionArticleBlock(section, toArticleInputs(rows, section.refs, bodies), level), stories]
+      .filter(Boolean)
+      .join("\n\n");
+  }
 
   const result = streamText({
     model: await userSmartModel(),
@@ -249,7 +358,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
             // same desk tomorrow, when most of the queue is unchanged — reuses
             // these tokens instead of re-paying for them.
             type: "text",
-            text: `Articles for this section:\n${preamble}\n\n${sectionArticleBlock(section, inputs, level)}`,
+            text: `Articles for this section:\n${preamble}\n\n${inputBlock}`,
             providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
           },
           { type: "text", text: `Write the "${section.label}" section now.` },
@@ -266,6 +375,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     headers: {
       "content-type": "text/plain; charset=utf-8",
       "x-brief-fingerprint": fingerprint,
+      "x-brief-order": order,
       "x-brief-section": section.key,
     },
   });
@@ -284,10 +394,9 @@ async function legacyBrief(
   req: Request,
 ): Promise<Response> {
   const bodyChars = bodyCharLimit(BRIEF_LEVEL_CONFIG.standard.bodyChars);
-  const { rows, windowLabel } = await fetchSectionRows(
+  const { rows, windowLabel } = await fetchPlanRows(
     userId,
     queueLimit(BRIEF_LEVEL_CONFIG.standard.articleLimit),
-    bodyChars * RAW_FULLTEXT_MULTIPLIER,
   );
   if (rows.length === 0) {
     return new Response(
@@ -317,9 +426,17 @@ async function legacyBrief(
     }
   }
 
+  // The custom-prompt path briefs on the whole queue in one call, so unlike a
+  // section it genuinely does need every body.
+  const bodies = await fetchBodies(
+    userId,
+    rows.map((r) => r.id),
+    bodyChars * RAW_FULLTEXT_MULTIPLIER,
+  );
   const articleBlock = rows
     .map((r, i) => {
-      const text = r.fullText ? stripHtml(r.fullText) : r.excerpt ?? "";
+      const raw = bodies.get(r.id) ?? r.excerpt ?? "";
+      const text = raw ? stripHtml(raw) : "";
       const trimmed = text.length > bodyChars ? `${text.slice(0, bodyChars)}…` : text;
       return `[${i + 1}] (${r.feedTitle}) ${r.title}\n${trimmed}`.trim();
     })

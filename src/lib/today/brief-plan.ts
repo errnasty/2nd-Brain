@@ -70,6 +70,8 @@ export type LevelConfig = {
   includeOther: boolean;
   /** Append the low-signal "Quick clear" list. */
   includeSkip: boolean;
+  /** Big stories from outside the user's feeds. 0 = section omitted. */
+  externalPicks: number;
 };
 
 /**
@@ -81,7 +83,7 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
   concise: {
     label: "Concise",
     blurb: "The lead and a quick-clear list. Two short passes.",
-    articleLimit: 40,
+    articleLimit: 50,
     bodyChars: 700,
     leadCandidates: 8,
     leadPicks: 3,
@@ -95,17 +97,18 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     topicOpenQuestion: false,
     includeOther: false,
     includeSkip: true,
+    externalPicks: 0,
   },
   standard: {
     label: "Standard",
-    blurb: "The lead plus your three busiest desks.",
-    articleLimit: 50,
+    blurb: "The lead, your five busiest desks, and what your feeds missed.",
+    articleLimit: 80,
     bodyChars: 900,
     leadCandidates: 10,
     leadPicks: 3,
     leadSentences: 3,
     leadWatch: false,
-    maxTopics: 3,
+    maxTopics: 5,
     minTopicSize: 2,
     maxTopicRefs: 8,
     topicBullets: 4,
@@ -113,11 +116,12 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     topicOpenQuestion: false,
     includeOther: false,
     includeSkip: true,
+    externalPicks: 3,
   },
   deep: {
     label: "Deep",
     blurb: "Every desk with a write-up, tensions and open questions.",
-    articleLimit: 60,
+    articleLimit: 120,
     bodyChars: 1300,
     leadCandidates: 12,
     // Three, not four: the lead's ceiling is a time budget (see
@@ -126,7 +130,7 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     leadPicks: 3,
     leadSentences: 4,
     leadWatch: true,
-    maxTopics: 6,
+    maxTopics: 8,
     minTopicSize: 1,
     maxTopicRefs: 10,
     topicBullets: 5,
@@ -134,10 +138,36 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     topicOpenQuestion: true,
     includeOther: true,
     includeSkip: true,
+    externalPicks: 5,
   },
 };
 
-export type SectionKind = "lead" | "topic" | "skip";
+export type SectionKind = "lead" | "topic" | "skip" | "external";
+
+/**
+ * Refs that are the same real-world story, told by different outlets.
+ *
+ * Carried on the section (rather than left for the model to notice) because it
+ * is known deterministically: the trending pass already clustered the queue, so
+ * the brief can simply be TOLD that [3], [7] and [12] are one story. That turns
+ * six syndicated copies of a wire report from six wasted slots into one item
+ * citing six sources — which is most of where the brief's new depth comes from.
+ */
+export type StoryGroup = {
+  refs: number[];
+  /** Distinct feeds carrying it. */
+  sourceCount: number;
+};
+
+/** A big story from outside the user's feeds, cited as `[E1]`, `[E2]`, … */
+export type ExternalRef = {
+  n: number;
+  title: string;
+  outlet: string | null;
+  url: string;
+  topicId: string | null;
+  sourceCount: number;
+};
 
 export type PlannedSection = {
   /** Stable id the client sends back to generate this one section. */
@@ -148,6 +178,10 @@ export type PlannedSection = {
   label: string;
   /** The `[n]` numbers this section may cite. */
   refs: number[];
+  /** Multi-source stories among this section's refs. Only groups of 2+. */
+  stories?: StoryGroup[];
+  /** External stories, for the "you're missing" section only. */
+  externals?: ExternalRef[];
 };
 
 export type BriefPlan = {
@@ -162,10 +196,46 @@ export type PlanArticle = ClassifiableArticle & {
   wordCount?: number | null;
   /** Whether the full article body was fetched — a proxy for substance. */
   hasFullText?: boolean;
+  /** From the trending pass; 0 when unscored. */
+  trendScore?: number | null;
+  /** The story cluster this article belongs to, when it has one. */
+  clusterId?: string | null;
+};
+
+/** An external story as the planner receives it, before `[E n]` numbering. */
+export type ExternalCandidate = {
+  title: string;
+  url: string;
+  outlet?: string | null;
+  topicId?: string | null;
+  sourceCount?: number;
+  volume?: number;
 };
 
 const LEAD_SECTION_LABEL = "The lead";
 const SKIP_SECTION_LABEL = "Quick clear";
+const EXTERNAL_SECTION_LABEL = "Outside your feeds";
+
+/**
+ * Group a set of refs by the story cluster they belong to, keeping only groups
+ * with more than one telling — a single-source story needs no annotation.
+ * Ordered by the first ref so the prompt reads in `[n]` order.
+ */
+export function storyGroupsFor(items: PlanArticle[], refs: number[]): StoryGroup[] {
+  const byCluster = new Map<string, number[]>();
+  for (const ref of refs) {
+    const item = items[ref - 1];
+    const id = item?.clusterId;
+    if (!id) continue;
+    const existing = byCluster.get(id);
+    if (existing) existing.push(ref);
+    else byCluster.set(id, [ref]);
+  }
+  return [...byCluster.values()]
+    .filter((group) => group.length > 1)
+    .map((group) => ({ refs: [...group].sort((a, b) => a - b), sourceCount: group.length }))
+    .sort((a, b) => a.refs[0] - b.refs[0]);
+}
 
 /** Rough substance signal: a fetched 2000-word essay outranks a 3-line stub. */
 function substanceScore(a: PlanArticle): number {
@@ -181,9 +251,15 @@ function substanceScore(a: PlanArticle): number {
  * Which articles the lead section gets to choose between. The model picks the
  * final items; this only narrows the candidate set so one call stays small.
  *
- * Preference order: the desks the user cares about, then articles with real
- * body text behind them, then the newest. Returned in ascending `[n]` order so
- * the numbering in the prompt reads naturally.
+ * Preference order: how hot the story is, then the desks the user cares about,
+ * then articles with real body text behind them, then the newest. Returned in
+ * ascending `[n]` order so the numbering in the prompt reads naturally.
+ *
+ * Candidates are deduplicated by story cluster: offering the lead ten articles
+ * that are really three stories wastes most of the slate and invites the model
+ * to write the same item twice. One telling per story goes forward — the best
+ * one — and the section prompt is separately told which other refs cover it, so
+ * nothing is lost from the citation.
  */
 export function leadCandidateRefs(
   items: PlanArticle[],
@@ -202,7 +278,12 @@ export function leadCandidateRefs(
     const recency = items.length > 1 ? (1 - i / (items.length - 1)) * 1.5 : 1.5;
     return {
       ref,
+      clusterId: a.clusterId ?? null,
       score:
+        // Weighted to outrank every other signal combined: a story six outlets
+        // covered in two hours belongs in the lead even if it arrived as a
+        // short wire stub on a desk the user never picked.
+        (a.trendScore ?? 0) * 8 +
         (onPriorityDesk ? 3 : 0) +
         (a.hasFullText ? 2 : 0) +
         substanceScore(a) +
@@ -210,11 +291,57 @@ export function leadCandidateRefs(
     };
   });
 
-  return scored
-    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.ref - b.ref))
-    .slice(0, Math.max(0, opts.count))
-    .map((s) => s.ref)
-    .sort((a, b) => a - b);
+  const ranked = scored.sort((a, b) =>
+    b.score !== a.score ? b.score - a.score : a.ref - b.ref,
+  );
+
+  const seenClusters = new Set<string>();
+  const picked: number[] = [];
+  for (const item of ranked) {
+    if (picked.length >= Math.max(0, opts.count)) break;
+    if (item.clusterId) {
+      if (seenClusters.has(item.clusterId)) continue;
+      seenClusters.add(item.clusterId);
+    }
+    picked.push(item.ref);
+  }
+
+  return picked.sort((a, b) => a - b);
+}
+
+/**
+ * Tellings of one story that a single desk section will be shown. Three is
+ * enough to establish corroboration and to let the model notice that outlets
+ * are framing it differently; past that it's the same facts again.
+ */
+export const MAX_REFS_PER_STORY = 3;
+
+/**
+ * A desk's refs, capped for one model call.
+ *
+ * Capping by ARTICLE alone is what made the old brief thin: a desk with eight
+ * slots and one wire story syndicated six times covered two developments and
+ * called it a day. Capping tellings-per-story instead spends those eight slots
+ * on five or six distinct developments, which is the same call size and far
+ * more of the queue actually accounted for.
+ *
+ * Refs arrive in queue order, which is trending order, so what survives the cap
+ * is the desk's hottest material rather than merely its newest.
+ */
+export function deskRefs(items: PlanArticle[], refs: number[], maxRefs: number): number[] {
+  const perCluster = new Map<string, number>();
+  const out: number[] = [];
+  for (const ref of refs) {
+    if (out.length >= maxRefs) break;
+    const clusterId = items[ref - 1]?.clusterId;
+    if (clusterId) {
+      const used = perCluster.get(clusterId) ?? 0;
+      if (used >= MAX_REFS_PER_STORY) continue;
+      perCluster.set(clusterId, used + 1);
+    }
+    out.push(ref);
+  }
+  return out;
 }
 
 /**
@@ -224,7 +351,7 @@ export function leadCandidateRefs(
  */
 export function planBrief(
   items: PlanArticle[],
-  opts: { level?: BriefLevel; priority?: string[] } = {},
+  opts: { level?: BriefLevel; priority?: string[]; externals?: ExternalCandidate[] } = {},
 ): BriefPlan {
   const level = opts.level ?? DEFAULT_BRIEF_LEVEL;
   const cfg = BRIEF_LEVEL_CONFIG[level];
@@ -232,12 +359,19 @@ export function planBrief(
 
   if (items.length === 0) return { level, sections: [], desks: [] };
 
+  const leadRefs = leadCandidateRefs(items, { priority, count: cfg.leadCandidates });
   const sections: PlannedSection[] = [
     {
       key: "lead",
       kind: "lead",
       label: LEAD_SECTION_LABEL,
-      refs: leadCandidateRefs(items, { priority, count: cfg.leadCandidates }),
+      refs: leadRefs,
+      // The lead's candidates are already one-per-story, so its groups tell the
+      // model which OTHER refs corroborate each candidate — that's what lets a
+      // lead item cite six outlets while only one of them was offered.
+      stories: storyGroupsFor(items, items.map((_, i) => i + 1)).filter((g) =>
+        g.refs.some((r) => leadRefs.includes(r)),
+      ),
     },
   ];
 
@@ -250,12 +384,14 @@ export function planBrief(
   const chosenIds = new Set(chosen.map((b) => b.topicId));
 
   for (const b of chosen) {
+    const refs = deskRefs(items, b.refs, cfg.maxTopicRefs);
     sections.push({
       key: `topic:${b.topicId}`,
       kind: "topic",
       topicId: b.topicId,
       label: b.label,
-      refs: b.refs.slice(0, cfg.maxTopicRefs),
+      refs,
+      stories: storyGroupsFor(items, refs),
     });
   }
 
@@ -266,6 +402,29 @@ export function planBrief(
       label: SKIP_SECTION_LABEL,
       // Titles only, so the whole queue fits in one small call.
       refs: items.map((_, i) => i + 1),
+      // Duplicate coverage is the most common reason an item is skippable, and
+      // it's the one thing the model can't see from titles alone.
+      stories: storyGroupsFor(items, items.map((_, i) => i + 1)),
+    });
+  }
+
+  const externals = (opts.externals ?? []).slice(0, cfg.externalPicks);
+  if (cfg.externalPicks > 0 && externals.length > 0) {
+    sections.push({
+      key: "external",
+      kind: "external",
+      label: EXTERNAL_SECTION_LABEL,
+      // Externals have their own `[E n]` numbering: they are not in the user's
+      // queue, so they must never claim an `[n]` that resolves to an article.
+      refs: [],
+      externals: externals.map((e, i) => ({
+        n: i + 1,
+        title: e.title,
+        outlet: e.outlet ?? null,
+        url: e.url,
+        topicId: e.topicId ?? null,
+        sourceCount: e.sourceCount ?? 1,
+      })),
     });
   }
 

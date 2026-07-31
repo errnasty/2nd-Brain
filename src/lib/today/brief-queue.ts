@@ -11,7 +11,7 @@
  */
 
 import { createHash } from "crypto";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds, type BriefSourceRef } from "@/lib/db/schema";
 import type { BriefArticleInput } from "./brief-prompts";
@@ -32,6 +32,24 @@ export function briefWindows() {
 /** Order-independent hash of the unread-article id set the brief was built on. */
 export function briefFingerprint(ids: string[]): string {
   return createHash("sha1").update([...ids].sort().join(",")).digest("base64");
+}
+
+/**
+ * Order-DEPENDENT hash of the same ids.
+ *
+ * The two exist because the queue now has two ways to move, and they deserve
+ * different responses. New articles arriving changes the SET, which is worth
+ * telling the user about ("new articles — regenerate"). The trending cron
+ * re-ranking the same articles changes only the ORDER, which the user does not
+ * need to hear about — but it silently invalidates the `[n]` numbering a
+ * half-generated brief is citing, so the client has to re-plan.
+ *
+ * Hashing the set for the nudge and the sequence for the drift check keeps a
+ * re-rank from firing an hourly "something changed" prompt at a user whose
+ * queue is in fact identical.
+ */
+export function briefOrderFingerprint(ids: string[]): string {
+  return createHash("sha1").update(ids.join(",")).digest("base64");
 }
 
 /**
@@ -79,6 +97,22 @@ const baseConds = (userId: string, since: Date | null) => {
 };
 
 /**
+ * The queue order, shared by every read so the `[n]` numbering agrees.
+ *
+ * Trending first, then newest. The publish-date tie-break is not decoration:
+ * `trend_score` is 0 until the trending cron has scored an article, so on a
+ * fresh database — or the desktop app, where no cron runs — this collapses to
+ * exactly the reverse-chronological order the brief used before. The id is the
+ * final tie-break, because publish_date is nullable and non-unique and a
+ * partial order would let two reads of the same set disagree about `[n]`.
+ */
+const QUEUE_ORDER = [
+  desc(articles.trendScore),
+  desc(articles.publishDate),
+  desc(articles.id),
+] as const;
+
+/**
  * Run `fetch` against each window in turn, stopping at the first that returns
  * anything. Every queue read shares this so they all land on the same window.
  */
@@ -100,7 +134,7 @@ export async function unreadBriefIds(userId: string, limit: number): Promise<str
       .select({ id: articles.id })
       .from(articles)
       .where(and(...baseConds(userId, since)))
-      .orderBy(desc(articles.publishDate))
+      .orderBy(...QUEUE_ORDER)
       .limit(limit),
   );
   return rows.map((r) => r.id);
@@ -114,6 +148,10 @@ export type PlanRow = {
   feedTitle: string;
   wordCount: number | null;
   hasFullText: boolean;
+  /** 0 until the trending cron has scored it. */
+  trendScore: number;
+  /** The story this is one telling of; null when unscored or unique. */
+  clusterId: string | null;
 };
 
 /**
@@ -137,11 +175,13 @@ export async function fetchPlanRows(
         feedTitle: feeds.title,
         wordCount: articles.wordCount,
         hasFullText: sql<boolean>`${articles.fullText} is not null`.as("has_full_text"),
+        trendScore: articles.trendScore,
+        clusterId: articles.clusterId,
       })
       .from(articles)
       .innerJoin(feeds, eq(feeds.id, articles.feedId))
       .where(and(...baseConds(userId, since)))
-      .orderBy(desc(articles.publishDate))
+      .orderBy(...QUEUE_ORDER)
       .limit(limit),
   );
 }
@@ -149,35 +189,37 @@ export async function fetchPlanRows(
 export type SectionRow = PlanRow & { fullText: string | null };
 
 /**
- * The queue with bodies, for generating a section. `rawChars` caps `full_text`
- * in SQL — only `bodyChars` plain characters per article ever reach the model
- * (after `stripHtml`), so shipping whole multi-MB bodies out of Postgres is
- * pure waste; the multiplier leaves headroom for the HTML tags that get
- * stripped.
+ * Article bodies for a specific set of ids.
+ *
+ * Deliberately NOT "the whole queue, with bodies". A section cites at most a
+ * dozen articles, but the pool it's planned against is now up to 120 — pulling
+ * every body to use ten of them would ship close to a megabyte out of Postgres
+ * per section, on a request that has under ten seconds to also run a model
+ * call. So the section endpoint plans on the light rows (no bodies at all) and
+ * then fetches bodies for just the refs it actually needs.
+ *
+ * `rawChars` caps `full_text` in SQL — only `bodyChars` plain characters per
+ * article ever reach the model after `stripHtml`, so the multiplier is just
+ * headroom for the HTML tags that get stripped out.
  */
-export async function fetchSectionRows(
+export async function fetchBodies(
   userId: string,
-  limit: number,
+  ids: string[],
   rawChars: number,
-): Promise<{ rows: SectionRow[]; windowLabel: string }> {
-  return widen((since) =>
-    db
-      .select({
-        id: articles.id,
-        title: articles.title,
-        url: articles.url,
-        excerpt: articles.excerpt,
-        feedTitle: feeds.title,
-        wordCount: articles.wordCount,
-        hasFullText: sql<boolean>`${articles.fullText} is not null`.as("has_full_text"),
-        fullText: sql<string | null>`left(${articles.fullText}, ${rawChars})`.as("full_text"),
-      })
-      .from(articles)
-      .innerJoin(feeds, eq(feeds.id, articles.feedId))
-      .where(and(...baseConds(userId, since)))
-      .orderBy(desc(articles.publishDate))
-      .limit(limit),
-  );
+): Promise<Map<string, string | null>> {
+  if (ids.length === 0) return new Map();
+  const rows = await db
+    .select({
+      id: articles.id,
+      fullText: sql<string | null>`left(${articles.fullText}, ${rawChars})`.as("full_text"),
+      excerpt: articles.excerpt,
+    })
+    .from(articles)
+    .where(and(eq(articles.userId, userId), inArray(articles.id, ids)));
+
+  const out = new Map<string, string | null>();
+  for (const r of rows) out.set(r.id, r.fullText ?? r.excerpt ?? null);
+  return out;
 }
 
 export function stripHtml(html: string): string {
@@ -200,7 +242,7 @@ export function briefSourceMap(rows: Pick<PlanRow, "id" | "title" | "url" | "fee
   }));
 }
 
-/** Rows as the planner wants them (classification signals only). */
+/** Rows as the planner wants them (classification + ranking signals only). */
 export function toPlanArticles(rows: PlanRow[]): PlanArticle[] {
   return rows.map((r) => ({
     title: r.title,
@@ -208,20 +250,33 @@ export function toPlanArticles(rows: PlanRow[]): PlanArticle[] {
     feedTitle: r.feedTitle,
     wordCount: r.wordCount,
     hasFullText: r.hasFullText,
+    trendScore: r.trendScore,
+    clusterId: r.clusterId,
   }));
 }
 
-/** The `[n]`-numbered inputs for one section, in the order the refs were given. */
-export function toArticleInputs(rows: SectionRow[], refs: number[]): BriefArticleInput[] {
+/**
+ * The `[n]`-numbered inputs for one section, in the order the refs were given.
+ *
+ * `bodies` is keyed by article id and comes from `fetchBodies` — the rows
+ * themselves carry no body text, so a section's input is assembled from the
+ * light plan rows plus bodies for its own refs only.
+ */
+export function toArticleInputs(
+  rows: PlanRow[],
+  refs: number[],
+  bodies: Map<string, string | null> = new Map(),
+): BriefArticleInput[] {
   return refs
     .filter((n) => n >= 1 && n <= rows.length)
     .map((n) => {
       const r = rows[n - 1];
+      const raw = bodies.get(r.id) ?? r.excerpt ?? "";
       return {
         n,
         title: r.title,
         feedTitle: r.feedTitle,
-        body: r.fullText ? stripHtml(r.fullText) : r.excerpt ?? "",
+        body: raw ? stripHtml(raw) : "",
       };
     });
 }

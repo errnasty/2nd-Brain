@@ -52,9 +52,13 @@ begin
   if coalesce(current_setting('app.sync_apply', true), '') = '1' then
     return new;
   end if;
-  -- Bump updated_at only when a meaningful (non-embedding) column changed, so a
-  -- local embedding write doesn't mark the row dirty and ping-pong through sync.
-  if (to_jsonb(new) - 'embedding' - 'updated_at') is distinct from (to_jsonb(old) - 'embedding' - 'updated_at') then
+  -- Bump updated_at only when a meaningful column changed, so a local write of
+  -- DERIVED data doesn't mark the row dirty and ping-pong through sync. That
+  -- covers embeddings and the trending columns (trend_score/cluster_id/
+  -- trend_scored_at), which are recomputed per-database, never user-authored.
+  if (to_jsonb(new) - 'embedding' - 'updated_at' - 'trend_score' - 'cluster_id' - 'trend_scored_at')
+     is distinct from
+     (to_jsonb(old) - 'embedding' - 'updated_at' - 'trend_score' - 'cluster_id' - 'trend_scored_at') then
     new.updated_at = now();
   end if;
   return new;
@@ -341,6 +345,74 @@ create index if not exists directory_flashcards_lapses_idx
   on directory_flashcards (user_id, lapses desc);
 `;
 
+// Trending columns + tables — mirrors cloud migration 0028. Always-run +
+// idempotent so existing local DBs gain them without a reinstall.
+//
+// The desktop app has no cron, so trend_score stays 0 here and every trending
+// query falls through to its publish_date tie-break (i.e. newest-first, the
+// old behaviour). The columns still have to EXIST, because the same queries
+// run against both databases.
+const TRENDING_SQL = `
+alter table articles add column if not exists trend_score real not null default 0;
+alter table articles add column if not exists cluster_id uuid;
+alter table articles add column if not exists trend_scored_at timestamptz;
+create index if not exists articles_user_trend_idx
+  on articles (user_id, read_status, trend_score desc, publish_date desc);
+create index if not exists articles_cluster_idx on articles (cluster_id);
+
+create table if not exists story_clusters (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  title text not null,
+  url text,
+  source_count integer not null default 1,
+  article_count integer not null default 1,
+  first_seen timestamptz not null default now(),
+  last_seen timestamptz not null default now(),
+  velocity real not null default 0,
+  external_volume real not null default 0,
+  personal_score real not null default 0,
+  score real not null default 0,
+  topic_id text,
+  computed_at timestamptz not null default now()
+);
+create index if not exists story_clusters_user_score_idx on story_clusters (user_id, score desc);
+create index if not exists story_clusters_user_seen_idx on story_clusters (user_id, last_seen desc);
+
+create table if not exists trending_terms (
+  id uuid primary key default gen_random_uuid(),
+  term text not null,
+  source text not null,
+  weight real not null default 0,
+  topic_id text,
+  fetched_at timestamptz not null default now()
+);
+create unique index if not exists trending_terms_term_source_unique
+  on trending_terms (term, source);
+
+create table if not exists external_stories (
+  id uuid primary key default gen_random_uuid(),
+  url text not null,
+  title text not null,
+  outlet text,
+  source text not null,
+  topic_id text,
+  volume real not null default 0,
+  source_count integer not null default 1,
+  published_at timestamptz,
+  fetched_at timestamptz not null default now()
+);
+create unique index if not exists external_stories_url_unique on external_stories (url);
+create index if not exists external_stories_topic_idx on external_stories (topic_id, volume desc);
+
+create table if not exists trending_runs (
+  user_id uuid primary key references profiles(id) on delete cascade,
+  last_run_at timestamptz not null default now(),
+  clusters integer not null default 0,
+  scored integer not null default 0
+);
+`;
+
 // Feeds/Directory perf indexes — mirrors cloud migrations 0015 + 0023. No
 // CONCURRENTLY: PGlite is single-connection and runs these inline.
 // create-if-not-exists = idempotent.
@@ -493,6 +565,15 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(PERF_INDEX_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] perf indexes failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: trending columns + tables (mirror cloud migration 0028). The
+  // queries that read them run on desktop too, so the columns must exist even
+  // though nothing here ever populates them.
+  try {
+    await client.exec(TRENDING_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] trending schema failed:", err instanceof Error ? err.message : err);
   }
 
   bootstrapped = true;

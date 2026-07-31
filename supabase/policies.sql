@@ -36,6 +36,13 @@ alter table public.xp_events             enable row level security;
 alter table public.user_settings         enable row level security;
 alter table public.rate_limits           enable row level security;
 alter table public.sync_tombstones       enable row level security;
+alter table public.story_clusters        enable row level security;
+alter table public.trending_runs         enable row level security;
+-- Global (no user_id) — public headlines, but RLS still matters: a table
+-- without it is WRITABLE by anyone holding the anon key. Read-only policies
+-- follow below; the server writes over the direct Postgres role.
+alter table public.trending_terms        enable row level security;
+alter table public.external_stories      enable row level security;
 
 -- profiles: a user can only see/modify their own profile row.
 drop policy if exists "profiles_self_select" on public.profiles;
@@ -75,7 +82,9 @@ begin
     'xp_events',
     'user_settings',
     'rate_limits',
-    'sync_tombstones'
+    'sync_tombstones',
+    'story_clusters',
+    'trending_runs'
   ]
   loop
     execute format('drop policy if exists %I on public.%I', t || '_owner_all', t);
@@ -86,6 +95,17 @@ begin
   end loop;
 end;
 $$;
+
+-- The two global trending tables have no user_id, so the owner loop above
+-- can't cover them: signed-in users may read the public signal, nobody may
+-- write it through PostgREST.
+drop policy if exists "trending_terms_read" on public.trending_terms;
+create policy "trending_terms_read" on public.trending_terms
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "external_stories_read" on public.external_stories;
+create policy "external_stories_read" on public.external_stories
+  for select using (auth.role() = 'authenticated');
 
 -- Auto-create a profile row on Supabase Auth signup.
 create or replace function public.handle_new_user()

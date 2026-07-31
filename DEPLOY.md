@@ -206,6 +206,32 @@ The workflow lives at `.github/workflows/sync-feeds.yml` and runs every 2 hours.
 - `"0 6,18 * * *"` — 6 AM and 6 PM UTC
 - `"*/30 * * * *"` — every 30 minutes (works on Actions, but check the rate against your bandwidth budget)
 
+### Trending (`.github/workflows/trending.yml`)
+
+A second workflow scores how widely each story is being covered. This is what
+makes the Feeds "Trending" sort and the Daily Brief's ranking mean anything —
+without it `trend_score` stays 0 everywhere and both quietly fall back to
+newest-first, which is the old behaviour and not an error.
+
+It uses the **same two secrets** as the feed sync (`APP_URL`, `CRON_SECRET`), so
+if that one is already set up there is nothing further to configure — just run
+it once manually from the Actions tab (**Score trending stories → Run
+workflow**) to confirm it returns HTTP 200.
+
+It runs hourly, more often than the 2-hourly sync, because trending decays:
+scores have to be recomputed as stories age even when no new articles arrived.
+Each run is wall-clock budgeted and resumes from where the last one stopped, so
+extra runs are cheap and never duplicate work. A `budgetExhausted: true` in the
+response is normal on a large account — the next run continues from the oldest
+unscored user.
+
+It calls four public endpoints (GDELT, Google News RSS, Google Trends RSS and
+the Hacker News search API). All are keyless and free; **no API keys or paid
+accounts are required**. Each is fetched independently and fails soft, so an
+endpoint being down or rate-limiting degrades the ranking rather than breaking
+the run — with all four unreachable, trending still works off cross-feed
+corroboration alone.
+
 ---
 
 ## 9. PWA installability (mobile home screen)

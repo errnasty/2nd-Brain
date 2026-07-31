@@ -1,10 +1,9 @@
-import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { articles, feeds, itemTags, tags } from "@/lib/db/schema";
+import { articles, feeds, itemTags, storyClusters, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { FeedsShell } from "@/components/feeds/feeds-shell";
-
-export type FeedSort = "newest" | "oldest" | "hot";
+import { parseFeedSort, type FeedSort } from "@/lib/feeds/sort";
 
 type Search = Promise<{
   feed?: string;
@@ -17,7 +16,6 @@ type Search = Promise<{
 }>;
 
 const ARTICLE_LIMIT = 100;
-const HOT_WINDOW_DAYS = 3;
 
 /** Normalize a title for cross-feed duplicate detection. */
 function normTitle(t: string): string {
@@ -27,7 +25,7 @@ function normTitle(t: string): string {
 export default async function FeedsPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
   const view = sp.view ?? "unread";
-  const sort: FeedSort = sp.sort ?? "newest";
+  const sort: FeedSort = parseFeedSort(sp.sort);
   const dedupe = sp.dedupe === "1";
   const { user } = await requireUser();
 
@@ -37,11 +35,15 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
   if (view === "unread") where.push(eq(articles.readStatus, "unread"));
   if (view === "starred") where.push(eq(articles.starred, true));
   if (view === "readlater") where.push(eq(articles.readLater, true));
-  // "Hot" = what's buzzing now: only the last few days, newest first.
-  if (sort === "hot") {
-    where.push(gte(articles.publishDate, new Date(Date.now() - HOT_WINDOW_DAYS * 86_400_000)));
-  }
-  const orderBy = sort === "oldest" ? asc(articles.publishDate) : desc(articles.publishDate);
+  // Trending leads with how widely a story is being covered; the publish-date
+  // tie-break means an unscored database (fresh install, or the desktop app,
+  // where no trending cron runs) behaves exactly like "newest".
+  const orderBy =
+    sort === "oldest"
+      ? [asc(articles.publishDate)]
+      : sort === "trending"
+        ? [desc(articles.trendScore), desc(articles.publishDate)]
+        : [desc(articles.publishDate)];
 
   // Defensive: a failed query returns an empty list instead of crashing the
   // server render. `rows` are already plain {key: value} objects selected
@@ -61,6 +63,7 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     imageUrl: string | null;
     feedTitle: string;
     feedIconUrl: string | null;
+    sourceCount: number | null;
   };
   let rows: Row[] = [];
   let articleTagsById: Record<string, string[]> = {};
@@ -74,7 +77,7 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
       .select({ id: articles.id })
       .from(articles)
       .where(and(...where))
-      .orderBy(orderBy, desc(articles.id))
+      .orderBy(...orderBy, desc(articles.id))
       .limit(ARTICLE_LIMIT);
 
     const [articleRows, tagRows] = await Promise.all([
@@ -93,13 +96,18 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
           imageUrl: articles.imageUrl,
           feedTitle: feeds.title,
           feedIconUrl: feeds.iconUrl,
+          // How many outlets carried this story. Null when the trending cron
+          // hasn't run or the story is unique to one feed — the row then shows
+          // no badge at all rather than a misleading "1 source".
+          sourceCount: storyClusters.sourceCount,
         })
         .from(articles)
         .innerJoin(feeds, eq(feeds.id, articles.feedId))
+        .leftJoin(storyClusters, eq(storyClusters.id, articles.clusterId))
         .where(and(...where))
         // id tiebreaker → total order; MUST match loadMoreArticlesAction so the
         // infinite-scroll offsets line up (publishDate alone is nullable/non-unique).
-        .orderBy(orderBy, desc(articles.id))
+        .orderBy(...orderBy, desc(articles.id))
         .limit(ARTICLE_LIMIT),
       // Tags per visible article. Usually empty (articles aren't auto-tagged),
       // but render legacy/manual tags conditionally if present.
