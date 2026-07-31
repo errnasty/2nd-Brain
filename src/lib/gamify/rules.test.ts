@@ -13,6 +13,7 @@ import {
   SOURCE_LABEL,
   SOURCE_COUNTER,
   DAILY_GOAL,
+  BRIEF_DAILY_XP_CAP,
   splitXpByWeight,
 } from "./rules";
 
@@ -168,17 +169,22 @@ describe("splitXpByWeight", () => {
 });
 
 describe("brief XP economy", () => {
-  it("keeps a full standard brief in the same range as a study session", () => {
-    // 5 desks + lead + skip ≈ 7 sections, plus the completion bonus.
-    const wholeBrief = 7 * XP_RULES.brief_read + XP_RULES.brief_complete;
+  // Per-article pricing multiplies, so the cap is what actually bounds the
+  // brief. Without it ~45 cited articles would pay ~180 from one screen.
+  it("keeps a full brief above a study session but below the daily goal", () => {
+    const wholeBrief = BRIEF_DAILY_XP_CAP + XP_RULES.brief_complete;
     expect(wholeBrief).toBeGreaterThan(XP_RULES.session_complete);
     expect(wholeBrief).toBeLessThan(DAILY_GOAL);
   });
 
-  // Reading is the input, remembering is the outcome — a brief section must
-  // not out-earn actually retrieving something.
-  it("pays a section less than making cards or finishing a deck", () => {
-    expect(XP_RULES.brief_read).toBeLessThan(XP_RULES.cards_made);
-    expect(XP_RULES.brief_read).toBeLessThan(XP_RULES.deck_finished);
+  it("prices being briefed on an article the same as skimming it", () => {
+    expect(XP_RULES.brief_article).toBe(XP_RULES.article_read);
+  });
+
+  // Reading is the input, remembering is the outcome — being briefed on one
+  // article must not out-earn actually retrieving something.
+  it("pays one briefed article less than making cards or finishing a deck", () => {
+    expect(XP_RULES.brief_article).toBeLessThan(XP_RULES.cards_made);
+    expect(XP_RULES.brief_article).toBeLessThan(XP_RULES.deck_finished);
   });
 });

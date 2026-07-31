@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { DAILY_CARDS } from "@/lib/thinktank/pacing";
-import { isStalledGeneration } from "@/lib/thinktank/stall";
+import { deckDisplayState, isPollable } from "@/lib/thinktank/stall";
 import { createThinkTankDeckAction, deleteDeckAction, getDeckStatusAction } from "@/app/(app)/thinktank/actions";
 
 export type DeckSummary = {
@@ -53,10 +53,11 @@ export function ThinkTankHub({
   // list flips to ready/failed without the user refreshing or opening them.
   // Stalled runs (builder died without writing "error") are excluded — their
   // status can't change until the user retries, so polling them is noise.
+  // Only decks that can still change on their own. The old filter polled
+  // anything with no cards that hadn't errored, which included decks that had
+  // finished empty — those never change, so it polled them every 3s forever.
   const generatingIds = decks
-    .filter(
-      (d) => d.cardCount === 0 && d.status !== "error" && !isStalledGeneration(d.updatedAt),
-    )
+    .filter((d) => isPollable(deckDisplayState(d)))
     .map((d) => d.id)
     .join(",");
   useEffect(() => {
@@ -255,12 +256,12 @@ export function ThinkTankHub({
               {decks.map((d) => {
                 const finished = d.cardCount > 0 && d.lastPosition >= d.cardCount - 1;
                 const progress = d.cardCount > 0 ? Math.min(d.lastPosition + 1, d.cardCount) : 0;
-                // "Stalled" = still says generating but the run's liveness
-                // stamp is minutes old: the builder died without writing
-                // error. Offered the same retry as a failed deck.
-                const stalled =
-                  d.cardCount === 0 && d.status === "generating" && isStalledGeneration(d.updatedAt);
-                const failed = (d.cardCount === 0 && d.status === "error") || stalled;
+                // One total state rather than two overlapping booleans — see
+                // deckDisplayState. "stalled" is a builder that died without
+                // writing error; "empty" is a run that finished and produced
+                // nothing. Both are retryable, neither is a spinner.
+                const state = deckDisplayState(d);
+                const failed = state === "stalled" || state === "failed" || state === "empty";
                 const retrying = retryingId === d.id;
                 return (
                   <div
@@ -273,9 +274,15 @@ export function ThinkTankHub({
                         <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{d.description}</div>
                       )}
                       <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {d.cardCount === 0 ? (
+                        {state !== "ready" ? (
                           failed && !retrying ? (
-                            <span className="text-destructive">{stalled ? "Stalled" : "Failed"}</span>
+                            <span className="text-destructive">
+                              {state === "stalled"
+                                ? "Stalled"
+                                : state === "empty"
+                                  ? "Empty — retry"
+                                  : "Failed"}
+                            </span>
                           ) : (
                             <span className="inline-flex items-center gap-1.5">
                               <Spinner className="h-3 w-3" /> Building…

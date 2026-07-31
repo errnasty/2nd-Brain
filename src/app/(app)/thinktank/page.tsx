@@ -26,13 +26,27 @@ export default async function ThinkTankPage() {
         pacing: thinktankDecks.pacing,
         detail: thinktankDecks.detail,
         lastPosition: thinktankDecks.lastPosition,
-        createdAt: sql<string>`${thinktankDecks.createdAt}::text`,
-        updatedAt: sql<string>`${thinktankDecks.updatedAt}::text`,
+        // NOT `::text`. Postgres renders timestamptz as
+        // "2026-07-31 14:16:15.123456+00" — a space instead of the "T", and a
+        // two-digit offset. V8 tolerates it; Safari returns Invalid Date, and
+        // an Invalid Date silently made every stall check answer "not
+        // stalled", which is what pinned dead decks on "Building…" forever.
+        // The deck page already did this correctly with .toISOString(); this
+        // makes the hub agree.
+        createdAt: thinktankDecks.createdAt,
+        updatedAt: thinktankDecks.updatedAt,
         cardCount: sql<number>`(select count(*)::int from ${thinktankCards} c where c.deck_id = ${thinktankDecks.id})`,
       })
       .from(thinktankDecks)
       .where(eq(thinktankDecks.userId, user.id))
-      .orderBy(desc(thinktankDecks.createdAt)) as Promise<DeckSummary[]>,
+      .orderBy(desc(thinktankDecks.createdAt))
+      .then((rows): DeckSummary[] =>
+        rows.map((r) => ({
+          ...r,
+          createdAt: r.createdAt.toISOString(),
+          updatedAt: r.updatedAt.toISOString(),
+        })),
+      ),
     // Interests from onboarding/Settings — fail-soft.
     getUserSettings(user.id)
       .then((s) => s.interests ?? [])

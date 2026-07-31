@@ -45,9 +45,59 @@ export type BriefXpResponse = {
   awarded: number;
   skills: SkillGain[];
   streak?: number;
+  /** The daily brief-XP ceiling is reached; further articles pay nothing. */
+  capped?: boolean;
   /** The richest award of the batch, for `celebrate()` to act on. */
   best?: AwardResult;
 };
+
+/**
+ * Where a day's reading state is cached.
+ *
+ * Keyed by DAY rather than by plan, so navigating away and back restores what
+ * you had read — the server won't pay for it twice either way (every award is
+ * idempotent per article per day), but a progress bar that resets to empty
+ * every time you check your tasks reads as though the reading didn't count.
+ */
+const CACHE_KEY = "brief.reading.v1";
+
+type CachedReading = {
+  day: string;
+  readKeys: string[];
+  gains: [string, SkillGain[]][];
+  earned: number;
+  streak: number | null;
+  capped: boolean;
+};
+
+/** Local calendar day — matches how the user experiences "today's brief". */
+function todayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function loadCache(): CachedReading | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedReading;
+    // A cache from yesterday describes yesterday's brief. Drop it rather than
+    // showing a full bar over a brief that hasn't been read.
+    return parsed.day === todayKey() ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCache(next: CachedReading): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CACHE_KEY, JSON.stringify(next));
+  } catch {
+    // Quota or private mode — the state is a convenience, the ledger is truth.
+  }
+}
 
 export type BriefReading = {
   /** Section keys the reader has actually read. */
@@ -58,6 +108,8 @@ export type BriefReading = {
   earned: number;
   /** Consecutive days finishing the brief, once completion has been claimed. */
   streak: number | null;
+  /** The day's brief-XP ceiling has been reached; further reading pays nothing. */
+  capped: boolean;
   /** Attach to each section element. */
   register: (key: string) => (el: HTMLElement | null) => (() => void) | undefined;
   /** Call when a cited source is opened, to credit that article's folder. */
@@ -97,6 +149,8 @@ export function useBriefReading(opts: {
   const [gains, setGains] = useState<Map<string, SkillGain[]>>(new Map());
   const [earned, setEarned] = useState(0);
   const [streak, setStreak] = useState<number | null>(null);
+  const [capped, setCapped] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
 
   // Refs, not state: the observer callback must see current values without
   // being torn down and rebuilt on every scroll tick.
@@ -106,25 +160,55 @@ export function useBriefReading(opts: {
   const readableRef = useRef(isReadable);
   readableRef.current = isReadable;
 
-  // A new plan (regenerate, re-plan, depth change) is a new brief: forget what
-  // was read so its sections can be earned again. The server's idempotency is
-  // what actually stops double-paying, so this is safe.
-  const planId = sectionKeys.join("|");
+  // Restore today's reading state on mount, so leaving the page and coming
+  // back doesn't show an empty bar over a brief you've already read. Runs once:
+  // after this the in-memory state is authoritative for the session.
+  //
+  // Note this deliberately survives a re-plan. A re-ranked queue is the same
+  // day's reading, and the server pays per article per day regardless — so
+  // clearing the bar on a re-plan would lose the display while changing
+  // nothing about what was actually earned.
   useEffect(() => {
-    claimed.current = new Set();
-    completed.current = false;
-    setReadKeys(new Set());
-    setGains(new Map());
-  }, [planId]);
+    const cached = loadCache();
+    if (cached) {
+      claimed.current = new Set(cached.readKeys);
+      setReadKeys(new Set(cached.readKeys));
+      setGains(new Map(cached.gains));
+      setEarned(cached.earned);
+      setStreak(cached.streak);
+      setCapped(cached.capped);
+      completed.current = cached.streak !== null;
+    }
+    setHydrated(true);
+  }, []);
+
+  // Persist after every change. Cheap (a few hundred bytes) and it means the
+  // state survives a hard reload, not just a client-side navigation.
+  useEffect(() => {
+    if (!hydrated) return;
+    saveCache({
+      day: todayKey(),
+      readKeys: [...readKeys],
+      gains: [...gains.entries()],
+      earned,
+      streak,
+      capped,
+    });
+  }, [hydrated, readKeys, gains, earned, streak, capped]);
 
   const claimSection = useCallback(
     async (key: string) => {
+      // `claimed` is seeded from the cache, so a section read earlier today is
+      // never re-posted — the server would refuse it anyway, but this saves the
+      // round trip on every revisit.
       if (claimed.current.has(key)) return;
       claimed.current.add(key);
       setReadKeys((prev) => new Set(prev).add(key));
 
       const result = await claim({ kind: "section", section: key, level });
-      if (!result || result.awarded <= 0) return;
+      if (!result) return;
+      if (result.capped) setCapped(true);
+      if (result.awarded <= 0) return;
       setEarned((prev) => prev + result.awarded);
       setGains((prev) => new Map(prev).set(key, result.skills));
       // Stays quiet for ordinary XP — it only fires on a milestone (a folder
@@ -191,7 +275,7 @@ export function useBriefReading(opts: {
   // Completion: every section that could be read, has been. Claimed once per
   // day server-side, so a re-plan mid-read can't double-pay it.
   useEffect(() => {
-    if (!enabled || completed.current) return;
+    if (!enabled || !hydrated || completed.current) return;
     const readable = sectionKeys.filter((k) => isReadable(k));
     if (readable.length === 0) return;
     if (!readable.every((k) => readKeys.has(k))) return;
@@ -206,7 +290,7 @@ export function useBriefReading(opts: {
         celebrate(result.best);
       }
     })();
-  }, [readKeys, sectionKeys, isReadable, level, enabled]);
+  }, [readKeys, sectionKeys, isReadable, level, enabled, hydrated]);
 
   const reportSourceOpened = useCallback((articleId: string) => {
     void (async () => {
@@ -227,5 +311,5 @@ export function useBriefReading(opts: {
     };
   }, []);
 
-  return { readKeys, gains, earned, streak, register, reportSourceOpened };
+  return { readKeys, gains, earned, streak, capped, register, reportSourceOpened };
 }

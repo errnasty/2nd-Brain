@@ -3,6 +3,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { thinktankCards, thinktankDecks } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
+import { deckDisplayState } from "@/lib/thinktank/stall";
 import { CardReader } from "@/components/thinktank/card-reader";
 import { DeckGenerating } from "@/components/thinktank/deck-generating";
 
@@ -30,13 +31,22 @@ export default async function ThinkTankDeckPage({ params }: { params: Params }) 
   ]);
   if (!deck) notFound();
 
-  // No cards yet: generation is in flight (or failed) — render the poller.
+  // No cards yet: generation is in flight, dead, or finished empty.
   if (cards.length === 0) {
+    // Anything that isn't a live build gets the retry affordance, not a
+    // spinner. `status === "error"` alone missed two states that can't
+    // resolve on their own: a builder that died without writing error, and a
+    // run that completed but wrote no cards — both used to poll forever here.
+    const state = deckDisplayState({
+      cardCount: 0,
+      status: deck.status,
+      updatedAt: deck.updatedAt,
+    });
     return (
       <DeckGenerating
         deckId={deck.id}
         topic={deck.topic}
-        failed={deck.status === "error"}
+        failed={state !== "building"}
         startedAt={deck.updatedAt.toISOString()}
       />
     );

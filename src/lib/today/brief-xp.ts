@@ -1,41 +1,44 @@
 /**
  * XP for reading the Daily Brief, routed to the folders the reading was about.
  *
- * ## Why the split
+ * ## Per article, into that article's folder
  *
- * The brief is the one place in the app that mixes every subject at once. A
- * single section can cover three Data Science articles and one Geopolitics
- * article, and paying a flat amount into a generic "Reading" skill would throw
- * away exactly the information that makes the brief worth reading: what you
- * actually spent your attention on.
+ * The brief is the one place in the app that mixes every subject at once, so a
+ * flat payment into a generic "Reading" skill would throw away the interesting
+ * part: what you actually spent your attention on. Each CITED ARTICLE pays
+ * `XP_RULES.brief_article` into the skill of the folder it lives in, so a
+ * section covering three Data Science pieces and one Geopolitics piece moves
+ * Data Science three times as far — not as an approximation, but because that
+ * is literally three payments against one.
  *
- * So each section's budget is divided across the folders its cited articles
- * came from, in proportion to how much of the section each accounted for, and
- * granted through the ordinary `awardXp` path with a representative article
- * from that folder. `awardXp` already resolves an article to its folder's
- * skill, so nothing new is needed to make the routing work — only the split.
+ * Granted once per article per DAY, not per section: an article that leads and
+ * also appears on its desk is one article you read about once.
+ *
+ * ## Why it is capped
+ *
+ * Per-article pricing multiplies. A Standard brief cites roughly 45 distinct
+ * articles, and 45 x 4 is most of a day's goal from a single screen. The cap
+ * (`BRIEF_DAILY_XP_CAP`) keeps the brief a strong daily habit rather than the
+ * only one worth having, and it is enforced HERE, server-side, against the XP
+ * ledger — not in the client's running total, which is a display.
  *
  * ## Why it can't be trusted to the client
  *
- * The client says "I read section X of today's brief". It does NOT say how much
- * that is worth, which articles were in it, or which folders they belong to —
- * all of that is re-derived here from the section key and the server's own
- * queue. Otherwise reading one section and lying about the rest would be the
- * cheapest XP in the app.
- *
- * Idempotency is per (section, folder, day), so re-reading — or two devices
- * reporting the same scroll — pays once.
+ * The client says "I read section X of today's brief". It does NOT say which
+ * articles that covers, which folders they belong to, or what any of it is
+ * worth — all of that is re-derived from the server's own queue. Otherwise
+ * reading one section and posting the rest would be the cheapest XP in the app.
  */
 
 import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, folders, xpEvents } from "@/lib/db/schema";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
-import { XP_RULES, splitXpByWeight } from "@/lib/gamify/rules";
+import { BRIEF_DAILY_XP_CAP, XP_RULES, splitXpByWeight } from "@/lib/gamify/rules";
 import { computeStreak, dayKey } from "@/lib/study/streak";
 
-/** Idempotency namespace for a section read. */
-const SECTION_REF_KIND = "brief_section";
+/** Idempotency namespace for being briefed on one article. */
+const ARTICLE_REF_KIND = "brief_article";
 /** …and for the whole-brief completion bonus. */
 const COMPLETE_REF_KIND = "brief_complete";
 /** …and for opening a source out of the brief. */
@@ -44,10 +47,12 @@ const SOURCE_REF_KIND = "brief_source";
 export type BriefXpAward = {
   /** Total XP credited by this call. */
   awarded: number;
-  /** Per-skill breakdown, so the UI can float "+4 Data Science" on the section. */
+  /** Per-skill breakdown, so the UI can float "+8 Data Science" on the section. */
   skills: { name: string; emoji: string | null; amount: number; leveledUp: boolean }[];
   /** The richest single award, for `celebrate()` to act on. */
   best?: AwardResult;
+  /** The daily brief-XP ceiling was reached; further articles pay nothing. */
+  capped?: boolean;
 };
 
 const EMPTY: BriefXpAward = { awarded: 0, skills: [] };
@@ -81,7 +86,31 @@ async function groupByFolder(
 }
 
 /**
- * Award one section's XP, split across the folders its articles came from.
+ * XP already earned from brief articles today, for the cap.
+ *
+ * Read from the ledger rather than tracked in memory, because the cap has to
+ * hold across devices, page reloads and a re-planned brief — all of which the
+ * client's running total forgets.
+ */
+async function briefXpSoFar(userId: string, day: string): Promise<number> {
+  try {
+    const rows = await db
+      .select({ amount: xpEvents.amount, refId: xpEvents.refId })
+      .from(xpEvents)
+      .where(and(eq(xpEvents.userId, userId), eq(xpEvents.source, "brief_article")))
+      .limit(500);
+    return rows
+      .filter((r) => (r.refId ?? "").startsWith(`${day}:`))
+      .reduce((sum, r) => sum + r.amount, 0);
+  } catch {
+    // Can't read the ledger — pay nothing rather than risk paying past the cap.
+    return BRIEF_DAILY_XP_CAP;
+  }
+}
+
+/**
+ * Award XP for the articles a section covered: one payment each, into the
+ * skill of that article's own folder.
  *
  * `articleIds` are the section's cited sources as the SERVER resolved them —
  * callers pass what the plan says the section covers, never what the client
@@ -93,36 +122,41 @@ export async function awardBriefSection(
 ): Promise<BriefXpAward> {
   try {
     const day = dayKey(opts.date ?? new Date());
+    if (opts.articleIds.length === 0) return EMPTY;
+
+    const spent = await briefXpSoFar(userId, day);
+    if (spent >= BRIEF_DAILY_XP_CAP) return { ...EMPTY, capped: true };
+
+    // Order by folder so a section's payments land grouped, which makes the
+    // per-skill summary the client renders read naturally.
     const groups = await groupByFolder(userId, opts.articleIds);
     if (groups.size === 0) return EMPTY;
-
-    const entries = [...groups.entries()];
-    const amounts = splitXpByWeight(
-      entries.map(([, ids]) => ids.length),
-      XP_RULES.brief_read,
-    );
+    const ordered = [...groups.entries()].flatMap(([, ids]) => ids);
 
     const results: AwardResult[] = [];
-    for (let i = 0; i < entries.length; i += 1) {
-      const [folderId, ids] = entries[i];
-      const amount = amounts[i];
-      if (amount <= 0) continue;
-      results.push(
-        await awardXp(userId, {
-          source: "brief_read",
-          amount,
-          // Any member routes to the same folder skill; the first is as good as
-          // any and keeps the grant deterministic.
-          articleId: ids[0],
-          refKind: SECTION_REF_KIND,
-          // Folder in the key, so a section spanning three folders pays three
-          // times — once each — and re-reading pays none of them again.
-          refId: `${day}:${opts.sectionKey}:${folderId ?? "none"}`,
-        }),
-      );
+    let budget = BRIEF_DAILY_XP_CAP - spent;
+    let capped = false;
+
+    for (const articleId of ordered) {
+      if (budget < XP_RULES.brief_article) {
+        capped = true;
+        break;
+      }
+      const result = await awardXp(userId, {
+        source: "brief_article",
+        articleId,
+        refKind: ARTICLE_REF_KIND,
+        // Per article per DAY, not per section: an article that leads AND
+        // appears on its desk is one article you were briefed on.
+        refId: `${day}:${articleId}`,
+      });
+      results.push(result);
+      // Only a real grant spends budget — a duplicate (already paid earlier in
+      // the day) returns 0 and must not eat into the remaining allowance.
+      budget -= result.awarded;
     }
 
-    return summarize(results);
+    return { ...summarize(results), capped };
   } catch (err) {
     // XP is a side effect. A failure here must never break reading the brief.
     console.warn("awardBriefSection failed:", err instanceof Error ? err.message : err);

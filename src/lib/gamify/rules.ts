@@ -20,7 +20,7 @@ export type XpSource =
   | "deck_finished"
   | "session_complete"
   | "daily_goal"
-  | "brief_read"
+  | "brief_article"
   | "brief_complete"
   | "brief_source_opened";
 
@@ -55,19 +55,32 @@ export const XP_RULES: Record<XpSource, number> = {
   deck_finished: 30,
   session_complete: 40, // finishing a composed "Today's session" end to end
   daily_goal: 50, // auto-granted the moment the daily goal is crossed
-  // Daily Brief. brief_read is the budget for ONE section, SPLIT across the
-  // folders its articles came from — see `briefSectionSplit`. So a section
-  // covering three Data Science articles and one Geopolitics article pays ~4
-  // into Data Science and ~2 into Geopolitics, not 6 into each.
+  // Daily Brief. Paid PER CITED ARTICLE, into the skill of the folder that
+  // article lives in — so reading a section that covers three Data Science
+  // pieces and one Geopolitics piece pays 12 into Data Science and 4 into
+  // Geopolitics. Matching article_read (4) is deliberate: being briefed on a
+  // piece is worth what skimming it is worth.
   //
-  // Reading a whole standard brief comes to roughly 6x5 + 15 = 45, which sits
-  // just above session_complete (40) against a 100 daily goal. That is
-  // deliberate: reading the brief end to end is a comparable daily habit to
-  // finishing a study session, and should feel like one.
-  brief_read: 6,
+  // Granted once per article per DAY (not per section), so an article that
+  // appears in both the lead and its desk pays once.
+  brief_article: 4,
   brief_complete: 15,
   brief_source_opened: 2,
 };
+
+/**
+ * Ceiling on brief XP in a day, excluding the completion bonus.
+ *
+ * Per-article pricing is the right shape — it tracks how much you actually
+ * read — but it multiplies: a Standard brief cites roughly 45 distinct
+ * articles, which at 4 each would be ~180 XP from one screen, against a daily
+ * goal of 100. That would make the brief the only thing worth doing.
+ *
+ * The cap keeps a full brief at 50 + 15 = 65: comfortably above finishing a
+ * study session (40), comfortably below the day's goal. Raise or remove it
+ * here — nothing else needs to change.
+ */
+export const BRIEF_DAILY_XP_CAP = 50;
 
 /** Human label for the activity feed. */
 export const SOURCE_LABEL: Record<XpSource, string> = {
@@ -88,7 +101,7 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   deck_finished: "finished a ThinkTank deck",
   session_complete: "finished today's session",
   daily_goal: "hit the daily goal",
-  brief_read: "read a brief section",
+  brief_article: "read about an article in the brief",
   brief_complete: "read the whole daily brief",
   brief_source_opened: "opened a source from the brief",
 };
@@ -143,7 +156,7 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   daily_goal: "goalsHit",
   // Only completion bumps a counter. Counting sections read would inflate the
   // achievement roughly fivefold per brief and make "briefs read" meaningless.
-  brief_read: null,
+  brief_article: null,
   brief_complete: "briefsRead",
   brief_source_opened: null,
 };
