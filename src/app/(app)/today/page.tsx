@@ -94,7 +94,7 @@ export default async function TodayPage() {
         <header className="mb-6 lg:mb-8">
           <h1 className="hidden text-3xl font-semibold tracking-tight lg:block">Daily Brief</h1>
           <p className="text-sm text-muted-foreground lg:mt-1">
-            Your unread articles, written up desk by desk.
+            The biggest stories in your feeds, written up desk by desk.
           </p>
         </header>
         {/* One consolidated daily-rhythm strip (review, deck cards, tasks,

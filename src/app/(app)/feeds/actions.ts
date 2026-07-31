@@ -1,15 +1,16 @@
 "use server";
 
-import { and, asc, desc, eq, gte, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { articles, feeds, folders, itemTags, profiles, tags } from "@/lib/db/schema";
+import { articles, feeds, folders, itemTags, profiles, storyClusters, tags } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
 import { bustUnreadCounts, syncFeed, syncUserFeeds } from "@/lib/rss/sync";
 import { parseOpml } from "@/lib/opml/import";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
+import { parseFeedSort, type FeedSort } from "@/lib/feeds/sort";
 import { routeToFolder } from "@/lib/ai/routing";
 import { awardXp } from "@/lib/gamify/award";
 
@@ -452,17 +453,16 @@ export async function searchArticlesAction(input: {
 // an offset, so the client can append further pages past the first 100.
 
 const FEED_PAGE_SIZE = 100;
-const HOT_WINDOW_DAYS = 3;
 
 export async function loadMoreArticlesAction(input: {
   view: "unread" | "all" | "starred" | "readlater";
   feedId?: string | null;
   folderId?: string | null;
-  sort?: "newest" | "oldest" | "hot";
+  sort?: FeedSort;
   offset: number;
 }): Promise<{ items: ArticleSearchResult[]; hasMore: boolean }> {
   const { user } = await requireUser();
-  const sort = input.sort ?? "newest";
+  const sort = parseFeedSort(input.sort);
 
   const where: SQL[] = [eq(articles.userId, user.id)];
   if (input.feedId) where.push(eq(articles.feedId, input.feedId));
@@ -470,10 +470,14 @@ export async function loadMoreArticlesAction(input: {
   if (input.view === "unread") where.push(eq(articles.readStatus, "unread"));
   if (input.view === "starred") where.push(eq(articles.starred, true));
   if (input.view === "readlater") where.push(eq(articles.readLater, true));
-  if (sort === "hot") {
-    where.push(gte(articles.publishDate, new Date(Date.now() - HOT_WINDOW_DAYS * 86_400_000)));
-  }
-  const orderBy = sort === "oldest" ? asc(articles.publishDate) : desc(articles.publishDate);
+  // MUST match feeds/page.tsx exactly, or offset paging skips or repeats rows
+  // at every page boundary.
+  const orderBy =
+    sort === "oldest"
+      ? [asc(articles.publishDate)]
+      : sort === "trending"
+        ? [desc(articles.trendScore), desc(articles.publishDate)]
+        : [desc(articles.publishDate)];
 
   const rows = await db
     .select({
@@ -490,14 +494,16 @@ export async function loadMoreArticlesAction(input: {
       imageUrl: articles.imageUrl,
       feedTitle: feeds.title,
       feedIconUrl: feeds.iconUrl,
+      sourceCount: storyClusters.sourceCount,
     })
     .from(articles)
     .innerJoin(feeds, eq(feeds.id, articles.feedId))
+    .leftJoin(storyClusters, eq(storyClusters.id, articles.clusterId))
     .where(and(...where))
     // id tiebreaker → a TOTAL order. publishDate is nullable + non-unique, so
     // without it offset paging skips/duplicates rows at page boundaries. MUST
     // match the initial query in feeds/page.tsx for offsets to line up.
-    .orderBy(orderBy, desc(articles.id))
+    .orderBy(...orderBy, desc(articles.id))
     .limit(FEED_PAGE_SIZE)
     .offset(Math.max(0, input.offset));
 

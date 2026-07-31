@@ -36,6 +36,13 @@ import {
   toggleStarredAction,
   type ArticleSearchResult,
 } from "@/app/(app)/feeds/actions";
+import {
+  DEFAULT_FEED_SORT,
+  FEED_SORTS,
+  FEED_SORT_LABELS,
+  parseFeedSort,
+  type FeedSort,
+} from "@/lib/feeds/sort";
 
 const FEED_PAGE_SIZE = 100;
 import { toast } from "sonner";
@@ -56,6 +63,8 @@ export type ArticleListItem = {
   imageUrl: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
+  /** Distinct feeds covering this story; null/1 when it stands alone. */
+  sourceCount?: number | null;
 };
 
 /** Estimated read time at ~220 wpm. Returns null for missing/trivial counts. */
@@ -72,10 +81,18 @@ type OptimisticPatch = {
 };
 
 const VIEW_META: Record<"unread" | "all" | "starred" | "readlater", { label: string; meta: string }> = {
-  unread: { label: "Unread", meta: "Newest first" },
+  // The unread view's subtitle is filled in from the active sort below, since
+  // that's the view whose order the reader is most likely to be wondering about.
+  unread: { label: "Unread", meta: "" },
   all: { label: "All articles", meta: "Inbox + read" },
   starred: { label: "Starred", meta: "Favorites" },
   readlater: { label: "Read later", meta: "Saved queue" },
+};
+
+const SORT_SUBTITLE: Record<FeedSort, string> = {
+  trending: "Most covered first",
+  newest: "Newest first",
+  oldest: "Oldest first",
 };
 
 export function ArticleList({
@@ -117,7 +134,7 @@ export function ArticleList({
   // pages. A reset effect below drops `extra` whenever the server page changes
   // (new scope or router.refresh), so we never show stale appended rows.
   const params = useSearchParams();
-  const sort = (params.get("sort") as "newest" | "oldest" | "hot" | null) ?? "newest";
+  const sort = parseFeedSort(params.get("sort") ?? undefined);
   const [extra, setExtra] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(items.length >= FEED_PAGE_SIZE);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -463,6 +480,7 @@ export function ArticleList({
 
   const showingSearch = results !== null;
   const meta = VIEW_META[view];
+  const metaLine = view === "unread" ? SORT_SUBTITLE[sort] : meta.meta;
 
   return (
     <section
@@ -484,7 +502,7 @@ export function ArticleList({
       {/* ── Editorial header ──────────────────────────────────────── */}
       <header className="border-b border-border px-4 pb-3 pt-2 lg:pt-4">
         <div className="mb-1.5 editorial-eyebrow">
-          Feeds · {meta.meta}
+          Feeds · {metaLine}
         </div>
         <div className="flex items-baseline justify-between gap-3">
           <h2
@@ -840,6 +858,17 @@ function VirtualizedArticleList({
                         <span className="shrink-0 tabular-nums">≈{readMinutes(item.wordCount)}m</span>
                       </>
                     )}
+                    {/* Why this is high in a trending list. Shown only at 2+,
+                        because "1 source" is every article and says nothing. */}
+                    {(item.sourceCount ?? 0) > 1 && (
+                      <span
+                        className="shrink-0 rounded-full bg-brand/10 px-1.5 font-medium normal-case text-brand"
+                        style={{ letterSpacing: 0 }}
+                        title={`${item.sourceCount} of your feeds are covering this story`}
+                      >
+                        {item.sourceCount} sources
+                      </span>
+                    )}
                     {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
                   </div>
                   <div
@@ -962,12 +991,6 @@ function ViewLink({
   );
 }
 
-const SORT_LABELS: Record<string, string> = {
-  newest: "Newest",
-  oldest: "Oldest",
-  hot: "Hot (recent)",
-};
-
 function SortControls({
   compact,
   onToggleCompact,
@@ -981,7 +1004,7 @@ function SortControls({
 }) {
   const router = useRouter();
   const params = useSearchParams();
-  const sort = params.get("sort") ?? "newest";
+  const sort = parseFeedSort(params.get("sort") ?? undefined);
   const dedupe = params.get("dedupe") === "1";
 
   function setParam(key: string, value: string | null) {
@@ -1002,19 +1025,22 @@ function SortControls({
           title="Sort & filter"
         >
           <ArrowDownUp className="h-3.5 w-3.5" />
-          {SORT_LABELS[sort] ?? "Sort"}
+          {FEED_SORT_LABELS[sort]}
           {dedupe && <span className="text-muted-foreground">· uniq</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
         <DropdownMenuLabel>Sort by</DropdownMenuLabel>
-        {(["newest", "oldest", "hot"] as const).map((s) => (
+        {FEED_SORTS.map((s) => (
           <DropdownMenuItem
             key={s}
-            onClick={() => setParam("sort", s === "newest" ? null : s)}
+            // Trending is the default, so selecting it clears the param rather
+            // than pinning it — shared links stay clean and keep following the
+            // default if it ever changes again.
+            onClick={() => setParam("sort", s === DEFAULT_FEED_SORT ? null : s)}
             className="flex items-center justify-between"
           >
-            {SORT_LABELS[s]}
+            {FEED_SORT_LABELS[s]}
             {sort === s && <Check className="h-3.5 w-3.5" />}
           </DropdownMenuItem>
         ))}

@@ -157,7 +157,7 @@ export const articles = pgTable(
     ),
     folderIdx: index("articles_folder_idx").on(t.folderId),
     publishIdx: index("articles_publish_idx").on(t.publishDate),
-    // Feeds "All"/"Hot" views: per-user list across every read status. The
+    // Feeds "All" view: per-user list across every read status. The
     // (user,status,date) index above can't give a cross-status date order.
     userPubIdx: index("articles_user_pub_idx").on(t.userId, t.publishDate.desc(), t.id.desc()),
     // Feeds "Starred" view — tiny partial, exact match for its filter+sort.

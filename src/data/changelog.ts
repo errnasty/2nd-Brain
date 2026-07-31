@@ -27,6 +27,35 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-31-b",
+    date: "July 31, 2026",
+    title: "Reading the brief now feeds your skills",
+    tag: "feature",
+    summary:
+      "Reading the Daily Brief earns XP, and it goes into the skills the reading was actually about. A section covering three Data Science articles and one Geopolitics article moves Data Science roughly three times as far.",
+    items: [
+      "XP is split across the folders the articles came from, in proportion to how much of the section each one accounted for — you'll see “+4 Data Science” under each section as you finish it.",
+      "A section counts once you've genuinely spent a few seconds on it. Scrolling to the bottom earns nothing.",
+      "A progress rail across the top fills as you go, and finishing the whole brief pays a bonus and starts a brief-reading streak.",
+      "Two new achievements for reading 10 and 50 briefs end to end.",
+    ],
+  },
+  {
+    id: "2026-07-31-a",
+    date: "July 31, 2026",
+    title: "Your feeds now lead with what's actually breaking",
+    tag: "feature",
+    summary:
+      "Feeds and Today no longer just show you the newest thing — they show you what's biggest. A story counts as trending when several of your feeds independently pick it up in a short space of time, and that's now the default order everywhere.",
+    items: [
+      "Trending replaces the old “Hot” sort, which only ever meant “from the last three days”. Newest and Oldest are still one tap away.",
+      "When several of your feeds cover the same story, you'll see a “4 sources” badge on it — that's the signal doing the ranking, in plain sight.",
+      "Today's brief now writes one item per story instead of one per article, so six papers running the same wire report becomes a single write-up citing all six — and the space that frees up goes to stories that were getting missed.",
+      "Standard depth now covers five desks instead of three, and reads a wider slice of your queue.",
+      "A new closing section, “Outside your feeds”, shows big stories from the wider news world that none of your subscriptions carried — your blind spots, checked against what you already have.",
+    ],
+  },
+  {
     id: "2026-07-30",
     date: "July 30, 2026",
     title: "Today is now a real brief, written desk by desk",
