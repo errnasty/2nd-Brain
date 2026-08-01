@@ -215,7 +215,7 @@ async function generateViaObject(
   const modelId =
     choice?.id ??
     (activeProvider() === "openrouter"
-      ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
+      ? (process.env.OPENROUTER_SMART_MODEL ?? "deepseek/deepseek-v4-flash-0731")
       : "claude-sonnet-4-6");
 
   try {
@@ -345,7 +345,7 @@ export async function generateDeckOutline(
   const modelId =
     choice?.id ??
     (activeProvider() === "openrouter"
-      ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
+      ? (process.env.OPENROUTER_SMART_MODEL ?? "deepseek/deepseek-v4-flash-0731")
       : "claude-sonnet-4-6");
 
   try {

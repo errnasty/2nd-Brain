@@ -20,8 +20,12 @@ import type { LanguageModelV1 } from "ai";
 
 const ANTHROPIC_FAST = "claude-haiku-4-5-20251001";
 const ANTHROPIC_SMART = "claude-sonnet-4-6";
-const OPENROUTER_FAST_DEFAULT = "anthropic/claude-haiku-4.5";
-const OPENROUTER_SMART_DEFAULT = "anthropic/claude-sonnet-4.6";
+// Most recent / best-value OpenRouter defaults. DeepSeek V4 Flash is cheap and
+// fast and — unlike some reasoning-tagged routes — emits clean JSON, which is
+// why background features (quizzes, flashcards, tagging) rely on it by default.
+// Override any time with OPENROUTER_FAST_MODEL / OPENROUTER_SMART_MODEL.
+const OPENROUTER_FAST_DEFAULT = "deepseek/deepseek-v4-flash-0731";
+const OPENROUTER_SMART_DEFAULT = "deepseek/deepseek-v4-flash-0731";
 
 export function openrouterKey(): string | undefined {
   return process.env.OPENROUTER_API_KEY;

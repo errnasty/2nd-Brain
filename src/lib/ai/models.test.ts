@@ -3,8 +3,8 @@ import { CHAT_MODELS, DEFAULT_CHAT_MODEL, getChatModel } from "./models";
 
 describe("getChatModel", () => {
   it("returns the requested model when valid", () => {
-    expect(getChatModel("gpt-4o").id).toBe("gpt-4o");
-    expect(getChatModel("gpt-4o").provider).toBe("openai");
+    expect(getChatModel("gpt-5-mini").id).toBe("gpt-5-mini");
+    expect(getChatModel("gpt-5-mini").provider).toBe("openai");
   });
 
   it("falls back to the default for unknown ids", () => {

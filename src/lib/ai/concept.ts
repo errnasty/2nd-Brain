@@ -96,7 +96,7 @@ export async function generateConceptCard(
   const modelId =
     choice?.id ??
     (activeProvider() === "openrouter"
-      ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
+      ? (process.env.OPENROUTER_SMART_MODEL ?? "deepseek/deepseek-v4-flash-0731")
       : "claude-sonnet-4-6");
 
   const library = (context.libraryTitles ?? []).slice(0, 8);
@@ -188,7 +188,7 @@ export async function discoverConcepts(
   const modelId =
     choice?.id ??
     (activeProvider() === "openrouter"
-      ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
+      ? (process.env.OPENROUTER_SMART_MODEL ?? "deepseek/deepseek-v4-flash-0731")
       : "claude-sonnet-4-6");
 
   const library = (evidence.libraryTitles ?? []).slice(0, 25);

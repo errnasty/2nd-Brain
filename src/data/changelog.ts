@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-b",
+    date: "August 1, 2026",
+    title: "Fresh AI models, including DeepSeek V4 Flash",
+    tag: "improvement",
+    summary:
+      "The built-in AI model list is updated to today's best-value options, headlined by DeepSeek V4 Flash — fast, cheap, and reliable at powering features like quiz generation. It's now the default for background AI work and available to pick in Settings.",
+  },
+  {
     id: "2026-08-01-a",
     date: "August 1, 2026",
     title: "Quiz generation is more reliable on every AI model",
