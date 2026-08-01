@@ -48,17 +48,29 @@ export async function generateQuizAction(itemIds: string[]) {
     if (sources.length === 0) return { ok: false as const, error: "None of the selected items were found" };
 
     const settings = await getUserSettings(user.id);
-    const questions = await generateQuiz(sources.map(({ title, text }) => ({ title, text })), {
-      count: settings.quizCount ?? DEFAULT_QUIZ_COUNT,
-      difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
-    });
+    const { questions, error: genError } = await generateQuiz(
+      sources.map(({ title, text }) => ({ title, text })),
+      {
+        count: settings.quizCount ?? DEFAULT_QUIZ_COUNT,
+        difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+      },
+    );
     if (questions.length === 0) {
       // Distinguish WHY generation came back empty, same reasoning as flashcards.
       if (!sources.some((s) => s.text.trim()))
         return { ok: false as const, error: "These items have no text yet to quiz on" };
       if (!aiAvailable())
         return { ok: false as const, error: "AI isn't configured — add an API key in Settings" };
-      return { ok: false as const, error: "Couldn't generate a quiz from this text — try again" };
+      // The generator's own reason when it has one. Previously this was logged
+      // server-side and the user got a generic "try again" for every distinct
+      // cause — rate limit, bad schema, timeout — which made it impossible to
+      // tell a transient failure from a permanent one.
+      return {
+        ok: false as const,
+        error: genError
+          ? `Couldn't generate a quiz: ${genError}`
+          : "Couldn't generate a quiz from this text — try again",
+      };
     }
 
     const withIds: QuizQuestion[] = questions.map((q) => ({ ...q, id: randomUUID() }));

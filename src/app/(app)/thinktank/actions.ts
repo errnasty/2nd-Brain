@@ -189,14 +189,20 @@ export async function makeQuizFromDeckAction(deckId: string) {
 
     const settings = await getUserSettings(user.id);
     const text = cards.map((c) => `## ${c.title}\n\n${c.body}`).join("\n\n");
-    const questions = await generateQuiz([{ title: deck.title, text }], {
+    const { questions, error: genError } = await generateQuiz([{ title: deck.title, text }], {
       count: settings.quizCount ?? DEFAULT_QUIZ_COUNT,
       difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
     });
     if (questions.length === 0) {
+      if (!aiAvailable()) {
+        return { ok: false as const, error: "AI isn't configured — add an API key in Settings" };
+      }
+      // Surface the generator's own reason rather than a generic retry prompt.
       return {
         ok: false as const,
-        error: aiAvailable() ? "Couldn't generate a quiz from this deck — try again" : "AI isn't configured — add an API key in Settings",
+        error: genError
+          ? `Couldn't generate a quiz: ${genError}`
+          : "Couldn't generate a quiz from this deck — try again",
       };
     }
 
