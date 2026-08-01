@@ -22,7 +22,10 @@ export type XpSource =
   | "daily_goal"
   | "brief_article"
   | "brief_complete"
-  | "brief_source_opened";
+  | "brief_source_opened"
+  | "concept_learned"
+  | "concept_tested"
+  | "refresher_done";
 
 /** Base XP per source. card_graded is computed separately (scales with grade);
  *  quiz_completed's caller passes an explicit `amount` from quizXp().
@@ -66,6 +69,12 @@ export const XP_RULES: Record<XpSource, number> = {
   brief_article: 4,
   brief_complete: 15,
   brief_source_opened: 2,
+  // ThinkTank Explore. Reading a concept card is consumption, so it sits at
+  // the same level as reading an article; testing yourself on it and coming
+  // back for a refresher are retrieval, which this economy pays more for.
+  concept_learned: 4,
+  concept_tested: 8,
+  refresher_done: 10,
 };
 
 /**
@@ -104,6 +113,9 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   brief_article: "read about an article in the brief",
   brief_complete: "read the whole daily brief",
   brief_source_opened: "opened a source from the brief",
+  concept_learned: "read a concept card",
+  concept_tested: "tested yourself on a concept",
+  refresher_done: "refreshed a saved concept",
 };
 
 /**
@@ -159,6 +171,9 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   brief_article: null,
   brief_complete: "briefsRead",
   brief_source_opened: null,
+  concept_learned: "conceptsLearned",
+  concept_tested: null,
+  refresher_done: null,
 };
 
 export const DAILY_GOAL = 100;

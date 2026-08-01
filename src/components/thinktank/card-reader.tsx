@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Spinner } from "@/components/ui/spinner";
+import { useDeckBuilder } from "@/components/thinktank/use-deck-builder";
 import {
   ArrowLeft,
   BookmarkPlus,
@@ -51,7 +53,20 @@ const DETAIL_LABEL = { brief: "brief", standard: "standard", deep: "deep" } as c
  * Daily-paced decks only expose today's unlocked cards; the last slide becomes
  * a "come back tomorrow" gate until the whole deck is unlocked.
  */
-export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkTankCard[] }) {
+export function CardReader({
+  deck,
+  cards,
+  filling = false,
+}: {
+  deck: ThinkTankDeck;
+  cards: ThinkTankCard[];
+  /** The deck is readable but still being written — keep the build going. */
+  filling?: boolean;
+}) {
+  // The generating screen unmounted when the first cards landed, so the reader
+  // owns driving the rest of the build. Without this a stepped build stops
+  // half-written the moment it becomes readable.
+  const build = useDeckBuilder(deck.id, filling);
   const router = useRouter();
   const trackRef = useRef<HTMLDivElement>(null);
 
@@ -317,6 +332,14 @@ export function CardReader({ deck, cards }: { deck: ThinkTankDeck; cards: ThinkT
           <div className="truncate text-sm font-semibold">{deck.title}</div>
           <div className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
             {index < visible.length ? `Card ${index + 1} of ${visible.length}` : allUnlocked ? "Finished" : "Done for today"}
+            {/* Honest about a deck you're reading while it's still being
+                written — otherwise "Card 3 of 4" looks like the whole deck. */}
+            {filling && (
+              <span className="ml-2 inline-flex items-center gap-1 text-brand">
+                <Spinner className="h-3 w-3" />
+                {build.total > 0 ? `writing ${build.cards} of ${build.total}` : "writing more"}
+              </span>
+            )}
             {deck.pacing === "daily" && !allUnlocked && (
               <span className="ml-2 opacity-60">· {unlocked}/{cards.length} unlocked</span>
             )}

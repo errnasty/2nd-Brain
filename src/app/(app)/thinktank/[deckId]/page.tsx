@@ -52,5 +52,13 @@ export default async function ThinkTankDeckPage({ params }: { params: Params }) 
     );
   }
 
-  return <CardReader deck={deck} cards={cards} />;
+  // `filling` = cards exist but the outline isn't finished. The reader opens
+  // immediately on what's written and keeps the build running, so a deep deck
+  // is readable seconds after it starts rather than after every card lands.
+  const state = deckDisplayState({
+    cardCount: cards.length,
+    status: deck.status,
+    updatedAt: deck.updatedAt,
+  });
+  return <CardReader deck={deck} cards={cards} filling={state === "filling"} />;
 }

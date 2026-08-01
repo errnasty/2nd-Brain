@@ -37,6 +37,8 @@ alter table public.user_settings         enable row level security;
 alter table public.rate_limits           enable row level security;
 alter table public.sync_tombstones       enable row level security;
 alter table public.story_clusters        enable row level security;
+alter table public.thinktank_concepts    enable row level security;
+alter table public.thinktank_saved       enable row level security;
 alter table public.trending_runs         enable row level security;
 -- Global (no user_id) — public headlines, but RLS still matters: a table
 -- without it is WRITABLE by anyone holding the anon key. Read-only policies
@@ -84,7 +86,9 @@ begin
     'rate_limits',
     'sync_tombstones',
     'story_clusters',
-    'trending_runs'
+    'trending_runs',
+    'thinktank_concepts',
+    'thinktank_saved'
   ]
   loop
     execute format('drop policy if exists %I on public.%I', t || '_owner_all', t);

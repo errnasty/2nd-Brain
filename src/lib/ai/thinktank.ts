@@ -37,7 +37,7 @@ const DeckSchema = z.object({
         section: SECTION,
         title: z.string().min(2).max(160),
         body: z.string().min(20).max(1200),
-        refIndexes: z.array(z.number().int().min(0)).max(3).default([]),
+        refIndexes: z.array(z.number().int()).max(3).default([]),
         sources: z
           .array(z.object({ title: z.string().min(1).max(200), url: z.string().url() }))
           .max(2)
@@ -185,7 +185,12 @@ async function generateViaObject(
           section: SECTION,
           title: z.string().min(2).max(160),
           body: z.string().min(20).max(preset.maxWords * 10), // chars, not words
-          refIndexes: z.array(z.number().int().min(0).max(Math.max(0, related.length - 1))).max(3),
+          // Deliberately UNBOUNDED. Constraining this to the related-items
+          // range made a stray index fail schema validation, which discarded
+          // an otherwise-perfect deck and surfaced as "couldn't build". Out-of
+          // range indexes are filtered downstream in `runDeckGeneration`, where
+          // the cost of a bad one is a missing citation rather than a lost deck.
+          refIndexes: z.array(z.number().int()).max(3).default([]),
         }),
       )
       .min(5)
@@ -274,4 +279,168 @@ export async function generateThinkTankDeck(
     }
   }
   return generateViaObject(topic, related, detail);
+}
+
+// ── Incremental generation (plan, then fill) ───────────────────────────
+//
+// The single-call path above produces a whole deck in one 30-60s request. That
+// works on a host that allows long functions; it CANNOT work on Netlify, which
+// kills a function at ~10s regardless of `maxDuration` (that export is
+// Vercel-only — the same lesson `src/lib/rss/sync.ts` and the article simplify
+// route already learned). A deck built that way never finished, sat on
+// "generating" forever, and failed identically on every retry.
+//
+// So generation is split into requests that each comfortably fit the budget:
+// one short call plans the outline, then card bodies are written a few at a
+// time. Total work is the same; per-request work is a fraction of it, and a
+// severed request costs only the batch it was in.
+
+/** Cards per body-filling call. Small enough that one batch is a few seconds. */
+export const CARD_BATCH_SIZE = 4;
+
+export type DeckOutline = {
+  title: string;
+  description: string;
+  cards: { section: ThinkTankSection; title: string }[];
+  webBrief: string;
+  model: string;
+  tokenCount: number | null;
+};
+
+const OutlineSchema = z.object({
+  title: z.string().min(2).max(160),
+  description: z.string().min(10).max(500),
+  cards: z
+    .array(z.object({ section: SECTION, title: z.string().min(2).max(160) }))
+    .min(4)
+    .max(20),
+});
+
+/**
+ * Step 1: plan the deck. Titles only — no bodies — so the output is a few
+ * hundred tokens and the call returns in a couple of seconds even with web
+ * grounding in front of it.
+ *
+ * The web brief is returned so the caller can persist it: fetching it once and
+ * reusing it for every body batch keeps later cards factually grounded without
+ * paying for a search per batch.
+ */
+export async function generateDeckOutline(
+  topic: string,
+  related: { title: string }[],
+  detail: ThinkTankDetail = "standard",
+): Promise<DeckOutline | null> {
+  if (!aiAvailable() && !process.env.ANTHROPIC_API_KEY) return null;
+  const preset = DETAIL_PRESETS[detail];
+
+  let webBrief = "";
+  try {
+    const snippets = await groundFromWeb(topic);
+    if (snippets.length > 0) webBrief = formatWebGround(snippets);
+  } catch {
+    // Ungrounded outline — fail-soft, exactly as the single-call path was.
+  }
+
+  const choice = await userModelChoice();
+  const modelId =
+    choice?.id ??
+    (activeProvider() === "openrouter"
+      ? (process.env.OPENROUTER_SMART_MODEL ?? "anthropic/claude-sonnet-4.6")
+      : "claude-sonnet-4-6");
+
+  try {
+    const result = await generateObject({
+      model: await userSmartModel(),
+      schema: OutlineSchema,
+      maxTokens: 1_500,
+      system: `You plan Deepstash/Imprint-style micro-learning decks. Given a topic, produce the deck's TITLE, a 1-2 sentence DESCRIPTION of what the reader will understand by the end, and an ordered list of ${preset.minCards}-${preset.maxCards} card TITLES.
+
+Rules:
+- Order: prerequisites (2-3 foundations a newcomer needs) → core (the majority — the load-bearing ideas) → advanced (2-3: nuance, applications, open debates).
+- Each card title is the big idea as a punchy headline, not a chapter name.
+- One idea per card. No card should overlap another.
+- Titles only. Do NOT write the card bodies.`,
+      prompt: `Topic: ${topic}\n\nLearner's related library items:\n${relatedList(related)}\n\nWeb grounding:\n${webBrief || "(no web results)"}`,
+    });
+
+    const usage = result.usage;
+    return {
+      ...result.object,
+      webBrief,
+      model: modelId,
+      tokenCount: usage?.totalTokens ?? null,
+    };
+  } catch (err) {
+    console.warn("generateDeckOutline failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+export type GeneratedBody = { title: string; body: string; refIndexes: number[] };
+
+/**
+ * Step 2: write the bodies for one batch of planned cards.
+ *
+ * The whole outline is passed as context but only `batch` is written, so each
+ * card knows what its neighbours cover and avoids repeating them — the main
+ * thing a naive per-card loop gets wrong.
+ */
+export async function generateCardBodies(
+  topic: string,
+  outline: { section: ThinkTankSection; title: string }[],
+  batch: { section: ThinkTankSection; title: string }[],
+  related: { title: string }[],
+  webBrief: string,
+  detail: ThinkTankDetail = "standard",
+): Promise<GeneratedBody[] | null> {
+  if (batch.length === 0) return [];
+  if (!aiAvailable() && !process.env.ANTHROPIC_API_KEY) return null;
+  const preset = DETAIL_PRESETS[detail];
+
+  const schema = z.object({
+    cards: z
+      .array(
+        z.object({
+          title: z.string().min(1).max(200),
+          body: z.string().min(20).max(preset.maxWords * 12),
+          refIndexes: z.array(z.number().int()).max(3).default([]),
+        }),
+      )
+      .min(1)
+      .max(batch.length + 2),
+  });
+
+  try {
+    const result = await generateObject({
+      model: await userSmartModel(),
+      schema,
+      // Sized to the batch, not the deck — this is what keeps the call short.
+      maxTokens: Math.min(4_000, 400 + batch.length * preset.maxWords * 3),
+      system: `You write the body of micro-learning cards. You are given a deck's full outline for context and asked to write ONLY the cards listed under "Write these".
+
+Rules:
+- body: ${preset.label} of plain markdown. One self-contained, concrete idea — an example or number beats an abstraction. No filler like "in this card we'll…".
+- Do NOT cover ground that belongs to another card in the outline.
+- Return one entry per requested card, with its title copied EXACTLY as given.
+- refIndexes: indexes of the learner's library items this card genuinely builds on. Usually empty, max 3. Never invent indexes.
+- Accuracy over coverage. If web grounding is present, use it to keep facts, figures and names right.`,
+      prompt: `Topic: ${topic}
+
+Full outline (for context — do not write these):
+${outline.map((c, i) => `${i + 1}. [${c.section}] ${c.title}`).join("\n")}
+
+Write these:
+${batch.map((c) => `- [${c.section}] ${c.title}`).join("\n")}
+
+Learner's library items (by index):
+${relatedList(related)}
+
+Web grounding:
+${webBrief || "(no web results)"}`,
+    });
+    return result.object.cards;
+  } catch (err) {
+    console.warn("generateCardBodies failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
 }

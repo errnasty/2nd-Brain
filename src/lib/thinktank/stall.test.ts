@@ -3,6 +3,7 @@ import {
   GENERATION_STALL_MS,
   deckDisplayState,
   isPollable,
+  isReadable,
   isStalledGeneration,
 } from "./stall";
 
@@ -47,8 +48,18 @@ describe("deckDisplayState", () => {
     ...over,
   });
 
-  it("is ready as soon as there are cards, whatever the status says", () => {
-    expect(deckDisplayState(deck({ cardCount: 12, status: "generating" }), NOW)).toBe("ready");
+  it("is ready when a finished deck has cards", () => {
+    expect(deckDisplayState(deck({ cardCount: 12, status: "ready" }), NOW)).toBe("ready");
+  });
+
+  // Stepped builds write cards as they go, so "generating with cards" is a
+  // deck you can already read while the rest is still being written.
+  it("is filling when a live build has written some cards", () => {
+    expect(deckDisplayState(deck({ cardCount: 4, status: "generating" }), NOW)).toBe("filling");
+  });
+
+  // Labelling it "Failed" would hide cards the user can actually read.
+  it("stays readable when an errored deck still has cards", () => {
     expect(deckDisplayState(deck({ cardCount: 12, status: "error" }), NOW)).toBe("ready");
   });
 
@@ -81,10 +92,21 @@ describe("deckDisplayState", () => {
 describe("isPollable", () => {
   // Polling anything else is what made the hub hit the server every 3 seconds
   // for a deck whose state could never change.
-  it("only polls a live build", () => {
+  it("polls only states that can still change on their own", () => {
     expect(isPollable("building")).toBe(true);
+    expect(isPollable("filling")).toBe(true);
     for (const s of ["stalled", "failed", "empty", "ready"] as const) {
       expect(isPollable(s)).toBe(false);
+    }
+  });
+});
+
+describe("isReadable", () => {
+  it("opens a deck that has cards, finished or still filling", () => {
+    expect(isReadable("ready")).toBe(true);
+    expect(isReadable("filling")).toBe(true);
+    for (const s of ["building", "stalled", "failed", "empty"] as const) {
+      expect(isReadable(s)).toBe(false);
     }
   });
 });
