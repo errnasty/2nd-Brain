@@ -1,7 +1,9 @@
 import { createHash } from "crypto";
 import { streamText } from "ai";
 import { aiAvailable } from "@/lib/ai/provider";
-import { userSmartModel } from "@/lib/ai/user-model";
+import { quietReasoningOptions, withReasoningHeadroom } from "@/lib/ai/models";
+import { createThinkStripper } from "@/lib/ai/think-tags";
+import { resolveUserSmartModel } from "@/lib/ai/user-model";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
@@ -264,6 +266,22 @@ export async function POST(req: Request) {
 }
 
 /**
+ * Anthropic prompt caching for the article block: a retry of the same section —
+ * or the same desk tomorrow, when most of the queue is unchanged — reuses those
+ * tokens instead of re-paying for them.
+ *
+ * Direct Anthropic only, deliberately. The dedicated OpenRouter client DOES
+ * forward this as `cache_control`, but OpenRouter fans out to backends with no
+ * such concept, and a rejected request would cost the whole section — a bad
+ * trade for a discount on the one provider that is already the cheap path here.
+ */
+function cacheControlFor(resolved: { provider: string }) {
+  return resolved.provider === "anthropic"
+    ? { providerOptions: { anthropic: { cacheControl: { type: "ephemeral" as const } } } }
+    : {};
+}
+
+/**
  * Generate one planned section. Small input, capped output: this is the request
  * shape that fits comfortably inside the hosting platform's function budget.
  */
@@ -346,31 +364,37 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
       .join("\n\n");
   }
 
-  const result = streamText({
-    model: await userSmartModel(),
-    system: sectionSystemPrompt(section, level),
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            // Anthropic prompt caching: a retry of the same section — or the
-            // same desk tomorrow, when most of the queue is unchanged — reuses
-            // these tokens instead of re-paying for them.
-            type: "text",
-            text: `Articles for this section:\n${preamble}\n\n${inputBlock}`,
-            providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
-          },
-          { type: "text", text: `Write the "${section.label}" section now.` },
-        ],
-      },
-    ],
-    temperature: 0.4,
-    maxTokens: sectionMaxTokens(section, level),
-    abortSignal: req.signal,
-  });
+  const resolved = await resolveUserSmartModel();
+  const baseTokens = sectionMaxTokens(section, level);
+  const run = (maxTokens: number) =>
+    streamText({
+      model: resolved.model,
+      system: sectionSystemPrompt(section, level),
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: `Articles for this section:\n${preamble}\n\n${inputBlock}`,
+              ...cacheControlFor(resolved),
+            },
+            { type: "text", text: `Write the "${section.label}" section now.` },
+          ],
+        },
+      ],
+      temperature: 0.4,
+      // Budget for a thinking pass the section prompt never asked for: on a
+      // reasoning model the cap below covers hidden tokens too, and one sized
+      // for the prose alone gets spent before the prose starts.
+      maxTokens: withReasoningHeadroom(maxTokens, resolved.provider),
+      abortSignal: req.signal,
+      providerOptions: quietReasoningOptions(resolved.provider, resolved.id),
+    });
 
-  const stream = streamWithUsage(result, userId, req);
+  const stream = streamWithUsage(run(baseTokens), userId, req, {
+    retry: () => run(retryTokens(baseTokens)),
+  });
   return new Response(stream, {
     headers: {
       "content-type": "text/plain; charset=utf-8",
@@ -442,8 +466,9 @@ async function legacyBrief(
     })
     .join("\n\n");
 
+  const resolved = await resolveUserSmartModel();
   const result = streamText({
-    model: await userSmartModel(),
+    model: resolved.model,
     system: systemPrompt,
     messages: [
       {
@@ -452,7 +477,7 @@ async function legacyBrief(
           {
             type: "text",
             text: `Articles to brief on:\n\n[Briefing window: ${windowLabel}, ${rows.length} unread articles]\n\n${articleBlock}`,
-            providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+            ...cacheControlFor(resolved),
           },
           { type: "text", text: "Write the daily brief now." },
         ],
@@ -460,6 +485,9 @@ async function legacyBrief(
     ],
     temperature: 0.4,
     abortSignal: req.signal,
+    // No output cap on this path, so reasoning can't starve the answer — but a
+    // whole brief of visible thinking still isn't what was asked for.
+    providerOptions: quietReasoningOptions(resolved.provider, resolved.id),
   });
 
   const stream = streamWithUsage(result, userId, req, {
@@ -486,9 +514,31 @@ async function legacyBrief(
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
 
 /**
+ * Output budget for a second attempt at a section whose first attempt produced
+ * no visible text at all.
+ *
+ * The overwhelmingly likely cause is a model that reasoned past even the
+ * headroom-adjusted cap, so the one thing worth changing is the ceiling — and
+ * changing it by a lot, since a budget that merely doubles a thinking pass's
+ * appetite fails the same way. Still bounded: this runs inside the same ~10s
+ * function window, and only on the path that would otherwise render nothing.
+ */
+const EMPTY_RETRY_TOKEN_FLOOR = 2400;
+
+function retryTokens(base: number): number {
+  return Math.max(base * 2, EMPTY_RETRY_TOKEN_FLOOR);
+}
+
+/**
  * Pipe the model's text through, then append the trailing sentinels the client
  * strips and parses. Sources/usage aren't known until generation finishes, so
  * they can't go in headers that were already sent.
+ *
+ * Two things happen to the text on the way out. Inline `<think>` blocks are
+ * stripped (some OpenRouter routes emit reasoning as ordinary content — see
+ * `think-tags.ts`), and a generation that yields no visible text at all is
+ * retried once via `opts.retry`, because the usual cause is a fixable budget
+ * rather than a broken request. Token usage is billed across both attempts.
  */
 function streamWithUsage(
   result: ReturnType<typeof streamText>,
@@ -497,39 +547,60 @@ function streamWithUsage(
   opts: {
     sourceMap?: BriefSourceRef[];
     onDone?: (content: string, usage: Usage) => void;
+    /** Second attempt, used only when the first produces no visible text. */
+    retry?: () => ReturnType<typeof streamText>;
   } = {},
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   return new ReadableStream<Uint8Array>({
     async start(controller) {
-      try {
-        let acc = "";
-        for await (const delta of result.textStream) {
-          acc += delta;
-          controller.enqueue(encoder.encode(delta));
-        }
-        if (opts.sourceMap) {
-          controller.enqueue(
-            encoder.encode(`\n${BRIEFSOURCES_SENTINEL}${JSON.stringify(opts.sourceMap)}`),
-          );
-        }
-        const usage = await result.usage;
-        const payload: Usage = {
-          promptTokens: usage?.promptTokens ?? 0,
-          completionTokens: usage?.completionTokens ?? 0,
-          totalTokens: usage?.totalTokens ?? 0,
+      const usageTotal: Usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      let acc = "";
+      const write = (s: string) => controller.enqueue(encoder.encode(s));
+
+      /** Drain one attempt, returning the visible text it produced. */
+      const consume = async (r: ReturnType<typeof streamText>): Promise<string> => {
+        const stripper = createThinkStripper();
+        let produced = "";
+        const show = (s: string) => {
+          if (!s) return;
+          produced += s;
+          acc += s;
+          write(s);
         };
-        void recordAiUsage(userId, payload.totalTokens);
-        controller.enqueue(encoder.encode(`\n${USAGE_SENTINEL}${JSON.stringify(payload)}`));
-        opts.onDone?.(acc, payload);
+        for await (const delta of r.textStream) show(stripper.push(delta));
+        show(stripper.flush());
+
+        const usage = await r.usage;
+        usageTotal.promptTokens += usage?.promptTokens ?? 0;
+        usageTotal.completionTokens += usage?.completionTokens ?? 0;
+        usageTotal.totalTokens += usage?.totalTokens ?? 0;
+        return produced;
+      };
+
+      try {
+        const text = await consume(result);
+        // Empty means the tokens went somewhere the reader can't see them —
+        // a hidden reasoning pass that used up the ceiling, or a think block
+        // that got cut off before the answer began. Worth one more try with
+        // room to finish; the client's retry button is the fallback after that.
+        if (!text.trim() && opts.retry && !req.signal.aborted) {
+          console.warn("brief section produced no visible text — retrying with a larger budget");
+          await consume(opts.retry());
+        }
+
+        if (opts.sourceMap) {
+          write(`\n${BRIEFSOURCES_SENTINEL}${JSON.stringify(opts.sourceMap)}`);
+        }
+        void recordAiUsage(userId, usageTotal.totalTokens);
+        write(`\n${USAGE_SENTINEL}${JSON.stringify(usageTotal)}`);
+        opts.onDone?.(acc, usageTotal);
       } catch (err) {
+        // Tokens spent before the failure still cost money — bill them.
+        if (usageTotal.totalTokens > 0) void recordAiUsage(userId, usageTotal.totalTokens);
         if (!req.signal.aborted) {
           try {
-            controller.enqueue(
-              encoder.encode(
-                `\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`,
-              ),
-            );
+            write(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`);
           } catch {
             /* controller closed */
           }

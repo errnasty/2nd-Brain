@@ -65,37 +65,53 @@ export function openrouterClient() {
   return openrouterClientSingleton;
 }
 
-let openrouterThinkingClientSingleton: ReturnType<typeof createOpenRouter> | null = null;
+let openrouterReasoningClientSingleton: ReturnType<typeof createOpenRouter> | null = null;
 /**
  * OpenRouter via the dedicated `@openrouter/ai-sdk-provider` client (not the
- * OpenAI-compatible one above). Needed specifically for reasoning: the
- * OpenAI-compatible client can't carry OpenRouter's `reasoning` request field
- * or parse the `delta.reasoning` chunks it streams back, so it's used only
- * when the Ask/Agent routes want thinking on a `THINKING_CAPABLE_OPENROUTER`
- * model (see `models.ts`).
+ * OpenAI-compatible one above). It is the only client that can carry
+ * OpenRouter's `reasoning` request field or parse the `delta.reasoning` chunks
+ * it streams back — the OpenAI-compatible client silently drops both.
+ *
+ * That matters in BOTH directions, which is why this isn't named for thinking:
+ *   - Ask/Agent use it to turn reasoning ON for a `THINKING_CAPABLE_OPENROUTER`
+ *     model and stream the thinking to the user (see `models.ts`);
+ *   - short, tightly-capped generations use it to turn reasoning OFF, so a
+ *     thinking model doesn't spend the whole output budget before writing a
+ *     word (see `quietReasoningOptions` in `models.ts`).
  */
-export function openrouterThinkingClient() {
-  if (!openrouterThinkingClientSingleton) {
-    openrouterThinkingClientSingleton = createOpenRouter({
+export function openrouterReasoningClient() {
+  if (!openrouterReasoningClientSingleton) {
+    openrouterReasoningClientSingleton = createOpenRouter({
       apiKey: openrouterKey() ?? "",
       headers: { "X-Title": "Second Brain" },
     });
   }
-  return openrouterThinkingClientSingleton;
+  return openrouterReasoningClientSingleton;
+}
+
+/** Model id behind `fastModel()` — for callers that must reason about the
+ *  model itself (token budgets, provenance) and not just call it. */
+export function fastModelId(): string {
+  return activeProvider() === "openrouter"
+    ? (process.env.OPENROUTER_FAST_MODEL ?? OPENROUTER_FAST_DEFAULT)
+    : ANTHROPIC_FAST;
+}
+
+/** Model id behind `smartModel()`. See `fastModelId`. */
+export function smartModelId(): string {
+  return activeProvider() === "openrouter"
+    ? (process.env.OPENROUTER_SMART_MODEL ?? OPENROUTER_SMART_DEFAULT)
+    : ANTHROPIC_SMART;
 }
 
 /** Cheap/fast model for high-volume background work (tagging, cards, distill). */
 export function fastModel(): LanguageModelV1 {
-  if (activeProvider() === "openrouter") {
-    return openrouterClient()(process.env.OPENROUTER_FAST_MODEL ?? OPENROUTER_FAST_DEFAULT);
-  }
-  return anthropic(ANTHROPIC_FAST);
+  if (activeProvider() === "openrouter") return openrouterClient()(fastModelId());
+  return anthropic(fastModelId());
 }
 
 /** Stronger model for long-form synthesis (study plans, curricula). */
 export function smartModel(): LanguageModelV1 {
-  if (activeProvider() === "openrouter") {
-    return openrouterClient()(process.env.OPENROUTER_SMART_MODEL ?? OPENROUTER_SMART_DEFAULT);
-  }
-  return anthropic(ANTHROPIC_SMART);
+  if (activeProvider() === "openrouter") return openrouterClient()(smartModelId());
+  return anthropic(smartModelId());
 }

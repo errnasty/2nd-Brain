@@ -444,7 +444,12 @@ export function DailyBrief({
           patchBlock(section.key, {
             status: body ? "done" : "error",
             text: body,
-            error: body ? undefined : "Nothing came back for this section.",
+            // The server already retried with a bigger output budget before
+            // giving up, so a still-empty section usually means the chosen
+            // model spends more of its budget thinking than this section allows.
+            error: body
+              ? undefined
+              : "The model returned nothing for this section. Retry, or pick a different model in Settings.",
           });
         }
         return "ok";

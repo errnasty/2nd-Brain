@@ -3,7 +3,7 @@ import { openai } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
 import { requireUser } from "@/lib/auth";
 import { getChatModel, isToolCapable, isThinkingCapable, DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
-import { openrouterClient, openrouterThinkingClient, openrouterKey, aiAvailable } from "@/lib/ai/provider";
+import { openrouterClient, openrouterReasoningClient, openrouterKey, aiAvailable } from "@/lib/ai/provider";
 import { buildDirectoryMap } from "@/lib/ai/rag";
 import { memoryBlock } from "@/lib/ai/memory";
 import { runAgent } from "@/lib/ai/agent/run";
@@ -49,7 +49,7 @@ function instantiate(id: string, thinking: boolean): { model: LanguageModelV1; p
   if (m.provider === "openai") return { model: openai(m.id), provider: "openai" };
   if (m.provider === "openrouter") {
     if (thinking && isThinkingCapable(m.id)) {
-      return { model: openrouterThinkingClient()(m.id), provider: "openrouter" };
+      return { model: openrouterReasoningClient()(m.id), provider: "openrouter" };
     }
     return { model: openrouterClient()(m.id), provider: "openrouter" };
   }
