@@ -28,12 +28,17 @@ jobs:
 
   audit:
     runs-on: ubuntu-latest
-    # continue-on-error: the 4 remaining HIGH advisories after the safe
-    # `npm audit fix` are ALL in the deferred-major set (drizzle-orm <0.45.2,
-    # @ai-sdk/provider-utils via ai 4->7, @mozilla/readability <0.6.0). They
-    # only clear via `npm audit fix --force` (breaking) and are tracked as
-    # separate PRs. We still run the audit every push so a NEW high/critical
-    # surfaces immediately; flip this to a hard gate once those majors land.
+    # continue-on-error: every advisory left after the safe `npm audit fix`
+    # plus the postcss/sharp overrides needs a genuine major bump, so none of
+    # them can clear on this branch. As of 2026-08-01 that is 17 (1 critical,
+    # 3 high):
+    #   - the @xenova/transformers chain — protobufjs (critical), onnx-proto,
+    #     onnxruntime-web. npm's only "fix" is DOWNGRADING transformers to
+    #     1.4.2. Reachable solely via the opt-in local embeddings provider,
+    #     which is lazily imported and documented as dev/self-hosted.
+    #   - ai 4 -> 7 (with @ai-sdk/*), drizzle-kit, fast-xml-parser.
+    # We still run the audit every push so a NEW high/critical surfaces
+    # immediately; flip this to a hard gate once those majors land.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
