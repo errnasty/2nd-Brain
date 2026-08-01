@@ -27,6 +27,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-31-h",
+    date: "July 31, 2026",
+    title: "Code blocks are syntax-highlighted",
+    tag: "improvement",
+    summary:
+      "Code in your notes and documents is now coloured the way it would be in VS Code — keywords, strings, comments and numbers each get their own colour instead of one flat block of grey text. Works in both light and dark themes.",
+  },
+  {
+    id: "2026-07-31-g",
+    date: "July 31, 2026",
+    title: "Quiz generation works again",
+    tag: "fix",
+    summary:
+      "Generating a quiz often failed with “couldn't generate a quiz from this text”, however good the text was — the request was too large to finish before the server cut it off. Quizzes are now built a few questions at a time, and if something does go wrong you'll see the actual reason instead of a generic retry message.",
+  },
+  {
     id: "2026-07-31-f",
     date: "July 31, 2026",
     title: "ThinkTank can explore, not just teach a course",

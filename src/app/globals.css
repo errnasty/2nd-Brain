@@ -764,3 +764,186 @@ html { scroll-behavior: smooth; }
 .lh-stagger.motion-safe-in .lh-line {
   animation-duration: 0.7s;
 }
+
+/* ── Code blocks: VS Code-style syntax highlighting ────────────────────
+   `rehype-highlight` (see markdown-impl.tsx) tags tokens with `hljs-*`
+   classes and nothing else — every colour is defined here.
+
+   Doing it in CSS rather than importing one of highlight.js's stylesheets is
+   what lets a single highlighter serve both themes: a stylesheet hard-codes
+   one theme's colours, so supporting light AND dark would mean shipping two
+   and swapping them at runtime, which flashes on every theme toggle.
+
+   Palettes are VS Code's own Dark+ and Light+ token colours, so a code block
+   reads the way the same file does in the editor it was probably written in.
+   They are deliberately literal hex values, NOT the app's palette variables:
+   syntax colour is a semantic code (green means comment, blue means keyword)
+   and re-tinting it per app theme would destroy the meaning. */
+:root {
+  /* Light+ */
+  --code-bg: 0 0% 98%;
+  --code-fg: #000000;
+  --code-comment: #008000;
+  --code-keyword: #0000ff;
+  --code-control: #af00db;
+  --code-string: #a31515;
+  --code-number: #098658;
+  --code-function: #795e26;
+  --code-type: #267f99;
+  --code-variable: #001080;
+  --code-attr: #e50000;
+  --code-tag: #800000;
+  --code-regexp: #811f3f;
+  --code-meta: #000080;
+  --code-deletion: #a31515;
+  --code-addition: #098658;
+}
+
+.dark {
+  /* Dark+ */
+  --code-bg: 0 0% 7%;
+  --code-fg: #d4d4d4;
+  --code-comment: #6a9955;
+  --code-keyword: #569cd6;
+  --code-control: #c586c0;
+  --code-string: #ce9178;
+  --code-number: #b5cea8;
+  --code-function: #dcdcaa;
+  --code-type: #4ec9b0;
+  --code-variable: #9cdcfe;
+  --code-attr: #9cdcfe;
+  --code-tag: #569cd6;
+  --code-regexp: #d16969;
+  --code-meta: #9cdcfe;
+  --code-deletion: #f48771;
+  --code-addition: #b5cea8;
+}
+
+/* The code surface itself. Global rather than scoped to one prose class:
+   markdown renders in Directory, Today, Ask, Rabbithole and the readers, and
+   a code block should look identical in all of them. */
+/* The surface goes on the `pre`, never on the `code`. `.prose-reader pre code`
+   already forces the inner element transparent, and setting a background on
+   both would leave whichever lost the cascade showing as a mismatched ring
+   inside the block's padding. */
+pre:has(> code.hljs) {
+  background: hsl(var(--code-bg));
+  color: var(--code-fg);
+}
+
+pre > code.hljs {
+  display: block;
+  background: transparent;
+  color: inherit;
+  overflow-x: auto;
+  padding: 0;
+  /* Tabs at 8 columns waste most of a narrow column on indented code. */
+  tab-size: 2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  line-height: 1.55;
+}
+
+/* A border does the separating work `bg-muted` used to, now that the surface
+   is close to the page background in light mode. */
+pre:has(> code.hljs) {
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+
+/* ── Token colours ───────────────────────────────────────────────────── */
+.hljs-comment,
+.hljs-quote {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-built_in {
+  color: var(--code-keyword);
+}
+
+/* Control flow is a different colour from other keywords in VS Code, and it's
+   the distinction that makes a function's shape readable at a glance. */
+.hljs-section,
+.hljs-keyword.hljs-control,
+.hljs-meta-keyword {
+  color: var(--code-control);
+}
+
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-char.escape_ {
+  color: var(--code-string);
+}
+
+.hljs-number,
+.hljs-operator {
+  color: var(--code-number);
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.function_.invoke__ {
+  color: var(--code-function);
+}
+
+.hljs-title.class_,
+.hljs-class .hljs-title,
+.hljs-selector-class {
+  color: var(--code-type);
+}
+
+.hljs-variable,
+.hljs-params,
+.hljs-property,
+.hljs-attr,
+.hljs-selector-id {
+  color: var(--code-variable);
+}
+
+.hljs-attribute {
+  color: var(--code-attr);
+}
+
+.hljs-tag {
+  color: var(--code-tag);
+}
+
+.hljs-regexp {
+  color: var(--code-regexp);
+}
+
+.hljs-meta,
+.hljs-meta .hljs-string {
+  color: var(--code-meta);
+}
+
+.hljs-deletion {
+  color: var(--code-deletion);
+}
+
+.hljs-addition {
+  color: var(--code-addition);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* Inline `code` is NOT highlighted (rehype-highlight only touches fenced
+   blocks), so it keeps the muted chip treatment the prose styles give it. */

@@ -30,8 +30,10 @@ describe("AI helpers fail soft", () => {
     await expect(generateFlashcards("Title", "lots of content here")).resolves.toEqual([]);
   });
 
-  it("generateQuiz returns [] with no key", async () => {
-    await expect(generateQuiz([{ title: "Title", text: "lots of content here" }])).resolves.toEqual([]);
+  it("generateQuiz returns no questions with no key", async () => {
+    await expect(
+      generateQuiz([{ title: "Title", text: "lots of content here" }]),
+    ).resolves.toEqual({ questions: [] });
   });
 
   it("distill returns null with no key", async () => {
@@ -51,7 +53,9 @@ describe("AI helpers fail soft", () => {
   it("guards empty content even when a key is present (no network call)", async () => {
     process.env.ANTHROPIC_API_KEY = "test-key-not-used";
     await expect(generateFlashcards("Title", "   ")).resolves.toEqual([]);
-    await expect(generateQuiz([{ title: "Title", text: "   " }])).resolves.toEqual([]);
+    await expect(generateQuiz([{ title: "Title", text: "   " }])).resolves.toEqual({
+      questions: [],
+    });
     await expect(distill("Title", "")).resolves.toBeNull();
     await expect(classifyItemSkills("", "", [])).resolves.toBeNull();
     await expect(
