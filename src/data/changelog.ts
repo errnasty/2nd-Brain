@@ -27,6 +27,33 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-g",
+    date: "August 1, 2026",
+    title: "AI usage is now counted everywhere",
+    tag: "improvement",
+    summary:
+      "The AI usage figure in Settings only counted Ask and the Daily Brief. Everything else — flashcards, quizzes, tagging, study plans, ThinkTank, summarising and more — ran without being counted, so the number was well under what you were actually using.",
+    items: [
+      "Usage from every AI feature is now included, so the meter reflects real consumption.",
+      "If you set a daily token limit, it now applies across the whole app rather than just a couple of places.",
+      "Free-tier models are still not counted, since they cost nothing.",
+    ],
+  },
+  {
+    id: "2026-08-01-f",
+    date: "August 1, 2026",
+    title: "Daily Brief works on every model in the picker",
+    tag: "fix",
+    summary:
+      "Sections of today's brief could come back blank — sometimes the whole brief — when you picked a model that thinks before it answers, like DeepSeek V4. Those models were using up the brief's whole length budget on thinking you never saw, leaving nothing for the write-up.",
+    items: [
+      "The brief now asks such models to skip the thinking step, and leaves room for it when they do it anyway.",
+      "If a section still comes back empty, it is retried once automatically with more room before anything is reported as failed.",
+      "Stray internal 'thinking' text no longer leaks into a section in place of the actual brief.",
+      "When a section genuinely can't be written, the message now tells you that switching models in Settings is an option.",
+    ],
+  },
+  {
     id: "2026-08-01-e",
     date: "August 1, 2026",
     title: "Quiz length setting is honored again",

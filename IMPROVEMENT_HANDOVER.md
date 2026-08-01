@@ -122,14 +122,27 @@ Starting point for you: tree is green (`npx tsc --noEmit` clean, `npm test`
 > these numbered items are just the "do next" cut.
 
 ### 0. Two urgent finds from the full-surface audit (details in backlog)
-- **Dependency vulnerabilities**: 24 total — 1 critical (protobufjs RCE
-  advisory), 7 high incl. drizzle-orm SQL-identifier injection. Run
-  `npm audit fix` for the safe subset now; plan the drizzle-orm 0.45 major
-  bump as its own PR. (Backlog §A.)
-- **Migration drift**: cloud migrations 0008/0013/0018 are referenced by
-  code but absent from `drizzle/` — a fresh deploy can't fully rebuild the
-  DB and desktop sync hard-errors without 0013. Recover + commit them.
-  (Backlog §B.)
+
+> **Both resolved as of 2026-08-01.** Left in place with their outcomes so the
+> backlog entries below (§A, §B) are read in context rather than re-chased —
+> §B in particular describes a layout the repo no longer uses.
+
+- ~~**Dependency vulnerabilities**~~ — **partly done.** The safe subset is
+  cleared: `npm audit fix` (no `--force`) took tar (critical),
+  brace-expansion, fast-uri and sanitize-html as in-range lockfile bumps, and
+  `overrides` lift postcss and sharp past owners who pin below the patched
+  version. 24 → 17. Everything left needs a real major bump and is listed in
+  `.github/workflows/ci.yml`'s audit job: the @xenova/transformers chain
+  (protobufjs critical — reachable only through the opt-in local embeddings
+  provider), ai 4→7, drizzle-kit, fast-xml-parser. The drizzle-**orm**
+  advisory named in the original find is gone. (Backlog §A.)
+- ~~**Migration drift**~~ — **not a real gap; the premise was stale.** The
+  authoritative migrations live in `supabase/migrations/` (0001–0029, all
+  present, including 0008 tsvector+GIN, 0013 sync triggers and 0018 FSRS).
+  `drizzle/` holding only 0000+0001 is by design — DEPLOY.md calls it "the
+  desktop PGlite bundle source only" and explicitly warns against `db:push`
+  for a real deploy. Nothing to recover. (Backlog §B is written against the
+  old drizzle-based layout — ignore its "cannot rebuild the DB" framing.)
 
 ### 1. Authenticated e2e specs
 The smoke suite covers the unauthenticated surface. The valuable half —

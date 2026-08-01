@@ -1,8 +1,17 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
-import { CHAT_MODELS, DEFAULT_CHAT_MODEL, type ChatModel } from "./models";
-import { fastModel, smartModel, openrouterClient, openrouterKey } from "./provider";
+import { CHAT_MODELS, DEFAULT_CHAT_MODEL, type ChatModel, type ChatProvider } from "./models";
+import { withUsageMetering } from "./usage-middleware";
+import {
+  activeProvider,
+  fastModel,
+  smartModel,
+  smartModelId,
+  openrouterClient,
+  openrouterKey,
+  openrouterReasoningClient,
+} from "./provider";
 
 /**
  * Resolves the signed-in user's chosen AI model (Settings → Default AI model)
@@ -44,16 +53,68 @@ function instantiate(m: ChatModel): LanguageModelV1 {
   return anthropic(m.id);
 }
 
-/** The user's chosen model, else the env smart default. */
+/**
+ * The user's chosen model, else the env smart default.
+ *
+ * Metered. This resolver and `userFastModel` are what every AI feature outside
+ * the Ask/brief routes generates through, and none of those callers recorded
+ * token usage — so the daily budget only ever saw a fraction of real
+ * consumption. Metering here covers all of them at once; see
+ * `usage-middleware.ts` for why it belongs at this layer and why it only
+ * reports rather than blocks.
+ */
 export async function userSmartModel(): Promise<LanguageModelV1> {
   const m = await userModelChoice();
-  return m ? instantiate(m) : smartModel();
+  return withUsageMetering(m ? instantiate(m) : smartModel());
 }
 
-/** The user's chosen model, else the env fast default. */
+/** A model instance plus the facts a caller needs to size a request for it. */
+export type ResolvedModel = {
+  model: LanguageModelV1;
+  /** Concrete model id — an env default here may be any OpenRouter slug, so
+   *  this is NOT necessarily one of `CHAT_MODELS`. */
+  id: string;
+  provider: ChatProvider;
+};
+
+/**
+ * The user's chosen model — or the env default — resolved together with its id
+ * and provider, for callers that put a hard ceiling on output tokens.
+ *
+ * Such a caller can't just take a `LanguageModelV1`: whether the ceiling has to
+ * cover a hidden reasoning pass, and how to ask for that pass to be skipped,
+ * both depend on which model actually got picked (see the reasoning helpers in
+ * `models.ts`). OpenRouter is instantiated through the reasoning-capable client
+ * because it is the only one that can carry the "don't think" request field.
+ */
+export async function resolveUserSmartModel(): Promise<ResolvedModel> {
+  const choice = await userModelChoice();
+  if (choice) {
+    return {
+      model:
+        choice.provider === "openrouter"
+          ? openrouterReasoningClient()(choice.id)
+          : instantiate(choice),
+      id: choice.id,
+      provider: choice.provider,
+    };
+  }
+  // No stored choice (or its key isn't configured) — the env default, resolved
+  // the same way so it gets the same treatment.
+  const provider = activeProvider();
+  const id = smartModelId();
+  return {
+    model: provider === "openrouter" ? openrouterReasoningClient()(id) : anthropic(id),
+    id,
+    provider,
+  };
+}
+
+/** The user's chosen model, else the env fast default. Metered — see
+ *  `userSmartModel` above. */
 export async function userFastModel(): Promise<LanguageModelV1> {
   const m = await userModelChoice();
-  return m ? instantiate(m) : fastModel();
+  return withUsageMetering(m ? instantiate(m) : fastModel());
 }
 
 /**

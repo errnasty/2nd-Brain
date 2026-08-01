@@ -11,7 +11,7 @@ import {
 } from "@/lib/ai/rag";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
 import { getChatModel, DEFAULT_CHAT_MODEL, isThinkingCapable } from "@/lib/ai/models";
-import { openrouterClient, openrouterThinkingClient, openrouterKey } from "@/lib/ai/provider";
+import { openrouterClient, openrouterReasoningClient, openrouterKey } from "@/lib/ai/provider";
 import { rewriteQuery } from "@/lib/ai/retrieval/rewrite";
 import { rerankSources, unionByItem } from "@/lib/ai/retrieval/rerank";
 import { memoryBlock } from "@/lib/ai/memory";
@@ -88,7 +88,7 @@ function resolveModel(modelId: string | undefined, thinking: boolean): { model: 
   }
   if (chosen.provider === "openrouter") {
     if (thinking && isThinkingCapable(chosen.id)) {
-      return { model: openrouterThinkingClient()(chosen.id), provider: "openrouter" };
+      return { model: openrouterReasoningClient()(chosen.id), provider: "openrouter" };
     }
     return { model: openrouterClient()(chosen.id), provider: "openrouter" };
   }

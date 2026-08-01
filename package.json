@@ -21,6 +21,17 @@
     "desktop:fix": "node electron/fix-binary.js",
     "desktop:icons": "node electron/make-icons.mjs"
   },
+  "comments": {
+    "overrides": [
+      "Transitive security bumps that the dependency owners pin below the patched version. Each is a PATCH/MINOR lift within the same major — no API change — and the full suite (tsc, lint, unit, build, e2e) is the gate for keeping them.",
+      "postcss: next 15.5.22 pins postcss 8.4.31 exactly. Everything else in the tree already resolves to 8.5.x; this makes Next's nested copy match, clearing the sourceMappingURL path-traversal/file-read advisories (GHSA high) that npm audit otherwise 'fixes' by DOWNGRADING next to 14.",
+      "sharp: next declares sharp ^0.34.3 for runtime image optimization; the libvips CVEs (CVE-2026-33327/33328/35590/35591) are patched in 0.35.0. This is the one advisory with genuine production reach, since image optimization parses remote image bytes."
+    ]
+  },
+  "overrides": {
+    "postcss": "$postcss",
+    "sharp": "^0.35.3"
+  },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
     "@ai-sdk/openai": "^1.0.0",

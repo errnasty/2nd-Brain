@@ -1,9 +1,11 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
-import { aiAvailable, fastModel } from "@/lib/ai/provider";
+import { aiAvailable } from "@/lib/ai/provider";
+import { userFastModel } from "@/lib/ai/user-model";
 import { fetchItemContents } from "@/lib/ai/rag";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { checkAiBudget } from "@/lib/ai/budget";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -31,6 +33,10 @@ export async function POST(req: Request) {
 
   const rl = await checkRateLimit(userId, "ask-verify", 30, 60);
   if (!rl.allowed) return Response.json({ verdict: "unknown", issues: [] });
+  // An opt-in check on top of an answer the user already has — over budget it
+  // reports "unknown" rather than spending the last of the day's tokens on it.
+  const budget = await checkAiBudget(userId);
+  if (!budget.allowed) return Response.json({ verdict: "unknown", issues: [] });
   if (!aiAvailable()) return Response.json({ verdict: "unknown", issues: [] });
 
   let body: { answer?: string; sourceIds?: string[] };
@@ -56,7 +62,7 @@ export async function POST(req: Request) {
       .join("\n\n");
 
     const { object } = await generateObject({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: VerdictSchema,
       system: `You check whether an ANSWER is faithful to the SOURCES it cites.
 - "supported": every substantive claim is backed by the sources.
