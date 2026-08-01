@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { aiAvailable, fastModel } from "@/lib/ai/provider";
+import { aiAvailable } from "@/lib/ai/provider";
+import { userFastModel } from "@/lib/ai/user-model";
 import type { RagSource } from "@/lib/ai/rag";
 import { generateJson } from "@/lib/ai/generate-json";
 
@@ -56,7 +57,7 @@ export async function rerankSources(
       .map((s, i) => `[${i}] (${s.kind}) ${s.title}\n${(s.snippet ?? "").slice(0, 200)}`)
       .join("\n\n");
     const object = await generateJson({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: RankSchema,
       system: `You rerank candidate documents by how well each ANSWERS the user's question (not just topical similarity). Return "order": candidate indexes from MOST to LEAST relevant. Include only genuinely relevant candidates; omit ones that don't help.`,
       prompt: `Question: ${query}\n\nCandidates:\n${list}\n\nReturn the indexes in relevance order.`,

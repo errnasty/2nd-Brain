@@ -2,6 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import type { LanguageModelV1 } from "ai";
 import { CHAT_MODELS, DEFAULT_CHAT_MODEL, type ChatModel, type ChatProvider } from "./models";
+import { withUsageMetering } from "./usage-middleware";
 import {
   activeProvider,
   fastModel,
@@ -52,10 +53,19 @@ function instantiate(m: ChatModel): LanguageModelV1 {
   return anthropic(m.id);
 }
 
-/** The user's chosen model, else the env smart default. */
+/**
+ * The user's chosen model, else the env smart default.
+ *
+ * Metered. This resolver and `userFastModel` are what every AI feature outside
+ * the Ask/brief routes generates through, and none of those callers recorded
+ * token usage — so the daily budget only ever saw a fraction of real
+ * consumption. Metering here covers all of them at once; see
+ * `usage-middleware.ts` for why it belongs at this layer and why it only
+ * reports rather than blocks.
+ */
 export async function userSmartModel(): Promise<LanguageModelV1> {
   const m = await userModelChoice();
-  return m ? instantiate(m) : smartModel();
+  return withUsageMetering(m ? instantiate(m) : smartModel());
 }
 
 /** A model instance plus the facts a caller needs to size a request for it. */
@@ -100,10 +110,11 @@ export async function resolveUserSmartModel(): Promise<ResolvedModel> {
   };
 }
 
-/** The user's chosen model, else the env fast default. */
+/** The user's chosen model, else the env fast default. Metered — see
+ *  `userSmartModel` above. */
 export async function userFastModel(): Promise<LanguageModelV1> {
   const m = await userModelChoice();
-  return m ? instantiate(m) : fastModel();
+  return withUsageMetering(m ? instantiate(m) : fastModel());
 }
 
 /**

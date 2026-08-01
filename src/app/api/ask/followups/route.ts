@@ -2,7 +2,7 @@ import { generateObject } from "ai";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { checkAiBudget, recordAiUsage } from "@/lib/ai/budget";
+import { checkAiBudget } from "@/lib/ai/budget";
 import { aiAvailable } from "@/lib/ai/provider";
 import { userFastModel } from "@/lib/ai/user-model";
 
@@ -41,7 +41,10 @@ export async function POST(req: Request) {
   if (!question || !answer) return Response.json({ followups: [] });
 
   try {
-    const { object, usage } = await generateObject({
+    // Usage is NOT recorded here: `userFastModel()` meters every generation it
+    // resolves (see ai/usage-middleware.ts), so an explicit call would bill
+    // this request's tokens twice.
+    const { object } = await generateObject({
       model: await userFastModel(),
       schema: Schema,
       system:
@@ -50,7 +53,6 @@ export async function POST(req: Request) {
         "No numbering, no preamble.",
       prompt: `QUESTION:\n${question}\n\nANSWER:\n${answer}`,
     });
-    void recordAiUsage(auth.user.id, usage?.totalTokens ?? 0);
     return Response.json({ followups: object.followups.slice(0, 3) });
   } catch {
     return Response.json({ followups: [] });

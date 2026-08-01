@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { aiAvailable, fastModel } from "@/lib/ai/provider";
+import { aiAvailable } from "@/lib/ai/provider";
+import { userFastModel } from "@/lib/ai/user-model";
 import { generateJson } from "@/lib/ai/generate-json";
 
 const RewriteSchema = z.object({
@@ -48,7 +49,7 @@ export async function rewriteQuery(
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.slice(0, 500)}`)
       .join("\n");
     const object = await generateJson({
-      model: fastModel(),
+      model: await userFastModel(),
       schema: RewriteSchema,
       system: `Rewrite the user's latest message into a standalone search query for a vector database over their personal notes, articles, and documents.
 - Resolve pronouns and references ("it", "the second one", "that article") using the conversation.
