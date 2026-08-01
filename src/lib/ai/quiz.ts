@@ -133,7 +133,8 @@ export function extractQuestions(text: string): FlatQuestion[] {
 }
 
 /**
- * Wall-clock budget for the whole action.
+ * Wall-clock budget for the whole action — a runaway safety valve, NOT the
+ * thing that should decide how many questions you get.
  *
  * The original code asked for all 8+ questions in one call with a 3000-token
  * ceiling. On Netlify a function is killed at ~10s regardless of `maxDuration`,
@@ -141,11 +142,15 @@ export function extractQuestions(text: string): FlatQuestion[] {
  * the request died and the user got "couldn't generate a quiz from this text",
  * every time, no matter how good the text was.
  *
- * Now questions are generated a few at a time and the loop stops when the
- * budget is spent, returning whatever landed. A four-question quiz beats an
- * error, and on a host without the limit the full set still comes back.
+ * Questions are generated a few at a time and the loop stops when the budget
+ * is spent, returning whatever landed. A 7s budget on the non-desktop runtime
+ * turned out to be shorter than ONE batch takes to return, so it fired right
+ * after the first batch and silently capped every quiz at QUIZ_BATCH (4) — the
+ * user's chosen count was never reached. A hard serverless kill (~10s) already
+ * bounds the cloud path on its own, so a generous budget here costs nothing
+ * there and lets every other host actually deliver the requested count.
  */
-const GENERATION_BUDGET_MS = isDesktop ? 60_000 : 7_000;
+const GENERATION_BUDGET_MS = 60_000;
 
 export type QuizGeneration = {
   questions: GeneratedQuizQuestion[];

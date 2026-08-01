@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-e",
+    date: "August 1, 2026",
+    title: "Quiz length setting is honored again",
+    tag: "fix",
+    summary:
+      "On most setups the quiz generator silently stopped after 4 questions no matter how many you set in Settings. The generation time-budget was too tight and cut off after the first batch — it now runs long enough to actually deliver the question count you chose.",
+  },
+  {
     id: "2026-08-01-d",
     date: "August 1, 2026",
     title: "Quiz multiple-choice options are always distinct",
