@@ -4,18 +4,21 @@ import { aiAvailable } from "@/lib/ai/provider";
 import { runDeckGeneration } from "@/lib/thinktank/generate";
 
 export const runtime = "nodejs";
-// Deep decks with web grounding can run past 60s; a severed run leaves the
-// deck stuck "generating" until the stall detection re-kicks it, so give the
-// builder the same ceiling as the ThinkTank pages.
-export const maxDuration = 120;
+// Each call now does ONE bounded pass of the build (see runDeckGeneration), so
+// it finishes well inside any host's limit. This export is kept honest at 60:
+// it is advisory on Vercel and ignored entirely on Netlify, which is exactly
+// why the work is stepped rather than relying on it.
+export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Background deck builder. The create action inserts a "generating" deck and
- * returns instantly; the reader kicks this route and polls the deck's status,
- * so a severed long response (serverless timeout) can't surface as an error —
- * the poll just picks the finished deck up.
+ * Background deck builder — ONE bounded pass per call.
+ *
+ * The create action inserts a "generating" deck and returns instantly; the
+ * reader kicks this route repeatedly until it answers `done: true`, polling the
+ * deck's status in between. Because every pass commits what it wrote, a severed
+ * response costs at most one batch of cards rather than the whole build.
  */
 export async function POST(req: Request) {
   let user;
@@ -41,5 +44,7 @@ export async function POST(req: Request) {
 
   const r = await runDeckGeneration(user.id, body.deckId);
   if (!r.ok) return NextResponse.json({ error: r.error }, { status: 502 });
-  return NextResponse.json({ ok: true });
+  // `done: false` means the pass ran out of budget with cards still to write.
+  // The caller re-kicks; progress is already committed either way.
+  return NextResponse.json({ ok: true, done: r.done, cards: r.cards, total: r.total });
 }

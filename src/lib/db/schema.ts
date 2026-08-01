@@ -716,6 +716,12 @@ export const quizAttempts = pgTable(
 // SYNCED to desktop.
 export type ThinkTankSection = "prerequisites" | "core" | "advanced";
 export type ThinkTankRef = { itemId?: string; title: string; url?: string };
+/** One planned card, before its body has been written. */
+export type ThinkTankOutlineEntry = { section: ThinkTankSection; title: string };
+/** A "you might also like" link on a concept card. */
+export type ConceptLink = { name: string; slug: string };
+/** One quick check question, generated alongside the card that it tests. */
+export type ConceptQuestion = { question: string; answer: string };
 
 export const thinktankDecks = pgTable(
   "thinktank_decks",
@@ -740,6 +746,19 @@ export const thinktankDecks = pgTable(
     tokenCount: integer("token_count"),
     // Depth the user requested — drives card count + per-card word ceiling.
     detail: text("detail").$type<"brief" | "standard" | "deep">().default("standard").notNull(),
+    // ── Incremental build state ────────────────────────────────────────
+    // A deck used to be generated in ONE call of 30-60s. This deploys to
+    // Netlify, which kills a function at ~10s whatever `maxDuration` says, so
+    // that call could never finish: the deck sat on "generating" forever and
+    // every retry died the same way. Generation is now a plan-then-fill loop —
+    // the outline is written once, then card bodies are generated in small
+    // batches across as many short requests as it takes.
+    //
+    // `outline` is the plan; cards are inserted as their bodies land, so
+    // `cards.length < outline.length` means the build is still filling in.
+    outline: jsonb("outline").$type<ThinkTankOutlineEntry[]>(),
+    /** Web grounding fetched once at outline time and reused by every batch. */
+    webBrief: text("web_brief"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
@@ -773,8 +792,92 @@ export const thinktankCards = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
-    deckIdx: index("thinktank_cards_deck_idx").on(t.deckId, t.position),
+    // UNIQUE, not just indexed: the stepped builder inserts by outline
+    // position and relies on onConflictDoNothing, so two kicks racing on the
+    // same batch must collide rather than duplicate the card.
+    deckPositionUnique: uniqueIndex("thinktank_cards_deck_position_unique").on(
+      t.deckId,
+      t.position,
+    ),
     userUpdatedIdx: index("thinktank_cards_user_updated_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
+// ── ThinkTank Explore: the concept graph ───────────────────────────────
+// A second mode alongside decks. A deck is a bounded, ordered course; Explore
+// is an endless graph you walk by curiosity — every card names a few related
+// concepts, and tapping one generates it. Cards are cached forever per user,
+// so a mature graph costs nothing to re-read.
+
+export const thinktankConcepts = pgTable(
+  "thinktank_concepts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    /** Normalized name. UNIQUE per user — this is the cache key. */
+    slug: text("slug").notNull(),
+    name: text("name").notNull(),
+    /** Root topic this was first discovered under; null for orphan taps. */
+    topic: text("topic"),
+    status: text("status").$type<"pending" | "ready" | "error">().default("pending").notNull(),
+    // The fixed four-part card. Separate columns rather than one markdown blob
+    // because the format never varies — that consistency is the product, and a
+    // freeform body would let it drift card to card.
+    whatIsIt: text("what_is_it"),
+    whyItMatters: text("why_it_matters"),
+    realWorldExample: text("real_world_example"),
+    /** "You might also like" — the exploration chain. */
+    related: jsonb("related").$type<ConceptLink[]>().default([]).notNull(),
+    /** Generated in the SAME call as the card, so Test Me costs nothing extra. */
+    questions: jsonb("questions").$type<ConceptQuestion[]>().default([]).notNull(),
+    /** Whether the user already knew this, from Discover or an inline correction. */
+    familiarity: text("familiarity").$type<"known" | "new">(),
+    viewedAt: timestamp("viewed_at", { withTimezone: true }),
+    viewCount: integer("view_count").default(0).notNull(),
+    model: text("model"),
+    tokenCount: integer("token_count"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userSlugUnique: uniqueIndex("thinktank_concepts_user_slug_unique").on(t.userId, t.slug),
+    userTopicIdx: index("thinktank_concepts_user_topic_idx").on(t.userId, t.topic),
+    userViewedIdx: index("thinktank_concepts_user_viewed_idx").on(t.userId, t.viewedAt.desc()),
+  }),
+);
+
+/**
+ * Bookmarked concepts and when to nudge about them again.
+ *
+ * Deliberately NOT the FSRS scheduler in `src/lib/srs/fsrs.ts`. FSRS needs a
+ * recall grade per review; a refresher has no grade, and asking for one
+ * reintroduces exactly the ceremony this mode exists to avoid. A fixed ladder
+ * (see `src/lib/thinktank/refresh.ts`) is the whole mechanism.
+ */
+export const thinktankSaved = pgTable(
+  "thinktank_saved",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    conceptId: uuid("concept_id")
+      .notNull()
+      .references(() => thinktankConcepts.id, { onDelete: "cascade" }),
+    savedAt: timestamp("saved_at", { withTimezone: true }).defaultNow().notNull(),
+    lastRefreshedAt: timestamp("last_refreshed_at", { withTimezone: true }),
+    nextRefresherAt: timestamp("next_refresher_at", { withTimezone: true }).notNull(),
+    /** Index into the fixed interval ladder. */
+    refresherStage: integer("refresher_stage").default(0).notNull(),
+  },
+  (t) => ({
+    userConceptUnique: uniqueIndex("thinktank_saved_user_concept_unique").on(
+      t.userId,
+      t.conceptId,
+    ),
+    dueIdx: index("thinktank_saved_due_idx").on(t.userId, t.nextRefresherAt),
   }),
 );
 
@@ -913,6 +1016,8 @@ export type Quiz = typeof quizzes.$inferSelect;
 export type QuizAttempt = typeof quizAttempts.$inferSelect;
 export type ThinkTankDeck = typeof thinktankDecks.$inferSelect;
 export type ThinkTankCard = typeof thinktankCards.$inferSelect;
+export type ThinkTankConcept = typeof thinktankConcepts.$inferSelect;
+export type ThinkTankSaved = typeof thinktankSaved.$inferSelect;
 
 // ── Gamification ────────────────────────────────────────────────────────
 // A generic XP/skill engine. Domain-agnostic ('knowledge' now; 'fitness' etc

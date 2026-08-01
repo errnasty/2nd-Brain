@@ -262,6 +262,9 @@ export function ThinkTankHub({
                 // nothing. Both are retryable, neither is a spinner.
                 const state = deckDisplayState(d);
                 const failed = state === "stalled" || state === "failed" || state === "empty";
+                // A filling deck is readable AND still growing — it shows its
+                // cards plus a quiet "writing…", never a bare spinner.
+                const filling = state === "filling";
                 const retrying = retryingId === d.id;
                 return (
                   <div
@@ -274,7 +277,7 @@ export function ThinkTankHub({
                         <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{d.description}</div>
                       )}
                       <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {state !== "ready" ? (
+                        {state !== "ready" && !filling ? (
                           failed && !retrying ? (
                             <span className="text-destructive">
                               {state === "stalled"
@@ -302,9 +305,17 @@ export function ThinkTankHub({
                               </>
                             )}
                             <span>·</span>
-                            <span className={cn(finished && "text-brand")}>
-                              {finished ? "Finished" : `Card ${progress} of ${d.cardCount}`}
+                            <span className={cn(finished && !filling && "text-brand")}>
+                              {finished && !filling ? "Finished" : `Card ${progress} of ${d.cardCount}`}
                             </span>
+                            {filling && (
+                              <>
+                                <span>·</span>
+                                <span className="inline-flex items-center gap-1 text-brand">
+                                  <Spinner className="h-3 w-3" /> writing
+                                </span>
+                              </>
+                            )}
                           </>
                         )}
                         {failed && !retrying && (

@@ -413,6 +413,61 @@ create table if not exists trending_runs (
 );
 `;
 
+// ThinkTank incremental builds + the Explore concept graph — mirrors cloud
+// migration 0029. Always-run + idempotent so existing local DBs gain them.
+const THINKTANK_EXPLORE_SQL = `
+alter table thinktank_decks add column if not exists outline jsonb;
+alter table thinktank_decks add column if not exists web_brief text;
+
+delete from thinktank_cards c
+using thinktank_cards d
+where c.deck_id = d.deck_id and c.position = d.position and c.ctid > d.ctid;
+drop index if exists thinktank_cards_deck_idx;
+create unique index if not exists thinktank_cards_deck_position_unique
+  on thinktank_cards (deck_id, position);
+
+create table if not exists thinktank_concepts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  slug text not null,
+  name text not null,
+  topic text,
+  status text not null default 'pending',
+  what_is_it text,
+  why_it_matters text,
+  real_world_example text,
+  related jsonb not null default '[]'::jsonb,
+  questions jsonb not null default '[]'::jsonb,
+  familiarity text,
+  viewed_at timestamptz,
+  view_count integer not null default 0,
+  model text,
+  token_count integer,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists thinktank_concepts_user_slug_unique
+  on thinktank_concepts (user_id, slug);
+create index if not exists thinktank_concepts_user_topic_idx
+  on thinktank_concepts (user_id, topic);
+create index if not exists thinktank_concepts_user_viewed_idx
+  on thinktank_concepts (user_id, viewed_at desc);
+
+create table if not exists thinktank_saved (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  concept_id uuid not null references thinktank_concepts(id) on delete cascade,
+  saved_at timestamptz not null default now(),
+  last_refreshed_at timestamptz,
+  next_refresher_at timestamptz not null,
+  refresher_stage integer not null default 0
+);
+create unique index if not exists thinktank_saved_user_concept_unique
+  on thinktank_saved (user_id, concept_id);
+create index if not exists thinktank_saved_due_idx
+  on thinktank_saved (user_id, next_refresher_at);
+`;
+
 // Feeds/Directory perf indexes — mirrors cloud migrations 0015 + 0023. No
 // CONCURRENTLY: PGlite is single-connection and runs these inline.
 // create-if-not-exists = idempotent.
@@ -565,6 +620,14 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(PERF_INDEX_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] perf indexes failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: ThinkTank incremental build columns + Explore tables (mirror
+  // cloud migration 0029).
+  try {
+    await client.exec(THINKTANK_EXPLORE_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] thinktank explore failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: trending columns + tables (mirror cloud migration 0028). The

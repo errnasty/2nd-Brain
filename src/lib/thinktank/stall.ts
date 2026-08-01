@@ -40,17 +40,33 @@ export function isStalledGeneration(startedAt: string | Date, now = Date.now()):
  * state. Adding a status to the enum now forces a decision here rather than
  * silently producing a spinner.
  */
-export type DeckDisplayState = "building" | "stalled" | "failed" | "empty" | "ready";
+export type DeckDisplayState =
+  | "building"
+  | "filling"
+  | "stalled"
+  | "failed"
+  | "empty"
+  | "ready";
 
 export function deckDisplayState(
   deck: { cardCount: number; status: string; updatedAt: string | Date },
   now = Date.now(),
 ): DeckDisplayState {
-  if (deck.cardCount > 0) return "ready";
-  if (deck.status === "error") return "failed";
+  // An errored deck that nonetheless has cards is readable, and labelling it
+  // "Failed" would hide content the user can use. The stepped builder only
+  // writes "error" when nothing at all landed, so this case is legacy rows.
+  if (deck.status === "error") return deck.cardCount > 0 ? "ready" : "failed";
+
   if (deck.status === "generating") {
-    return isStalledGeneration(deck.updatedAt, now) ? "stalled" : "building";
+    // A stepped build writes cards as it goes, so "generating" and "has cards"
+    // are no longer contradictory — that combination is a deck you can already
+    // start reading while the rest is still being written.
+    if (isStalledGeneration(deck.updatedAt, now)) return "stalled";
+    return deck.cardCount > 0 ? "filling" : "building";
   }
+
+  if (deck.cardCount > 0) return "ready";
+
   // Not generating, not errored, yet nothing to show: the run finished and
   // produced nothing. Retryable, and never a spinner.
   return "empty";
@@ -58,5 +74,10 @@ export function deckDisplayState(
 
 /** Whether this state can still change on its own, i.e. is worth polling. */
 export function isPollable(state: DeckDisplayState): boolean {
-  return state === "building";
+  return state === "building" || state === "filling";
+}
+
+/** Whether the deck has enough content to open and read. */
+export function isReadable(state: DeckDisplayState): boolean {
+  return state === "ready" || state === "filling";
 }
