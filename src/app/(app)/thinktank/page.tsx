@@ -4,6 +4,7 @@ import { articles, tags, thinktankCards, thinktankDecks } from "@/lib/db/schema"
 import { requireUser } from "@/lib/auth";
 import { getUserSettings } from "@/lib/settings/store";
 import { ThinkTankHub, type DeckSummary } from "@/components/thinktank/thinktank-hub";
+import { dueRefreshers, exploredTopics } from "@/lib/thinktank/concepts";
 
 export const dynamic = "force-dynamic";
 // Raise the server-action time limit for this route so deck generation (web
@@ -89,5 +90,19 @@ export default async function ThinkTankPage() {
     })
     .slice(0, 6);
 
-  return <ThinkTankHub decks={decks} suggestions={suggestions} />;
+  // Explore state, both fail-soft: a pending migration or an empty graph just
+  // means these sections don't render.
+  const [refreshers, topics] = await Promise.all([
+    dueRefreshers(user.id, 6),
+    exploredTopics(user.id, 8),
+  ]);
+
+  return (
+    <ThinkTankHub
+      decks={decks}
+      suggestions={suggestions}
+      refreshers={refreshers.map((r) => ({ slug: r.slug, name: r.name, topic: r.topic }))}
+      exploredTopics={topics}
+    />
+  );
 }

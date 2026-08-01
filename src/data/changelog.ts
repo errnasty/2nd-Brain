@@ -27,6 +27,34 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-07-31-f",
+    date: "July 31, 2026",
+    title: "ThinkTank can explore, not just teach a course",
+    tag: "feature",
+    summary:
+      "A new Explore mode next to decks. Give it a topic and it shows you what you probably don't know about it yet — then every card links to a few related ideas, so you can keep following your curiosity instead of finishing a syllabus.",
+    items: [
+      "Every card is the same four parts: what it is, why it matters, a real-world example, and where to go next. Two minutes each, and the shape never changes.",
+      "The “you may not know” list is built from your own library and what you've already read here — and if it guesses wrong, one tap moves a concept to “you already know”.",
+      "Tap “Test me” for a question or two that check the idea landed. No marking, no exam.",
+      "Save anything interesting and it comes back for a two-minute refresher after a day, then a week, then a month. Nothing to configure.",
+      "Cards are kept, so revisiting anything you've already explored is instant.",
+    ],
+  },
+  {
+    id: "2026-07-31-e",
+    date: "July 31, 2026",
+    title: "Decks now actually finish building",
+    tag: "fix",
+    summary:
+      "Deck generation was one long request that the server cut off before it could finish, so decks could sit on “Building…” forever and every retry failed the same way. Decks are now built a few cards at a time and pick up where they left off.",
+    items: [
+      "You can start reading as soon as the first cards land — the rest fill in behind you.",
+      "A deck that hits a problem part-way through keeps the cards it already wrote instead of throwing them away.",
+      "The hub shows how many cards are written so far rather than an unchanging spinner.",
+    ],
+  },
+  {
     id: "2026-07-31-d",
     date: "July 31, 2026",
     title: "Decks no longer get stuck saying “Building…”",

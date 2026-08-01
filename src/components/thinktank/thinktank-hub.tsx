@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CalendarClock, Lightbulb, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowRight, CalendarClock, Compass, Lightbulb, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import { LoadingButton } from "@/components/ui/loading-button";
 import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
@@ -34,18 +34,31 @@ const DETAIL_LABEL = { brief: "Brief", standard: "Standard", deep: "Deep" } as c
  * ThinkTank hub: type any topic (or tap a suggestion seeded from your
  * interests + tags) and the AI builds a swipeable deck of idea cards.
  */
+export type RefresherSummary = {
+  slug: string;
+  name: string;
+  topic: string | null;
+};
+
 export function ThinkTankHub({
   decks,
   suggestions,
+  refreshers = [],
+  exploredTopics = [],
 }: {
   decks: DeckSummary[];
   suggestions: string[];
+  /** Saved concepts due for a two-minute refresher. */
+  refreshers?: RefresherSummary[];
+  /** Topics with concepts already read, for one-tap return. */
+  exploredTopics?: { topic: string; explored: number }[];
 }) {
   const router = useRouter();
   const [topic, setTopic] = useState("");
   const [building, setBuilding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [detail, setDetail] = useState<"brief" | "standard" | "deep">("standard");
+  const [mode, setMode] = useState<"deck" | "explore">("deck");
   const [pacing, setPacing] = useState<"free" | "daily">("free");
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
@@ -77,6 +90,19 @@ export function ThinkTankHub({
     }, 3000);
     return () => clearInterval(timer);
   }, [generatingIds, router]);
+
+  /** Route a topic into whichever mode is selected. */
+  function start(t: string) {
+    const trimmed = t.trim();
+    if (!trimmed) return;
+    if (mode === "explore") {
+      // Explore needs no server round-trip to begin — the Discover screen does
+      // its own work, so the tap navigates immediately.
+      router.push(`/thinktank/explore/${encodeURIComponent(trimmed)}`);
+      return;
+    }
+    void build(trimmed);
+  }
 
   // Fast: inserts a "generating" deck and routes to it; the deck page kicks
   // the background build and polls, so nothing here waits on the AI.
@@ -151,28 +177,61 @@ export function ThinkTankHub({
             ThinkTank
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Pick any topic — the AI builds a deck of bite-sized idea cards, woven together with
-            what&apos;s already in your library.
+            {mode === "deck"
+              ? "Pick any topic — the AI builds a deck of bite-sized idea cards, woven together with what's already in your library."
+              : "Pick any topic — see what you don't know yet, then follow it wherever it leads."}
           </p>
         </header>
 
         <div className="relative rounded-xl border border-border bg-card p-4">
+          {/* Two genuinely different shapes of learning, so they get a explicit
+              choice rather than one being hidden behind the other: a deck is a
+              bounded course you finish, Explore is a graph you wander. */}
+          <div className="mb-3 flex items-center rounded-md border border-border p-0.5 text-xs">
+            {([
+              { id: "deck", label: "Build a deck", hint: "An ordered course you can finish" },
+              { id: "explore", label: "Explore", hint: "Follow your curiosity, card by card" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                disabled={building}
+                onClick={() => setMode(opt.id)}
+                title={opt.hint}
+                className={cn(
+                  "flex-1 rounded px-2.5 py-1.5 transition-colors",
+                  mode === opt.id
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
           <div className="flex gap-2">
             <Input
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && build(topic)}
+              onKeyDown={(e) => e.key === "Enter" && start(topic)}
               placeholder="e.g. Stoicism, compound interest, how LLMs work…"
               disabled={building}
             />
-            <LoadingButton variant="brand" loading={building} disabled={!topic.trim()} onClick={() => build(topic)} className="gap-1.5">
-              {!building && <Lightbulb className="h-4 w-4" />}
-              Build deck
+            <LoadingButton
+              variant="brand"
+              loading={building && mode === "deck"}
+              disabled={!topic.trim()}
+              onClick={() => start(topic)}
+              className="gap-1.5"
+            >
+              {!building && (mode === "deck" ? <Lightbulb className="h-4 w-4" /> : <Compass className="h-4 w-4" />)}
+              {mode === "deck" ? "Build deck" : "Explore"}
             </LoadingButton>
           </div>
           {/* Detail selector — controls how deep the deck goes (card count +
-              per-card word ceiling). Deeper = more tokens, richer cards. */}
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+              per-card word ceiling). Deeper = more tokens, richer cards.
+              Meaningless in Explore, where every card is one concept. */}
+          <div className={cn("mt-3 flex flex-wrap items-center gap-x-4 gap-y-2", mode === "explore" && "hidden")}>
             <div className="flex items-center gap-1.5">
               <span className="editorial-eyebrow shrink-0">Depth</span>
               <div className="flex items-center rounded-md border border-border p-0.5">
@@ -242,6 +301,53 @@ export function ThinkTankHub({
             </div>
           )}
         </div>
+
+        {/* Due refreshers lead the page when there are any: this is the habit
+            loop for Explore, which otherwise has no completion signal to bring
+            anyone back. */}
+        {refreshers.length > 0 && (
+          <div className="mt-8">
+            <h2 className="pb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Ready for a refresher
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              {refreshers.map((r) => (
+                <Link
+                  key={r.slug}
+                  href={`/thinktank/c/${r.slug}${r.topic ? `?topic=${encodeURIComponent(r.topic)}` : ""}&refresher=1`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-brand/40 bg-brand/5 px-3 py-1.5 text-sm transition-colors hover:bg-brand/10"
+                >
+                  <Sparkles className="h-3.5 w-3.5 text-brand" />
+                  {r.name}
+                </Link>
+              ))}
+            </div>
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Two minutes each — you saved these, so we brought them back.
+            </p>
+          </div>
+        )}
+
+        {exploredTopics.length > 0 && (
+          <div className="mt-8">
+            <h2 className="pb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Topics you&apos;re exploring
+            </h2>
+            <div className="flex flex-wrap gap-2">
+              {exploredTopics.map((t) => (
+                <Link
+                  key={t.topic}
+                  href={`/thinktank/explore/${encodeURIComponent(t.topic)}`}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-sm transition-colors hover:border-brand/50 hover:bg-accent"
+                >
+                  <Compass className="h-3.5 w-3.5 text-muted-foreground" />
+                  {t.topic}
+                  <span className="text-xs text-muted-foreground">{t.explored}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mt-8">
           <h2 className="pb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">

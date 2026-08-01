@@ -1,10 +1,17 @@
-import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { skills, thinktankConcepts, type ThinkTankConcept } from "@/lib/db/schema";
+import {
+  skills,
+  thinktankConcepts,
+  thinktankSaved,
+  type ThinkTankConcept,
+} from "@/lib/db/schema";
 import { generateConceptCard } from "@/lib/ai/concept";
 import { recordAiUsage } from "@/lib/ai/budget";
 import { retrieveFromDirectory } from "@/lib/ai/rag";
 import { conceptName, conceptSlug, isValidConceptName } from "./concept-slug";
+import { canonicalizeLinks, findDuplicate } from "./concept-dedupe";
+import { advanceStage, nextRefresherAt, type RefreshOutcome } from "./refresh";
 
 /**
  * The concept store: cache-first reads, one generation per genuinely new idea.
@@ -45,6 +52,18 @@ export async function reserveConcept(
 ): Promise<{ row: ConceptRow; isNew: boolean } | null> {
   if (!isValidConceptName(name)) return null;
   const slug = conceptSlug(name);
+
+  // Before minting a new node, check whether this is a second name for one the
+  // user already has. Skipped when the slug already matches exactly — that's
+  // the cache hit, and the scan below is only worth paying for on a miss.
+  const exact = await getConcept(userId, slug);
+  if (!exact) {
+    const dupe = findDuplicate(name, await existingConceptNames(userId));
+    if (dupe) {
+      const merged = await getConcept(userId, dupe.slug);
+      if (merged) return { row: merged, isNew: false };
+    }
+  }
 
   const inserted = await db
     .insert(thinktankConcepts)
@@ -139,12 +158,11 @@ export async function fillConcept(
   // reads zero spend forever and stops guarding anything.
   if (generated.tokenCount) void recordAiUsage(userId, generated.tokenCount);
 
-  // Point related links at slugs now, so navigation never has to re-derive
-  // them and a rename of the display name can't break a link.
-  const related = generated.related.map((r) => ({
-    name: conceptName(r.name),
-    slug: conceptSlug(r.name),
-  }));
+  // Point related links at concepts that ALREADY EXIST wherever one is clearly
+  // the same idea ("TLS" → an existing "Transport Layer Security"). The links
+  // are what the user taps, so canonicalizing them here is what keeps the graph
+  // joined up instead of growing a parallel copy of itself.
+  const related = canonicalizeLinks(generated.related, await existingConceptNames(userId));
 
   const [updated] = await db
     .update(thinktankConcepts)
@@ -243,5 +261,128 @@ export async function topicProgress(
     return { explored: row?.explored ?? 0, total: row?.total ?? 0 };
   } catch {
     return { explored: 0, total: 0 };
+  }
+}
+
+// ── Saved concepts + refreshers ────────────────────────────────────────
+
+export type DueRefresher = {
+  slug: string;
+  name: string;
+  topic: string | null;
+  whatIsIt: string | null;
+  question: string | null;
+  stage: number;
+};
+
+/**
+ * Saved concepts that are due for a refresher.
+ *
+ * Returns the "what is it" line and ONE question rather than the whole card —
+ * a refresher is a two-minute reminder, not a re-read, and showing everything
+ * again would make it feel like work.
+ */
+export async function dueRefreshers(userId: string, limit = 5): Promise<DueRefresher[]> {
+  try {
+    const rows = await db
+      .select({
+        slug: thinktankConcepts.slug,
+        name: thinktankConcepts.name,
+        topic: thinktankConcepts.topic,
+        whatIsIt: thinktankConcepts.whatIsIt,
+        questions: thinktankConcepts.questions,
+        stage: thinktankSaved.refresherStage,
+      })
+      .from(thinktankSaved)
+      .innerJoin(thinktankConcepts, eq(thinktankConcepts.id, thinktankSaved.conceptId))
+      .where(
+        and(
+          eq(thinktankSaved.userId, userId),
+          lte(thinktankSaved.nextRefresherAt, new Date()),
+          eq(thinktankConcepts.status, "ready"),
+        ),
+      )
+      .orderBy(thinktankSaved.nextRefresherAt)
+      .limit(limit);
+
+    return rows.map((r) => ({
+      slug: r.slug,
+      name: r.name,
+      topic: r.topic,
+      whatIsIt: r.whatIsIt,
+      question: r.questions?.[0]?.question ?? null,
+      stage: r.stage,
+    }));
+  } catch {
+    // A missing table (migration not yet applied) must not break the hub.
+    return [];
+  }
+}
+
+/** How many refreshers are waiting — the Today-tab nudge count. */
+export async function dueRefresherCount(userId: string): Promise<number> {
+  try {
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(thinktankSaved)
+      .where(
+        and(eq(thinktankSaved.userId, userId), lte(thinktankSaved.nextRefresherAt, new Date())),
+      );
+    return row?.count ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Record a completed refresher and schedule the next one.
+ *
+ * "Remembered" walks up the ladder; "forgot" starts it over — see
+ * `refresh.ts` for why the reset is total rather than one rung.
+ */
+export async function completeRefresher(
+  userId: string,
+  slug: string,
+  outcome: RefreshOutcome,
+): Promise<{ ok: boolean; nextAt?: Date }> {
+  const concept = await getConcept(userId, slug);
+  if (!concept) return { ok: false };
+
+  const [saved] = await db
+    .select({ id: thinktankSaved.id, stage: thinktankSaved.refresherStage })
+    .from(thinktankSaved)
+    .where(and(eq(thinktankSaved.userId, userId), eq(thinktankSaved.conceptId, concept.id)))
+    .limit(1);
+  if (!saved) return { ok: false };
+
+  const stage = advanceStage(saved.stage, outcome);
+  const nextAt = nextRefresherAt(stage);
+
+  await db
+    .update(thinktankSaved)
+    .set({ refresherStage: stage, nextRefresherAt: nextAt, lastRefreshedAt: new Date() })
+    .where(eq(thinktankSaved.id, saved.id));
+
+  return { ok: true, nextAt };
+}
+
+/** Topics the user has explored, most recent first — the hub's return path. */
+export async function exploredTopics(
+  userId: string,
+  limit = 8,
+): Promise<{ topic: string; explored: number }[]> {
+  try {
+    const res = (await db.execute(sql`
+      select topic, count(*)::int as explored, max(viewed_at) as last_viewed
+      from thinktank_concepts
+      where user_id = ${userId} and topic is not null and viewed_at is not null
+      group by topic
+      order by last_viewed desc
+      limit ${limit}
+    `)) as unknown as { rows?: { topic: string; explored: number }[] } | { topic: string; explored: number }[];
+    const rows = Array.isArray(res) ? res : (res.rows ?? []);
+    return rows.map((r) => ({ topic: r.topic, explored: Number(r.explored) }));
+  } catch {
+    return [];
   }
 }

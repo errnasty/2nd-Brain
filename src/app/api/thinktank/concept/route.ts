@@ -3,7 +3,8 @@ import { requireUser } from "@/lib/auth";
 import { aiAvailable } from "@/lib/ai/provider";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, budgetExceededMessage } from "@/lib/ai/budget";
-import { fillConcept, reserveConcept } from "@/lib/thinktank/concepts";
+import { fillConcept, getConcept, reserveConcept } from "@/lib/thinktank/concepts";
+import { awardXp } from "@/lib/gamify/award";
 import { conceptSlug } from "@/lib/thinktank/concept-slug";
 
 export const runtime = "nodejs";
@@ -109,6 +110,54 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json({ ok: true, slug: result.concept.slug, cached: false });
+}
+
+/**
+ * Credit reading (or testing yourself on) a concept.
+ *
+ * Routed to a skill named after the TOPIC, so exploring Networking levels a
+ * Networking skill — the same "reading feeds the subject you were reading
+ * about" principle the Daily Brief uses with folders.
+ *
+ * Idempotent per concept per day, so re-opening a card doesn't farm it.
+ */
+export async function PATCH(req: Request) {
+  let user;
+  try {
+    ({ user } = await requireUser());
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: { slug?: string; kind?: string };
+  try {
+    body = (await req.json()) as typeof body;
+  } catch {
+    return NextResponse.json({ error: "Invalid body" }, { status: 400 });
+  }
+
+  const slug = body.slug ? conceptSlug(body.slug) : "";
+  if (!slug) return NextResponse.json({ error: "slug required" }, { status: 400 });
+
+  const concept = await getConcept(user.id, slug);
+  if (!concept) return NextResponse.json({ error: "Concept not found" }, { status: 404 });
+
+  const source = body.kind === "tested" ? "concept_tested" : "concept_learned";
+  const day = new Date().toISOString().slice(0, 10);
+  const award = await awardXp(user.id, {
+    source,
+    // Concepts belong to a topic, not a folder — that's the natural skill here.
+    skillName: concept.topic ?? "Exploring",
+    refKind: source,
+    refId: `${day}:${slug}`,
+  });
+
+  return NextResponse.json({
+    ok: true,
+    awarded: award.awarded,
+    skill: award.skill ? { name: award.skill.name, emoji: award.skill.emoji } : null,
+    leveledUp: Boolean(award.skillLeveledUp),
+  });
 }
 
 /** Remaining share of the day's token budget, 0–1. `budget: 0` = unlimited. */

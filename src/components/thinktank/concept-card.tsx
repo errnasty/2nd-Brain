@@ -31,7 +31,14 @@ export type ConceptView = {
   familiarity: "known" | "new" | null;
 };
 
-export function ConceptCard({ concept }: { concept: ConceptView }) {
+export function ConceptCard({
+  concept,
+  refresher = false,
+}: {
+  concept: ConceptView;
+  /** Arrived from a due refresher — ask whether it stuck. */
+  refresher?: boolean;
+}) {
   const router = useRouter();
   const [generating, setGenerating] = useState(concept.status !== "ready");
   const [error, setError] = useState<string | null>(null);
@@ -71,6 +78,39 @@ export function ConceptCard({ concept }: { concept: ConceptView }) {
   useEffect(() => {
     if (concept.status === "ready") setGenerating(false);
   }, [concept.status]);
+
+  // Credit reading the card. Fires once the card is actually readable, not on
+  // navigation — arriving at a pending card and leaving before it's written
+  // isn't reading it. Idempotent per concept per day server-side.
+  const credited = useRef(false);
+  const [gain, setGain] = useState<{ amount: number; skill: string | null } | null>(null);
+  const credit = useCallback(
+    async (kind: "learned" | "tested") => {
+      try {
+        const res = await fetch("/api/thinktank/concept", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ slug: concept.slug, kind }),
+        });
+        const body = (await res.json().catch(() => null)) as {
+          awarded?: number;
+          skill?: { name: string } | null;
+        } | null;
+        if (body?.awarded && body.awarded > 0) {
+          setGain({ amount: body.awarded, skill: body.skill?.name ?? null });
+        }
+      } catch {
+        // XP is a side effect of reading; losing it must never surface here.
+      }
+    },
+    [concept.slug],
+  );
+
+  useEffect(() => {
+    if (credited.current || concept.status !== "ready") return;
+    credited.current = true;
+    void credit("learned");
+  }, [concept.status, credit]);
 
   // Prefetch what this card links to, so the next tap is instant. Fired once
   // the card itself is readable — never before, so speculative work can't
@@ -127,7 +167,7 @@ export function ConceptCard({ concept }: { concept: ConceptView }) {
       <Part label="Why does it matter?">{concept.whyItMatters}</Part>
       <Part label="Real-world example">{concept.realWorldExample}</Part>
 
-      <TestMe questions={concept.questions} />
+      <TestMe questions={concept.questions} onTested={() => credit("tested")} />
 
       {concept.related.length > 0 && (
         <section className="mt-8 border-t border-border/60 pt-5">
@@ -146,7 +186,15 @@ export function ConceptCard({ concept }: { concept: ConceptView }) {
         </section>
       )}
 
+      {refresher && <RefresherPrompt slug={concept.slug} />}
+
       <SaveButton slug={concept.slug} initiallySaved={concept.saved} />
+      {gain && (
+        <p className="mt-3 inline-flex items-center gap-1 text-[11px] text-brand">
+          <Sparkles className="h-3 w-3" />+{gain.amount}
+          {gain.skill ? ` ${gain.skill}` : ""}
+        </p>
+      )}
       {generating && (
         <p className="mt-4 text-center text-[11px] text-muted-foreground">Refreshing…</p>
       )}
@@ -202,7 +250,13 @@ function Part({ label, children }: { label: string; children: React.ReactNode })
  * with the card, and adding a grading call would make checking your
  * understanding cost more than learning the thing did.
  */
-function TestMe({ questions }: { questions: ConceptQuestion[] }) {
+function TestMe({
+  questions,
+  onTested,
+}: {
+  questions: ConceptQuestion[];
+  onTested: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
 
@@ -214,7 +268,10 @@ function TestMe({ questions }: { questions: ConceptQuestion[] }) {
         variant="outline"
         size="sm"
         className="mt-8 gap-1.5"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setOpen(true);
+          onTested();
+        }}
       >
         <Brain className="h-3.5 w-3.5" /> Test me
       </Button>
@@ -290,5 +347,58 @@ function SaveButton({ slug, initiallySaved }: { slug: string; initiallySaved: bo
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * The two-taps-and-done refresher.
+ *
+ * Deliberately a binary. A 0-5 recall grade is what FSRS needs and what this
+ * mode promised not to ask for — "did that stick?" is the most a refresher can
+ * demand without becoming homework.
+ */
+function RefresherPrompt({ slug }: { slug: string }) {
+  const [answered, setAnswered] = useState<null | "remembered" | "forgot">(null);
+  const [nextAt, setNextAt] = useState<string | null>(null);
+
+  async function answer(outcome: "remembered" | "forgot") {
+    setAnswered(outcome);
+    try {
+      const res = await fetch("/api/thinktank/refresher", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ slug, outcome }),
+      });
+      const body = (await res.json().catch(() => null)) as { nextAt?: string | null } | null;
+      setNextAt(body?.nextAt ?? null);
+    } catch {
+      // The schedule missed a beat; the concept stays due and comes back.
+    }
+  }
+
+  if (answered) {
+    return (
+      <p className="mt-8 rounded-lg border border-brand/30 bg-brand/5 px-4 py-3 text-sm">
+        {answered === "remembered" ? "Nice — " : "No problem — "}
+        {nextAt
+          ? `back on ${new Date(nextAt).toLocaleDateString([], { month: "short", day: "numeric" })}.`
+          : "we'll bring it back."}
+      </p>
+    );
+  }
+
+  return (
+    <section className="mt-8 rounded-lg border border-brand/30 bg-brand/5 p-4">
+      <div className="editorial-eyebrow-brand">§ Refresher</div>
+      <p className="mt-1.5 text-sm">Did that stick?</p>
+      <div className="mt-3 flex gap-2">
+        <Button variant="brand" size="sm" onClick={() => answer("remembered")}>
+          Yes, I remembered
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => answer("forgot")}>
+          Not really
+        </Button>
+      </div>
+    </section>
   );
 }

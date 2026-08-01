@@ -9,7 +9,7 @@ import { ConceptCard, type ConceptView } from "@/components/thinktank/concept-ca
 export const dynamic = "force-dynamic";
 
 type Params = Promise<{ slug: string }>;
-type Search = Promise<{ topic?: string; name?: string }>;
+type Search = Promise<{ topic?: string; name?: string; refresher?: string }>;
 
 /**
  * One concept in the Explore graph.
@@ -75,5 +75,5 @@ export default async function ConceptPage({
     familiarity: concept.familiarity,
   };
 
-  return <ConceptCard concept={view} />;
+  return <ConceptCard concept={view} refresher={sp.refresher === "1"} />;
 }
