@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-g",
+    date: "August 1, 2026",
+    title: "AI usage is now counted everywhere",
+    tag: "improvement",
+    summary:
+      "The AI usage figure in Settings only counted Ask and the Daily Brief. Everything else — flashcards, quizzes, tagging, study plans, ThinkTank, summarising and more — ran without being counted, so the number was well under what you were actually using.",
+    items: [
+      "Usage from every AI feature is now included, so the meter reflects real consumption.",
+      "If you set a daily token limit, it now applies across the whole app rather than just a couple of places.",
+      "Free-tier models are still not counted, since they cost nothing.",
+    ],
+  },
+  {
     id: "2026-08-01-f",
     date: "August 1, 2026",
     title: "Daily Brief works on every model in the picker",
