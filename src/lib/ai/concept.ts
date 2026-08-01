@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable, activeProvider } from "./provider";
 import { userModelChoice, userSmartModel } from "./user-model";
+import { generateJsonResult } from "./generate-json";
 import { conceptName, isValidConceptName } from "@/lib/thinktank/concept-slug";
 
 /**
@@ -102,7 +102,7 @@ export async function generateConceptCard(
   const library = (context.libraryTitles ?? []).slice(0, 8);
 
   try {
-    const result = await generateObject({
+    const result = await generateJsonResult({
       model: await userSmartModel(),
       schema: ConceptSchema,
       // A whole card is a few hundred tokens. This ceiling is what keeps the
@@ -132,7 +132,7 @@ Hard rules:
         .filter(Boolean)
         .join("\n\n"),
     });
-
+    if (!result.object) return null;
     const usage = result.usage;
     return {
       name: conceptName(name),
@@ -196,7 +196,7 @@ export async function discoverConcepts(
   const seen = (evidence.alreadySeen ?? []).slice(0, 40);
 
   try {
-    const result = await generateObject({
+    const result = await generateJsonResult({
       model: await userSmartModel(),
       schema: DiscoverSchema,
       maxTokens: 1_200,
@@ -221,7 +221,7 @@ Rules for "unknown":
         .filter(Boolean)
         .join("\n\n"),
     });
-
+    if (!result.object) return null;
     const usage = result.usage;
     return {
       known: result.object.known.filter((c) => isValidConceptName(c.name)),

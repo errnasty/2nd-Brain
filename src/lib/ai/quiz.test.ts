@@ -30,6 +30,14 @@ describe("normalizeQuestion", () => {
     expect(normalizeQuestion({ ...mc, options: undefined })).toBeNull();
   });
 
+  it("drops a multiple-choice question whose options are not distinct", () => {
+    // The exact budget-model failure: one distractor repeated 4×.
+    expect(normalizeQuestion({ ...mc, options: ["Ordering", "Ordering", "Ordering", "Ordering"] })).toBeNull();
+    expect(normalizeQuestion({ ...mc, options: ["a", "a", "b", "c"] })).toBeNull();
+    // Case differences are the same option.
+    expect(normalizeQuestion({ ...mc, options: ["Speed", "speed", "SPEED", "Encryption"] })).toBeNull();
+  });
+
   it("drops a multiple-choice question whose answer index is out of range", () => {
     expect(normalizeQuestion({ ...mc, correctIndex: 7 })).toBeNull();
     expect(normalizeQuestion({ ...mc, correctIndex: -1 })).toBeNull();

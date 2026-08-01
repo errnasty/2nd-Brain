@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { withLiteModel } from "./lite";
+import { generateJson } from "./generate-json";
 
 const TagSchema = z.object({
   tags: z.array(z.string().min(1).max(40)).min(2).max(5),
@@ -23,11 +23,11 @@ export async function generateTags(
     existingTagNames.length > 0 ? existingTagNames.slice(0, 200).join(", ") : "(none yet)";
 
   try {
-    const { object } = await withLiteModel((model) =>
-      generateObject({
+    const result = await withLiteModel((model) =>
+      generateJson({
         model,
-      schema: TagSchema,
-      system: `You generate 3-5 short, descriptive tags for an article.
+        schema: TagSchema,
+        system: `You generate 3-5 short, descriptive tags for an article.
 
 Existing tag vocabulary the user already has (REUSE these whenever there's a reasonable fit):
 ${existing}
@@ -37,10 +37,10 @@ Rules:
 - One concept per tag
 - Strongly prefer existing tags — only invent a new one if no existing tag fits
 - Tags should help the user navigate their knowledge library`,
-      prompt: `Title: ${title}\n\n${content.slice(0, 3000)}`,
+        prompt: `Title: ${title}\n\n${content.slice(0, 3000)}`,
       }),
     );
-    return object.tags.map((t) => t.trim().toLowerCase()).filter(Boolean);
+    return (result?.tags ?? []).map((t) => t.trim().toLowerCase()).filter(Boolean);
   } catch (err) {
     console.warn("generateTags failed:", err instanceof Error ? err.message : err);
     return [];

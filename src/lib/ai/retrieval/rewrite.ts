@@ -1,6 +1,6 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable, fastModel } from "@/lib/ai/provider";
+import { generateJson } from "@/lib/ai/generate-json";
 
 const RewriteSchema = z.object({
   standalone: z.string().min(1).max(400),
@@ -47,7 +47,7 @@ export async function rewriteQuery(
       .slice(-6)
       .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${m.content.slice(0, 500)}`)
       .join("\n");
-    const { object } = await generateObject({
+    const object = await generateJson({
       model: fastModel(),
       schema: RewriteSchema,
       system: `Rewrite the user's latest message into a standalone search query for a vector database over their personal notes, articles, and documents.
@@ -56,6 +56,7 @@ export async function rewriteQuery(
 - expansions: 0–2 additional sub-queries ONLY when the question clearly has distinct parts worth searching separately. Usually leave empty.`,
       prompt: `Conversation so far:\n${convo}\n\nLatest message: ${question}\n\nStandalone search query:`,
     });
+    if (!object) return raw;
     const queries = [object.standalone.trim(), ...object.expansions.map((e) => e.trim())].filter(Boolean);
     return { queries: queries.length > 0 ? queries : [question] };
   } catch {

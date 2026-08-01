@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable, activeProvider } from "./provider";
 import { userModelChoice, userSmartModel, anthropicWebModel } from "./user-model";
+import { generateJsonResult } from "./generate-json";
 import { webAnswerOnce, type WebSource } from "./web-answer";
 import { groundFromWeb, formatWebGround } from "./web-search";
 import type { ThinkTankSection } from "@/lib/db/schema";
@@ -219,7 +219,7 @@ async function generateViaObject(
       : "claude-sonnet-4-6");
 
   try {
-    const result = await generateObject({
+    const result = await generateJsonResult({
       model: await userSmartModel(),
       schema,
       maxTokens: outputBudget(preset),
@@ -235,6 +235,7 @@ Rules:
 - WEB GROUNDING (if present) is current, factual context from the internet. Use it to keep claims accurate — cite numbers, names, dates. Don't copy it verbatim; fold the fact into your own micro-card.`,
       prompt: `Topic: ${topic}\n\nLearner's related library items (by index):\n${relatedList(related)}\n\nWeb grounding:\n${webBrief || "(no web results)"}`,
     });
+    if (!result.object) return null;
     const usage = result.usage;
     const tokenCount =
       usage && (usage.totalTokens ?? (usage.promptTokens ?? 0) + (usage.completionTokens ?? 0))
@@ -349,7 +350,7 @@ export async function generateDeckOutline(
       : "claude-sonnet-4-6");
 
   try {
-    const result = await generateObject({
+    const result = await generateJsonResult({
       model: await userSmartModel(),
       schema: OutlineSchema,
       maxTokens: 1_500,
@@ -362,7 +363,7 @@ Rules:
 - Titles only. Do NOT write the card bodies.`,
       prompt: `Topic: ${topic}\n\nLearner's related library items:\n${relatedList(related)}\n\nWeb grounding:\n${webBrief || "(no web results)"}`,
     });
-
+    if (!result.object) return null;
     const usage = result.usage;
     return {
       ...result.object,
@@ -411,7 +412,7 @@ export async function generateCardBodies(
   });
 
   try {
-    const result = await generateObject({
+    const result = await generateJsonResult({
       model: await userSmartModel(),
       schema,
       // Sized to the batch, not the deck — this is what keeps the call short.
@@ -425,7 +426,6 @@ Rules:
 - refIndexes: indexes of the learner's library items this card genuinely builds on. Usually empty, max 3. Never invent indexes.
 - Accuracy over coverage. If web grounding is present, use it to keep facts, figures and names right.`,
       prompt: `Topic: ${topic}
-
 Full outline (for context — do not write these):
 ${outline.map((c, i) => `${i + 1}. [${c.section}] ${c.title}`).join("\n")}
 
@@ -438,7 +438,7 @@ ${relatedList(related)}
 Web grounding:
 ${webBrief || "(no web results)"}`,
     });
-    return result.object.cards;
+    return result.object?.cards ?? null;
   } catch (err) {
     console.warn("generateCardBodies failed:", err instanceof Error ? err.message : err);
     return null;

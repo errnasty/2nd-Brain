@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { userFastModel } from "./user-model";
+import { generateJson } from "./generate-json";
 import {
   clamp,
   DEFAULT_FLASHCARD_COUNT,
@@ -45,7 +45,7 @@ export async function generateFlashcards(
   });
 
   try {
-    const { object } = await generateObject({
+    const object = await generateJson({
       model: await userFastModel(),
       schema,
       system: `You create spaced-repetition flashcards that test understanding of a document.
@@ -58,7 +58,7 @@ Rules:
 - Base cards ONLY on the provided text — do not invent facts.`,
       prompt: `Title: ${title}\n\n${content.slice(0, 6000)}`,
     });
-    return object.cards;
+    return object?.cards ?? [];
   } catch (err) {
     console.warn("generateFlashcards failed:", err instanceof Error ? err.message : err);
     return [];
@@ -81,7 +81,7 @@ export async function rewriteFlashcard(
   if (!aiAvailable()) return null;
 
   try {
-    const { object } = await generateObject({
+    const object = await generateJson({
       model: await userFastModel(),
       schema: RewriteSchema,
       system: `You fix spaced-repetition flashcards the learner keeps failing.

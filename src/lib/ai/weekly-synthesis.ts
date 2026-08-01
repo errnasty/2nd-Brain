@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { userFastModel } from "./user-model";
+import { generateJson } from "./generate-json";
 
 const WeeklySynthesisSchema = z.object({
   throughLine: z.string().min(1).max(400),
@@ -30,11 +30,10 @@ export async function weeklySynthesis(items: SynthesisInput[]): Promise<WeeklySy
     .map((it, i) => `[${i + 1}] ${it.title}\n${(it.excerpt ?? "").replace(/<[^>]+>/g, " ").slice(0, 500)}`)
     .join("\n\n");
 
-  try {
-    const { object } = await generateObject({
-      model: await userFastModel(),
-      schema: WeeklySynthesisSchema,
-      system: `You synthesize one week of a person's reading into what connects it.
+  return generateJson({
+    model: await userFastModel(),
+    schema: WeeklySynthesisSchema,
+    system: `You synthesize one week of a person's reading into what connects it.
 
 Rules:
 - throughLine: ONE sentence naming what connects the week's reading. Not a summary of each item — the thread running through them.
@@ -43,11 +42,6 @@ Rules:
 - tensions MAY be an empty array. If the sources genuinely do not disagree, return []. Never manufacture a disagreement to fill the field.
 - Stay strictly faithful to the supplied titles and excerpts. Never invent facts, claims, or sources.
 - No preamble, no "this week you read…". State the substance directly.`,
-      prompt: `Articles read this week:\n\n${corpus}`,
-    });
-    return object;
-  } catch (err) {
-    console.warn("weeklySynthesis failed:", err instanceof Error ? err.message : err);
-    return null;
-  }
+    prompt: `Articles read this week:\n\n${corpus}`,
+  });
 }

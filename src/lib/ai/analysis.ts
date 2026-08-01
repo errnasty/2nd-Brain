@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { userFastModel } from "./user-model";
+import { generateJson } from "./generate-json";
 
 // Phase 2 semantic analysis. Each function is ONE structured fast-model call
 // with capped inputs — vector search (the expensive-at-scale part) happens in
@@ -38,7 +38,7 @@ export async function classifyConnections(
     .join("\n\n");
 
   try {
-    const { object } = await generateObject({
+    const object = await generateJson({
       model: await userFastModel(),
       schema: ConnSchema,
       system: `You compare a SOURCE note against CANDIDATE notes from the same personal knowledge base.
@@ -50,7 +50,7 @@ For each candidate, decide its relation to the source:
 Give a specific one-sentence reason naming the actual point of overlap or conflict. Only include candidates with a genuine, substantive relation — skip weak/coincidental matches by omitting their index.`,
       prompt: `SOURCE: ${source.title}\n${source.snippet.slice(0, 1500)}\n\nCANDIDATES:\n${list}`,
     });
-    return object.results;
+    return object?.results ?? [];
   } catch (err) {
     console.warn("classifyConnections failed:", err instanceof Error ? err.message : err);
     return [];
@@ -86,7 +86,7 @@ export async function detectGaps(
     .join("\n");
 
   try {
-    const { object } = await generateObject({
+    const object = await generateJson({
       model: await userFastModel(),
       schema: GapSchema,
       system: `You audit a cluster of notes/articles in someone's knowledge base and identify GAPS — important subtopics, prerequisites, or counter-perspectives that are missing given what's already there.
@@ -98,7 +98,7 @@ Rules:
 - Don't list things the collection already covers.`,
       prompt: `Collection: ${scopeName}\n\nExisting items:\n${list}`,
     });
-    return object.gaps;
+    return object?.gaps ?? [];
   } catch (err) {
     console.warn("detectGaps failed:", err instanceof Error ? err.message : err);
     return [];

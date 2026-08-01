@@ -1,9 +1,9 @@
-import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import type { LanguageModelV1 } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { userFastModel, userSmartModel } from "./user-model";
+import { generateJson } from "./generate-json";
 
 // Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
 // bounded output. The desktop app runs the server locally with no such limit,
@@ -89,12 +89,13 @@ Constraints:
 Available existing library items (use the exact title in "link" when relevant):
 ${linkList}`;
 
-  const { object } = await generateObject({
+  const plan = await generateJson({
     model: await planModel(),
     schema: StudyPlanSchema,
     system,
     prompt,
     maxTokens: MAX_OUTPUT_TOKENS,
   });
-  return object;
+  if (!plan) throw new Error("The AI model returned nothing usable — please try again.");
+  return plan;
 }

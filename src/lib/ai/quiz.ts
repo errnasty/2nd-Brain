@@ -2,6 +2,7 @@ import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { userFastModel, userSmartModel } from "./user-model";
+import { extractJsonValues } from "./generate-json";
 import {
   clamp,
   DEFAULT_QUIZ_COUNT,
@@ -78,6 +79,10 @@ export function normalizeQuestion(raw: FlatQuestion): GeneratedQuizQuestion | nu
     // Four is the contract the UI renders. Fewer can't be shown; more would
     // mean the correct index is anyone's guess.
     if (options.length !== 4) return null;
+    // Budget/reasoning models sometimes cheat by repeating one distractor 4×.
+    // Four genuinely DIFFERENT choices is the whole point of an MC question —
+    // drop it rather than render four identical buttons.
+    if (new Set(options.map((o) => o.toLowerCase())).size !== 4) return null;
     const correctIndex = raw.correctIndex ?? 0;
     if (correctIndex < 0 || correctIndex >= options.length) return null;
     return {
@@ -102,63 +107,21 @@ const DIFFICULTY_GUIDANCE: Record<StudyDifficulty, string> = {
   hard: "Require inference, application, or synthesis across the material. MC distractors should be subtle enough to need careful reading to eliminate; open questions should require reasoning, not lookup.",
 };
 
+// Repeated for every MC question — the single most common quality failure on
+// budget models is emitting the same choice more than once.
+const MC_DISTINCT_RULE =
+  'For "mc": give exactly 4 options and ensure all four are DIFFERENT, meaningful choices. Never repeat an option, never list "all of the above"/"none of the above", and never reword the same idea twice to pad the list.';
+
 /** Questions requested per model call. */
 export const QUIZ_BATCH = 4;
 
-/**
- * Every valid top-level JSON value (object or array) in `text`, in the order
- * their opening delimiters appear, found with proper brace/bracket matching.
- *
- * This is far more robust than slicing first-`{`→last-`}`: a reasoning model's
- * reply can lead with long thinking prose that itself contains braces, and a
- * naive slice then spans garbage and fails to parse. Here each `{`/`[` is
- * matched to its balanced close (respecting nested objects, arrays, and quoted
- * strings) and the slice is parsed; invalid candidates are skipped.
- */
-function extractJsonValues(text: string): unknown[] {
-  const out: unknown[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch !== "{" && ch !== "[") continue;
-    const close = ch === "{" ? "}" : "]";
-    let depth = 0;
-    let inStr = false;
-    let esc = false;
-    let j = i;
-    for (; j < text.length; j++) {
-      const c = text[j];
-      if (esc) { esc = false; continue; }
-      if (c === "\\") { esc = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === ch) depth++;
-      else if (c === close) {
-        depth--;
-        if (depth === 0) break;
-      }
-    }
-    if (j < text.length) {
-      try {
-        out.push(JSON.parse(text.slice(i, j + 1)));
-      } catch {
-        // unbalanced/invalid — skip this candidate
-      }
-      // Skip past this value so we don't re-find nested ones first.
-      i = j;
-    }
-  }
-  return out;
-}
-
-/**
- * Pull an array of (loosely-typed) questions out of a raw model reply for the
- * text-mode fallback. Accepts the contract shape `{"questions":[...]}` or a
- * bare `[...]` array, and tolerates prose, reasoning chains, and code-fence
- * wrapping around either. Of every valid JSON value in the reply, returns the
- * first that is (or carries) a non-empty array. Individual malformed entries
- * aren't fatal — `normalizeQuestion` drops them downstream. Exported so the
- * tolerance rules are testable.
- */
+/** Pull an array of (loosely-typed) questions out of a raw model reply for the
+ *  text-mode fallback. Accepts the contract shape `{"questions":[...]}` or a
+ *  bare `[...]` array, and tolerates prose, reasoning chains, and code-fence
+ *  wrapping around either. Of every valid JSON value in the reply, returns the
+ *  first that is (or carries) a non-empty array. Individual malformed entries
+ *  aren't fatal — `normalizeQuestion` drops them downstream. Exported so the
+ *  tolerance rules are testable. */
 export function extractQuestions(text: string): FlatQuestion[] {
   for (const value of extractJsonValues(text)) {
     const arr: unknown = Array.isArray(value)
@@ -242,7 +205,8 @@ Rules:
 - Generate EXACTLY ${want} question${want === 1 ? "" : "s"}, mixing multiple-choice ("mc") and open-ended ("open") types.
 - Difficulty: ${DIFFICULTY_GUIDANCE[difficulty]}
 - Cover the most important, durable concepts across ALL provided documents — not just the first one.
-- For "mc": give exactly 4 options, set correctIndex to the right one, use plausible distractors (never "all/none of the above"), and include a 1-2 sentence explanation of why the correct answer is right. Leave "answer" empty.
+- ${MC_DISTINCT_RULE}
+- For "mc": set correctIndex to the right one and include a 1-2 sentence explanation of why the correct answer is right. Leave "answer" empty.
 - For "open": give a specific, answerable question and a concise correct model answer in "answer". Leave options/correctIndex/explanation empty.
 - Base every question ONLY on the provided text — do not invent facts.
 

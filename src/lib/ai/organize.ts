@@ -1,7 +1,7 @@
-import { generateObject } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { withLiteModel } from "./lite";
+import { generateJson } from "./generate-json";
 
 /**
  * The model returns a list of commands. Two shapes:
@@ -81,15 +81,15 @@ export async function organizeItems(
     .join("\n\n");
 
   try {
-    const { object } = await withLiteModel((model) =>
-      generateObject({
+    const result = await withLiteModel((model) =>
+      generateJson({
         model,
-      schema: OrganizeResponseSchema,
-      system: SYSTEM,
-      prompt: `EXISTING FOLDERS: ${folderList}\n\nUNCATEGORIZED ITEMS:\n${itemList}\n\nReturn the commands list.`,
+        schema: OrganizeResponseSchema,
+        system: SYSTEM,
+        prompt: `EXISTING FOLDERS: ${folderList}\n\nUNCATEGORIZED ITEMS:\n${itemList}\n\nReturn the commands list.`,
       }),
     );
-    return object.commands;
+    return result?.commands ?? [];
   } catch (err) {
     console.warn("organizeItems failed:", err instanceof Error ? err.message : err);
     return [];

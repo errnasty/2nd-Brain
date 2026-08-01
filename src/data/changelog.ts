@@ -27,6 +27,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-d",
+    date: "August 1, 2026",
+    title: "Quiz multiple-choice options are always distinct",
+    tag: "fix",
+    summary:
+      "On fast/budget models, a multiple-choice question could come back with the same option repeated four times. The app now rejects and re-asks for genuinely different choices, and the generator is instructed to write four distinct, plausible options.",
+  },
+  {
+    id: "2026-08-01-c",
+    date: "August 1, 2026",
+    title: "Every AI feature can now generate on any model",
+    tag: "fix",
+    summary:
+      "On fast or budget models the app sometimes failed to generate things — quizzes, flashcards, tags, study plans, decks — with a “could not parse the response” error, because those models format their JSON slightly differently. Every AI-powered feature now retries in a more forgiving mode, so the budget model still produces results.",
+  },
+  {
     id: "2026-08-01-b",
     date: "August 1, 2026",
     title: "Fresh AI models, including DeepSeek V4 Flash",
