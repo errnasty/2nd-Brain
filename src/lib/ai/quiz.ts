@@ -106,52 +106,66 @@ const DIFFICULTY_GUIDANCE: Record<StudyDifficulty, string> = {
 export const QUIZ_BATCH = 4;
 
 /**
- * First balanced `{...}` block in a model reply, JSON-parsed; null when absent
- * or invalid. Used for the text-mode fallback, where the model may tuck the
- * JSON between prose or inside ``` fences that `generateObject` would reject.
+ * Every valid top-level JSON value (object or array) in `text`, in the order
+ * their opening delimiters appear, found with proper brace/bracket matching.
+ *
+ * This is far more robust than slicing first-`{`→last-`}`: a reasoning model's
+ * reply can lead with long thinking prose that itself contains braces, and a
+ * naive slice then spans garbage and fails to parse. Here each `{`/`[` is
+ * matched to its balanced close (respecting nested objects, arrays, and quoted
+ * strings) and the slice is parsed; invalid candidates are skipped.
  */
-function parseJsonObject(text: string): unknown {
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
+function extractJsonValues(text: string): unknown[] {
+  const out: unknown[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch !== "{" && ch !== "[") continue;
+    const close = ch === "{" ? "}" : "]";
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    let j = i;
+    for (; j < text.length; j++) {
+      const c = text[j];
+      if (esc) { esc = false; continue; }
+      if (c === "\\") { esc = true; continue; }
+      if (c === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (c === ch) depth++;
+      else if (c === close) {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    if (j < text.length) {
+      try {
+        out.push(JSON.parse(text.slice(i, j + 1)));
+      } catch {
+        // unbalanced/invalid — skip this candidate
+      }
+      // Skip past this value so we don't re-find nested ones first.
+      i = j;
+    }
   }
-}
-
-/** First balanced `[...]` block, JSON-parsed; null when absent or invalid. */
-function parseJsonArray(text: string): unknown {
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start < 0 || end <= start) return null;
-  try {
-    return JSON.parse(text.slice(start, end + 1));
-  } catch {
-    return null;
-  }
+  return out;
 }
 
 /**
  * Pull an array of (loosely-typed) questions out of a raw model reply for the
  * text-mode fallback. Accepts the contract shape `{"questions":[...]}` or a
- * bare `[...]` array, and tolerates prose/code-fence wrapping on either.
- * Individual malformed entries aren't fatal — `normalizeQuestion` drops them
- * downstream. Exported so the tolerance rules are testable.
+ * bare `[...]` array, and tolerates prose, reasoning chains, and code-fence
+ * wrapping around either. Of every valid JSON value in the reply, returns the
+ * first that is (or carries) a non-empty array. Individual malformed entries
+ * aren't fatal — `normalizeQuestion` drops them downstream. Exported so the
+ * tolerance rules are testable.
  */
 export function extractQuestions(text: string): FlatQuestion[] {
-  // Prefer the contract shape {"questions":[...]}. parseJsonObject would also
-  // happily return the first inner question {...} from a bare array, so only
-  // trust it when it actually carried a `questions` array, then fall through
-  // to a bare [...] array.
-  const object = parseJsonObject(text);
-  if (object && typeof object === "object" && !Array.isArray(object)) {
-    const arr = (object as { questions?: unknown }).questions;
-    if (Array.isArray(arr)) return arr as FlatQuestion[];
+  for (const value of extractJsonValues(text)) {
+    const arr: unknown = Array.isArray(value)
+      ? value
+      : (value as { questions?: unknown })?.questions;
+    if (Array.isArray(arr) && arr.length > 0) return arr as FlatQuestion[];
   }
-  const array = parseJsonArray(text);
-  if (Array.isArray(array)) return array as FlatQuestion[];
   return [];
 }
 
@@ -256,9 +270,21 @@ Output ONLY a JSON object with this shape — no prose, no code fence:
       lastError = err instanceof Error ? err.message : "Quiz generation failed";
       console.warn("generateQuiz generateObject failed, retrying as text:", lastError);
       try {
-        const { text: reply } = await generateText({ model, maxTokens, system, prompt });
+        const { text: reply } = await generateText({
+          model,
+          // Give the text pass more headroom than the schema pass: reasoning
+          // models spend tokens "thinking" before the JSON, and a too-tight
+          // cap truncates the answer mid-object so nothing parses.
+          maxTokens: Math.min(MAX_OUTPUT_TOKENS, Math.max(maxTokens, 400 + want * 500)),
+          system,
+          prompt,
+        });
         flat = extractQuestions(reply);
         if (flat.length === 0) {
+          // Keep a short trace so the next failure is diagnosable instead of a
+          // mystery — the reply shape dictates whether it's truncation or a
+          // model that won't emit JSON at all.
+          console.warn("generateQuiz text fallback had no parseable JSON. reply:", reply.slice(0, 400));
           lastError = "The model returned no parseable JSON";
           break;
         }

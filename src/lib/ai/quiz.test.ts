@@ -103,4 +103,21 @@ describe("extractQuestions", () => {
     expect(extractQuestions("I can't do that.")).toEqual([]);
     expect(extractQuestions("")).toEqual([]);
   });
+
+  // The reason the user's model failed: its reply led with reasoning prose
+  // (which itself contained braces), so a naive first-`{`→last-`}` slice
+  // spanned garbage and never parsed. The scanner must hop over invalid
+  // fragments and land on the real JSON.
+  it("skips reasoning prose containing braces before the JSON", () => {
+    const reply =
+      "Let me weigh {which concepts matter most} and {plausible distractors}. Final answer:\n" +
+      JSON.stringify({ questions: [q] });
+    expect(extractQuestions(reply)).toHaveLength(1);
+    expect(extractQuestions(reply)[0].question).toBe(q.question);
+  });
+
+  it("recovers the contract shape even after a nested object in prose", () => {
+    const reply = "Details: {\"x\":1}. Now:\n```json\n" + JSON.stringify({ questions: [q] }) + "\n```";
+    expect(extractQuestions(reply)).toHaveLength(1);
+  });
 });
