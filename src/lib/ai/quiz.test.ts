@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QUIZ_BATCH, normalizeQuestion } from "./quiz";
+import { QUIZ_BATCH, extractQuestions, normalizeQuestion } from "./quiz";
 
 const mc = {
   type: "mc" as const,
@@ -68,5 +68,39 @@ describe("QUIZ_BATCH", () => {
   it("is small enough that one call is short", () => {
     expect(QUIZ_BATCH).toBeGreaterThan(0);
     expect(QUIZ_BATCH).toBeLessThanOrEqual(5);
+  });
+});
+
+describe("extractQuestions", () => {
+  const q = {
+    type: "mc",
+    question: "What does TCP guarantee?",
+    options: ["Ordering", "Speed", "Encryption", "Compression"],
+    correctIndex: 0,
+    explanation: "TCP re-orders and retransmits.",
+  };
+
+  // These are the exact shapes a model produces that `generateObject` rejects
+  // with "No object generated: could not parse the response" — the bug this
+  // helper exists to survive.
+  it("parses a bare JSON array in a ```json fence", () => {
+    const out = extractQuestions("```json\n" + JSON.stringify([q]) + "\n```");
+    expect(out).toHaveLength(1);
+    expect(out[0].question).toBe(q.question);
+  });
+
+  it("parses the contract shape wrapped in a ```json fence", () => {
+    const reply = "Here you go:\n```json\n" + JSON.stringify({ questions: [q, q] }) + "\n```";
+    expect(extractQuestions(reply)).toHaveLength(2);
+  });
+
+  it("parses the contract shape with prose on both sides", () => {
+    const reply = "Sure. " + JSON.stringify({ questions: [q] }) + " Hope that helps.";
+    expect(extractQuestions(reply)).toHaveLength(1);
+  });
+
+  it("returns [] when there is no JSON object to parse", () => {
+    expect(extractQuestions("I can't do that.")).toEqual([]);
+    expect(extractQuestions("")).toEqual([]);
   });
 });

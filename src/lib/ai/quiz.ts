@@ -1,4 +1,4 @@
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
 import { userFastModel, userSmartModel } from "./user-model";
@@ -106,6 +106,56 @@ const DIFFICULTY_GUIDANCE: Record<StudyDifficulty, string> = {
 export const QUIZ_BATCH = 4;
 
 /**
+ * First balanced `{...}` block in a model reply, JSON-parsed; null when absent
+ * or invalid. Used for the text-mode fallback, where the model may tuck the
+ * JSON between prose or inside ``` fences that `generateObject` would reject.
+ */
+function parseJsonObject(text: string): unknown {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+/** First balanced `[...]` block, JSON-parsed; null when absent or invalid. */
+function parseJsonArray(text: string): unknown {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Pull an array of (loosely-typed) questions out of a raw model reply for the
+ * text-mode fallback. Accepts the contract shape `{"questions":[...]}` or a
+ * bare `[...]` array, and tolerates prose/code-fence wrapping on either.
+ * Individual malformed entries aren't fatal — `normalizeQuestion` drops them
+ * downstream. Exported so the tolerance rules are testable.
+ */
+export function extractQuestions(text: string): FlatQuestion[] {
+  // Prefer the contract shape {"questions":[...]}. parseJsonObject would also
+  // happily return the first inner question {...} from a bare array, so only
+  // trust it when it actually carried a `questions` array, then fall through
+  // to a bare [...] array.
+  const object = parseJsonObject(text);
+  if (object && typeof object === "object" && !Array.isArray(object)) {
+    const arr = (object as { questions?: unknown }).questions;
+    if (Array.isArray(arr)) return arr as FlatQuestion[];
+  }
+  const array = parseJsonArray(text);
+  if (Array.isArray(array)) return array as FlatQuestion[];
+  return [];
+}
+
+/**
  * Wall-clock budget for the whole action.
  *
  * The original code asked for all 8+ questions in one call with a 3000-token
@@ -166,13 +216,13 @@ export async function generateQuiz(
     const want = Math.min(QUIZ_BATCH, count - questions.length);
     const schema = z.object({ questions: z.array(FlatQuestionSchema).min(1).max(want + 2) });
 
-    try {
-      const { object } = await generateObject({
-        model: await (isDesktop ? userSmartModel() : userFastModel()),
-        schema,
-        // Sized to the batch, not the quiz — this is what keeps each call short.
-        maxTokens: Math.min(MAX_OUTPUT_TOKENS, 400 + want * 320),
-        system: `You create quiz questions that test understanding of the provided document(s).
+    // Not every model — especially via the OpenAI-compatible OpenRouter client —
+    // honors `generateObject`'s structured-output mode reliably. Some wrap the
+    // JSON in prose or ``` fences, and the SDK throws "No object generated:
+    // could not parse the response", which used to abort the whole quiz. So a
+    // batch first tries `generateObject`; on ANY failure it is retried once as
+    // plain text with a tolerant parse, so a picky model still yields a quiz.
+    const system = `You create quiz questions that test understanding of the provided document(s).
 
 Rules:
 - Generate EXACTLY ${want} question${want === 1 ? "" : "s"}, mixing multiple-choice ("mc") and open-ended ("open") types.
@@ -180,33 +230,54 @@ Rules:
 - Cover the most important, durable concepts across ALL provided documents — not just the first one.
 - For "mc": give exactly 4 options, set correctIndex to the right one, use plausible distractors (never "all/none of the above"), and include a 1-2 sentence explanation of why the correct answer is right. Leave "answer" empty.
 - For "open": give a specific, answerable question and a concise correct model answer in "answer". Leave options/correctIndex/explanation empty.
-- Base every question ONLY on the provided text — do not invent facts.`,
-        prompt:
-          questions.length === 0
-            ? text
-            : // Later batches see what already exists, or they cheerfully ask
-              // the same thing again — the most obvious concepts are the most
-              // obvious to every batch.
-              `${text}\n\n---\nQuestions already written (do NOT repeat these):\n${questions
-                .map((q) => `- ${q.question}`)
-                .join("\n")}`,
-      });
+- Base every question ONLY on the provided text — do not invent facts.
 
-      const normalized = object.questions
-        .map(normalizeQuestion)
-        .filter((q): q is GeneratedQuizQuestion => q !== null);
+Output ONLY a JSON object with this shape — no prose, no code fence:
+{"questions":[{"type":"mc"|"open","question":string,"options":string[],"correctIndex":number,"explanation":string,"answer":string}]}`;
+    const prompt =
+      questions.length === 0
+        ? text
+        : // Later batches see what already exists, or they cheerfully ask
+          // the same thing again — the most obvious concepts are the most
+          // obvious to every batch.
+          `${text}\n\n---\nQuestions already written (do NOT repeat these):\n${questions
+            .map((q) => `- ${q.question}`)
+            .join("\n")}`;
+    const model = await (isDesktop ? userSmartModel() : userFastModel());
+    // Sized to the batch, not the quiz — this is what keeps each call short.
+    const maxTokens = Math.min(MAX_OUTPUT_TOKENS, 400 + want * 320);
 
-      if (normalized.length === 0) {
-        lastError = "The model returned no usable questions";
+    let flat: FlatQuestion[];
+    try {
+      const { object } = await generateObject({ model, schema, maxTokens, system, prompt });
+      flat = object.questions;
+    } catch (err) {
+      // Recoverable failure — fall back to text mode + tolerant parse.
+      lastError = err instanceof Error ? err.message : "Quiz generation failed";
+      console.warn("generateQuiz generateObject failed, retrying as text:", lastError);
+      try {
+        const { text: reply } = await generateText({ model, maxTokens, system, prompt });
+        flat = extractQuestions(reply);
+        if (flat.length === 0) {
+          lastError = "The model returned no parseable JSON";
+          break;
+        }
+      } catch (err2) {
+        lastError = err2 instanceof Error ? err2.message : "Quiz generation failed";
+        // Keep whatever earlier batches produced — a partial quiz is still a quiz.
         break;
       }
-      questions.push(...normalized);
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : "Quiz generation failed";
-      console.warn("generateQuiz batch failed:", lastError);
-      // Keep whatever earlier batches produced — a partial quiz is still a quiz.
+    }
+
+    const normalized = flat
+      .map(normalizeQuestion)
+      .filter((q): q is GeneratedQuizQuestion => q !== null);
+
+    if (normalized.length === 0) {
+      lastError = "The model returned no usable questions";
       break;
     }
+    questions.push(...normalized);
   }
 
   return questions.length > 0

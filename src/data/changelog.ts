@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-a",
+    date: "August 1, 2026",
+    title: "Quiz generation is more reliable on every AI model",
+    tag: "fix",
+    summary:
+      "Generating a quiz could fail with “could not parse the response” when your AI model returned the questions in a slightly non-standard format. The app now retries in a more forgiving mode and accepts the model's answer however it's wrapped, so a picky model still produces a quiz instead of an error.",
+  },
+  {
     id: "2026-07-31-h",
     date: "July 31, 2026",
     title: "Code blocks are syntax-highlighted",
