@@ -2,7 +2,6 @@ import { createHash } from "crypto";
 import { streamText } from "ai";
 import { aiAvailable } from "@/lib/ai/provider";
 import { quietReasoningOptions, withReasoningHeadroom } from "@/lib/ai/models";
-import { createThinkStripper } from "@/lib/ai/think-tags";
 import { resolveUserSmartModel } from "@/lib/ai/user-model";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -38,6 +37,7 @@ import {
   toPlanArticles,
   unreadBriefIds,
 } from "@/lib/today/brief-queue";
+import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, briefStream } from "@/lib/today/brief-stream";
 import { loadExternalStories } from "@/lib/trending/signals";
 import { TITLE_SHINGLE_THRESHOLD, jaccard, titleShingles } from "@/lib/trending/cluster";
 import type { BriefSourceRef } from "@/lib/db/schema";
@@ -69,13 +69,6 @@ export const maxDuration = 60;
  *   POST /api/brief            → generate ONE section (streamed)
  *   POST /api/brief {systemPrompt} → legacy single-pass brief with a custom prompt
  */
-
-// Trailing markers appended after the text. The client splits on these and
-// never renders them. Sources go in the body (not a header) because a 60-article
-// map can exceed proxy header-size caps. Mirrors /api/ask.
-// NOT exported — Next.js route modules only allow specific named exports.
-const BRIEFSOURCES_SENTINEL = "<<<SB_BRIEFSOURCES:";
-const USAGE_SENTINEL = "<<<SB_USAGE:";
 
 // Raw full_text cap in SQL — ~6× the plain-text budget leaves HTML headroom.
 const RAW_FULLTEXT_MULTIPLIER = 6;
@@ -366,7 +359,12 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
 
   const resolved = await resolveUserSmartModel();
   const baseTokens = sectionMaxTokens(section, level);
-  const run = (maxTokens: number) =>
+  /**
+   * One generation attempt. `tuned` carries the reasoning-suppression provider
+   * options; the retry drops them so that a backend which rejects the field
+   * outright still gets a plain request rather than failing the same way twice.
+   */
+  const run = (maxTokens: number, tuned: boolean) =>
     streamText({
       model: resolved.model,
       system: sectionSystemPrompt(section, level),
@@ -389,11 +387,13 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
       // for the prose alone gets spent before the prose starts.
       maxTokens: withReasoningHeadroom(maxTokens, resolved.provider),
       abortSignal: req.signal,
-      providerOptions: quietReasoningOptions(resolved.provider, resolved.id),
+      providerOptions: tuned ? quietReasoningOptions(resolved.provider, resolved.id) : undefined,
     });
 
-  const stream = streamWithUsage(run(baseTokens), userId, req, {
-    retry: () => run(retryTokens(baseTokens)),
+  const stream = briefStream(run(baseTokens, true), {
+    retry: () => run(retryTokens(baseTokens), false),
+    recordUsage: (tokens) => void recordAiUsage(userId, tokens),
+    signal: req.signal,
   });
   return new Response(stream, {
     headers: {
@@ -490,7 +490,9 @@ async function legacyBrief(
     providerOptions: quietReasoningOptions(resolved.provider, resolved.id),
   });
 
-  const stream = streamWithUsage(result, userId, req, {
+  const stream = briefStream(result, {
+    recordUsage: (tokens) => void recordAiUsage(userId, tokens),
+    signal: req.signal,
     sourceMap,
     onDone: (content, usage) => {
       if (!content.trim()) return;
@@ -511,8 +513,6 @@ async function legacyBrief(
   });
 }
 
-type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
-
 /**
  * Output budget for a second attempt at a section whose first attempt produced
  * no visible text at all.
@@ -527,91 +527,4 @@ const EMPTY_RETRY_TOKEN_FLOOR = 2400;
 
 function retryTokens(base: number): number {
   return Math.max(base * 2, EMPTY_RETRY_TOKEN_FLOOR);
-}
-
-/**
- * Pipe the model's text through, then append the trailing sentinels the client
- * strips and parses. Sources/usage aren't known until generation finishes, so
- * they can't go in headers that were already sent.
- *
- * Two things happen to the text on the way out. Inline `<think>` blocks are
- * stripped (some OpenRouter routes emit reasoning as ordinary content — see
- * `think-tags.ts`), and a generation that yields no visible text at all is
- * retried once via `opts.retry`, because the usual cause is a fixable budget
- * rather than a broken request. Token usage is billed across both attempts.
- */
-function streamWithUsage(
-  result: ReturnType<typeof streamText>,
-  userId: string,
-  req: Request,
-  opts: {
-    sourceMap?: BriefSourceRef[];
-    onDone?: (content: string, usage: Usage) => void;
-    /** Second attempt, used only when the first produces no visible text. */
-    retry?: () => ReturnType<typeof streamText>;
-  } = {},
-): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const usageTotal: Usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
-      let acc = "";
-      const write = (s: string) => controller.enqueue(encoder.encode(s));
-
-      /** Drain one attempt, returning the visible text it produced. */
-      const consume = async (r: ReturnType<typeof streamText>): Promise<string> => {
-        const stripper = createThinkStripper();
-        let produced = "";
-        const show = (s: string) => {
-          if (!s) return;
-          produced += s;
-          acc += s;
-          write(s);
-        };
-        for await (const delta of r.textStream) show(stripper.push(delta));
-        show(stripper.flush());
-
-        const usage = await r.usage;
-        usageTotal.promptTokens += usage?.promptTokens ?? 0;
-        usageTotal.completionTokens += usage?.completionTokens ?? 0;
-        usageTotal.totalTokens += usage?.totalTokens ?? 0;
-        return produced;
-      };
-
-      try {
-        const text = await consume(result);
-        // Empty means the tokens went somewhere the reader can't see them —
-        // a hidden reasoning pass that used up the ceiling, or a think block
-        // that got cut off before the answer began. Worth one more try with
-        // room to finish; the client's retry button is the fallback after that.
-        if (!text.trim() && opts.retry && !req.signal.aborted) {
-          console.warn("brief section produced no visible text — retrying with a larger budget");
-          await consume(opts.retry());
-        }
-
-        if (opts.sourceMap) {
-          write(`\n${BRIEFSOURCES_SENTINEL}${JSON.stringify(opts.sourceMap)}`);
-        }
-        void recordAiUsage(userId, usageTotal.totalTokens);
-        write(`\n${USAGE_SENTINEL}${JSON.stringify(usageTotal)}`);
-        opts.onDone?.(acc, usageTotal);
-      } catch (err) {
-        // Tokens spent before the failure still cost money — bill them.
-        if (usageTotal.totalTokens > 0) void recordAiUsage(userId, usageTotal.totalTokens);
-        if (!req.signal.aborted) {
-          try {
-            write(`\n\n_(generation error: ${err instanceof Error ? err.message : "unknown"})_`);
-          } catch {
-            /* controller closed */
-          }
-        }
-      } finally {
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      }
-    },
-  });
 }
