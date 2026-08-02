@@ -15,10 +15,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { buildQuiz } from "@/components/study/build-quiz";
 import { toast } from "sonner";
 import {
   fetchQuizItemOptionsAction,
-  generateQuizAction,
   type QuizItemOption,
 } from "@/app/(app)/study/quiz-actions";
 
@@ -75,18 +75,23 @@ export function QuizPickerDialog({
   function create() {
     if (selected.size === 0 || creating) return;
     setCreating(true);
-    generateQuizAction(Array.from(selected))
+    const t = toast.loading("Building quiz…");
+    buildQuiz(Array.from(selected), {
+      onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
+    })
       .then((r) => {
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
           onOpenChange(false);
           router.push(`/study?tab=quiz&quiz=${r.id}`);
           router.refresh();
         } else {
-          toast.error(r.error);
+          toast.error(r.error, { id: t });
         }
       })
-      .catch((err) => toast.error(err instanceof Error ? err.message : "Couldn't create the quiz"))
+      .catch((err) =>
+        toast.error(err instanceof Error ? err.message : "Couldn't create the quiz", { id: t }),
+      )
       .finally(() => setCreating(false));
   }
 

@@ -31,7 +31,7 @@ import {
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
-import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
+import { buildQuiz } from "@/components/study/build-quiz";
 import {
   CONTEXT_MENU_PRIMITIVES,
   DROPDOWN_MENU_PRIMITIVES,
@@ -443,7 +443,9 @@ export function DirectoryShell({
   const rowMakeQuiz = useCallback(
     (id: string) => {
       const t = toast.loading("Building quiz…");
-      generateQuizAction([id])
+      buildQuiz([id], {
+        onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
+      })
         .then((r) => {
           if (r.ok) {
             toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });

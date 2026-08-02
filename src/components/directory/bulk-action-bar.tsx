@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
+import { buildQuiz } from "@/components/study/build-quiz";
 import { toast } from "sonner";
 import type { DirectoryFolder } from "@/lib/db/schema";
 
@@ -40,17 +40,20 @@ export function BulkActionBar({
   function handleMakeQuiz() {
     if (makingQuiz) return;
     setMakingQuiz(true);
-    generateQuizAction(selectedIds)
+    const t = toast.loading("Building quiz…");
+    buildQuiz(selectedIds, {
+      onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
+    })
       .then((r) => {
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
           onClear();
           router.push(`/study?tab=quiz&quiz=${r.id}`);
         } else {
-          toast.error(r.error);
+          toast.error(r.error, { id: t });
         }
       })
-      .catch((e) => toast.error(`Quiz failed: ${e instanceof Error ? e.message : "error"}`))
+      .catch((e) => toast.error(`Quiz failed: ${e instanceof Error ? e.message : "error"}`, { id: t }))
       .finally(() => setMakingQuiz(false));
   }
 

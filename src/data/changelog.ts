@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-i",
+    date: "August 1, 2026",
+    title: "Quizzes build a few questions at a time",
+    tag: "fix",
+    summary:
+      "Making a quiz often failed with \"an unexpected response was received from the server\". It was writing every question in one go and running out of time on the server before it finished — so you got nothing, however good the source was.",
+    items: [
+      "Questions are now written in small batches, one request each, with a live count as they arrive.",
+      "The quiz is saved and openable from the first few questions onward, so a hiccup part-way through gives you a shorter quiz instead of no quiz.",
+    ],
+  },
+  {
     id: "2026-08-01-h",
     date: "August 1, 2026",
     title: "No more blank screens on mobile, and faster folders",

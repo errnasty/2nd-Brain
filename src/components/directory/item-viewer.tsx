@@ -29,7 +29,7 @@ import {
 import { editAssistAction } from "@/app/(app)/directory/ai-actions";
 import type { EditAssistMode } from "@/lib/ai/edit-assist";
 import { generateFlashcardsAction } from "@/app/(app)/review/actions";
-import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
+import { buildQuiz } from "@/components/study/build-quiz";
 import { celebrate } from "@/lib/gamify/celebrate";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
@@ -375,13 +375,16 @@ export function ItemViewer({
     setMakingQuiz(true);
     startTransition(async () => {
       try {
-        const r = await generateQuizAction([item.id]);
+        const t = toast.loading("Building quiz…");
+        const r = await buildQuiz([item.id], {
+          onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
+        });
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
           celebrate(r.xp);
           router.push(`/study?tab=quiz&quiz=${r.id}`);
         } else {
-          toast.error(r.error);
+          toast.error(r.error, { id: t });
         }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Couldn't generate a quiz");
