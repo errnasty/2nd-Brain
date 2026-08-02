@@ -60,6 +60,8 @@ export function StudyShell({
   quizzes,
   quizId,
   sessionPlan,
+  characterSeed,
+  initialPixel = false,
 }: {
   defaultTab: StudyTab;
   stats: StudyStats;
@@ -69,6 +71,10 @@ export function StudyShell({
   dueCount: number;
   calendar: CalendarEntry[];
   game: GameState | null;
+  /** Stable per-user seed for the character sigil. */
+  characterSeed?: string;
+  /** Stored pixel-skin preference, so the console doesn't flash plain first. */
+  initialPixel?: boolean;
   reviewScopeLabel?: string | null;
   leeches?: LeechCard[];
   quizzes: QuizListItem[];
@@ -182,6 +188,8 @@ export function StudyShell({
           <StatsOverview
             stats={stats}
             game={game}
+            characterSeed={characterSeed}
+            initialPixel={initialPixel}
             canStartSession={sessionPlan.cards.length > 0 || sessionPlan.overdueTasks.length > 0}
             sessionSummary={{
               cards: sessionPlan.cards.length,
