@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getUserSettings } from "@/lib/settings/store";
@@ -32,6 +33,25 @@ export const runtime = "nodejs";
  *   POST { kind: "source", articleId } → opening a cited source
  */
 
+/**
+ * Drop the cached Study hub so brief XP actually shows up there.
+ *
+ * The XP total, level and skill bars are server-rendered by /study
+ * (`fetchGameState`). Every OTHER way of earning XP is a server action that
+ * calls `revalidatePath("/study")` — making a quiz, making flashcards,
+ * finishing an attempt. Brief XP is earned through this route handler, which
+ * called nothing, so the router served its cached copy of /study and the XP
+ * you had just earned was invisible until a hard reload. The brief's own
+ * running total looked right, which made it read as XP being lost on the way
+ * out of the brief rather than simply not being re-fetched.
+ *
+ * Only on a real award: the client posts on every section read, and most of
+ * those are idempotent no-ops.
+ */
+function revalidateXpSurfaces(awarded: number): void {
+  if (awarded > 0) revalidatePath("/study");
+}
+
 type Body = {
   kind?: "section" | "complete" | "source";
   section?: string;
@@ -64,6 +84,7 @@ export async function POST(req: Request) {
   if (body.kind === "source") {
     if (!body.articleId) return new Response("Missing articleId", { status: 400 });
     const award = await awardBriefSourceOpened(userId, body.articleId);
+    revalidateXpSurfaces(award.awarded);
     return Response.json(award);
   }
 
@@ -117,6 +138,7 @@ export async function POST(req: Request) {
       awardBriefComplete(userId, { articleIds: ids }),
       briefStreak(userId),
     ]);
+    revalidateXpSurfaces(award.awarded);
     return Response.json({ ...award, streak });
   }
 
@@ -130,5 +152,6 @@ export async function POST(req: Request) {
     sectionKey: section.key,
     articleIds: idsOf(section.refs),
   });
+  revalidateXpSurfaces(award.awarded);
   return Response.json(award);
 }
