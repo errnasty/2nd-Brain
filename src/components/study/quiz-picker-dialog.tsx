@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { buildQuiz } from "@/components/study/build-quiz";
+import { buildQuiz, quizReadyMessage } from "@/components/study/build-quiz";
 import { toast } from "sonner";
 import {
   fetchQuizItemOptionsAction,
@@ -78,7 +78,7 @@ export function QuizPickerDialog({
     buildQuiz(Array.from(selected))
       .then((r) => {
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          toast.success(quizReadyMessage(r));
           onOpenChange(false);
           router.push(`/study?tab=quiz&quiz=${r.id}`);
           router.refresh();

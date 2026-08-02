@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { celebrate } from "@/lib/gamify/celebrate";
 import type { AwardResult } from "@/lib/gamify/award";
 
@@ -30,6 +31,9 @@ import type { AwardResult } from "@/lib/gamify/award";
 
 /** Continuous visible time before a section counts as read. */
 export const DWELL_MS = 3000;
+
+/** Quiet period after the last XP award before the app-wide refresh fires. */
+const XP_REFRESH_DEBOUNCE_MS = 2500;
 
 /** Fraction of a section on screen that counts as "looking at it". */
 const VISIBLE_RATIO = 0.5;
@@ -160,6 +164,38 @@ export function useBriefReading(opts: {
   const readableRef = useRef(isReadable);
   readableRef.current = isReadable;
 
+  /**
+   * Pull the rest of the app back in step after XP is earned.
+   *
+   * XP from the brief is awarded through a ROUTE HANDLER, and a route handler
+   * cannot reach the client Router Cache — only a server action's response or
+   * `router.refresh()` can. With `staleTimes.dynamic: 300` (next.config.ts)
+   * the Study hub is held client-side for five minutes, so leaving the brief
+   * and going to look at your XP showed the total from before you read it.
+   * The brief's own counter was right, which made it look like the XP had
+   * been lost on the way out rather than simply not re-fetched.
+   *
+   * Debounced: reading a brief awards once per section, and refreshing on each
+   * of those would re-render the page underneath the reader repeatedly. One
+   * refresh after the reading settles is enough — the Study hub is somewhere
+   * you go next, not somewhere you are.
+   */
+  const router = useRouter();
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      router.refresh();
+    }, XP_REFRESH_DEBOUNCE_MS);
+  }, [router]);
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    },
+    [],
+  );
+
   // Restore today's reading state on mount, so leaving the page and coming
   // back doesn't show an empty bar over a brief you've already read. Runs once:
   // after this the in-memory state is authoritative for the session.
@@ -211,11 +247,12 @@ export function useBriefReading(opts: {
       if (result.awarded <= 0) return;
       setEarned((prev) => prev + result.awarded);
       setGains((prev) => new Map(prev).set(key, result.skills));
+      scheduleRefresh();
       // Stays quiet for ordinary XP — it only fires on a milestone (a folder
       // skill levelling up, an evolution, a rank promotion).
       celebrate(result.best);
     },
-    [level],
+    [level, scheduleRefresh],
   );
 
   const register = useCallback(
@@ -288,19 +325,24 @@ export function useBriefReading(opts: {
       if (result.awarded > 0) {
         setEarned((prev) => prev + result.awarded);
         celebrate(result.best);
+        scheduleRefresh();
       }
     })();
-  }, [readKeys, sectionKeys, isReadable, level, enabled, hydrated]);
+  }, [readKeys, sectionKeys, isReadable, level, enabled, hydrated, scheduleRefresh]);
 
-  const reportSourceOpened = useCallback((articleId: string) => {
-    void (async () => {
-      const result = await claim({ kind: "source", articleId });
-      if (result && result.awarded > 0) {
-        setEarned((prev) => prev + result.awarded);
-        celebrate(result.best);
-      }
-    })();
-  }, []);
+  const reportSourceOpened = useCallback(
+    (articleId: string) => {
+      void (async () => {
+        const result = await claim({ kind: "source", articleId });
+        if (result && result.awarded > 0) {
+          setEarned((prev) => prev + result.awarded);
+          celebrate(result.best);
+          scheduleRefresh();
+        }
+      })();
+    },
+    [scheduleRefresh],
+  );
 
   // Pending dwell timers must not fire after the component is gone.
   useEffect(() => {

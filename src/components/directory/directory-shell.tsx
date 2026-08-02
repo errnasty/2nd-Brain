@@ -31,7 +31,7 @@ import {
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
 import { buildFlashcards } from "@/components/study/build-flashcards";
-import { buildQuiz } from "@/components/study/build-quiz";
+import { buildQuiz, quizReadyMessage } from "@/components/study/build-quiz";
 import {
   CONTEXT_MENU_PRIMITIVES,
   DROPDOWN_MENU_PRIMITIVES,
@@ -446,7 +446,7 @@ export function DirectoryShell({
       buildQuiz([id])
         .then((r) => {
           if (r.ok) {
-            toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+            toast.success(quizReadyMessage(r));
             router.push(`/study?tab=quiz&quiz=${r.id}`);
           } else {
             toast.error(r.error);

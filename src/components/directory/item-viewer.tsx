@@ -29,7 +29,7 @@ import {
 import { editAssistAction } from "@/app/(app)/directory/ai-actions";
 import type { EditAssistMode } from "@/lib/ai/edit-assist";
 import { buildFlashcards } from "@/components/study/build-flashcards";
-import { buildQuiz } from "@/components/study/build-quiz";
+import { buildQuiz, quizReadyMessage } from "@/components/study/build-quiz";
 import { celebrate } from "@/lib/gamify/celebrate";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
@@ -377,7 +377,7 @@ export function ItemViewer({
       try {
         const r = await buildQuiz([item.id]);
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          toast.success(quizReadyMessage(r));
           celebrate(r.xp);
           router.push(`/study?tab=quiz&quiz=${r.id}`);
         } else {

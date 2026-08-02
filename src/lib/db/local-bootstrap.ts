@@ -480,6 +480,11 @@ create index if not exists articles_folder_status_trend_idx
   on articles (folder_id, read_status, trend_score desc, publish_date desc, id desc);
 create index if not exists articles_feed_status_trend_idx
   on articles (feed_id, read_status, trend_score desc, publish_date desc, id desc);
+-- Directory list snippet, precomputed so the query never touches TOAST.
+-- Mirrors cloud migration 0031.
+alter table directory_items
+  add column if not exists preview text
+  generated always as (substring(content, 1, 240)) stored;
 create index if not exists articles_user_pub_idx
   on articles (user_id, publish_date desc, id desc);
 create index if not exists articles_user_starred_idx

@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-k",
+    date: "August 1, 2026",
+    title: "Brief XP shows up, quizzes reach your chosen length, folders open faster",
+    tag: "fix",
+    summary:
+      "Three fixes to things that were quietly not working: XP from the Daily Brief, quizzes coming back shorter than your setting, and the first visit to a Directory folder being slow.",
+    items: [
+      "XP earned reading the brief was saved correctly, but the Study hub kept showing its cached total — so the XP looked lost the moment you left the brief. It now updates on its own.",
+      'A quiz set to 10 questions could come back with 7: one batch producing nothing was treated as the whole quiz being finished. It now tries again, and if it genuinely falls short it says "7 of 10" instead of just "7".',
+      "Directory list previews are stored rather than rebuilt on every load, which is what made the first visit to a folder slow while later visits felt fine.",
+    ],
+  },
+  {
     id: "2026-08-01-j",
     date: "August 1, 2026",
     title: "See quizzes and flashcards being made",
