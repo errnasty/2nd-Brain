@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDownUp, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -30,8 +30,8 @@ import {
   renameDirectoryFolderAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
-import { generateFlashcardsAction } from "@/app/(app)/review/actions";
-import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
+import { buildFlashcards } from "@/components/study/build-flashcards";
+import { buildQuiz } from "@/components/study/build-quiz";
 import {
   CONTEXT_MENU_PRIMITIVES,
   DROPDOWN_MENU_PRIMITIVES,
@@ -54,7 +54,15 @@ import { FolderBulkActionBar } from "./folder-bulk-action-bar";
 // treatment /feeds already gives its article reader.
 const ItemViewer = dynamic(() => import("./item-viewer").then((m) => m.ItemViewer), {
   ssr: false,
-  loading: () => <section className="hidden flex-1 lg:flex" aria-busy="true" />,
+  // Visible at every width — on mobile the list is already hidden once an item
+  // is open, so a desktop-only fallback meant tapping an item showed an empty
+  // screen until the chunk arrived. Same fix as /feeds' article reader.
+  loading: () => (
+    <section className="flex flex-1 items-center justify-center" aria-busy="true">
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <span className="sr-only">Loading item</span>
+    </section>
+  ),
 });
 const DirectoryBoard = dynamic(() => import("./directory-board").then((m) => m.DirectoryBoard), {
   ssr: false,
@@ -423,28 +431,28 @@ export function DirectoryShell({
   // Row-level "Make flashcards" / "Make quiz" — run straight from the list
   // without opening the item first.
   const rowMakeCards = useCallback((id: string) => {
-    const t = toast.loading("Making flashcards…");
-    generateFlashcardsAction(id)
+    // No loading toast: the generation strip in the app layout reports the
+    // work, and two things saying "making flashcards" is one too many.
+    buildFlashcards(id)
       .then((r) => {
-        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`, { id: t });
-        else toast.error(r.error, { id: t });
+        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
+        else toast.error(r.error);
       })
-      .catch(() => toast.error("Couldn't make flashcards", { id: t }));
+      .catch(() => toast.error("Couldn't make flashcards"));
   }, []);
 
   const rowMakeQuiz = useCallback(
     (id: string) => {
-      const t = toast.loading("Building quiz…");
-      generateQuizAction([id])
+      buildQuiz([id])
         .then((r) => {
           if (r.ok) {
-            toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
+            toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
             router.push(`/study?tab=quiz&quiz=${r.id}`);
           } else {
-            toast.error(r.error, { id: t });
+            toast.error(r.error);
           }
         })
-        .catch(() => toast.error("Couldn't build quiz", { id: t }));
+        .catch(() => toast.error("Couldn't build quiz"));
     },
     [router],
   );

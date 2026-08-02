@@ -27,6 +27,43 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-j",
+    date: "August 1, 2026",
+    title: "See quizzes and flashcards being made",
+    tag: "improvement",
+    summary:
+      "A status strip now appears at the top of the app while a quiz or a set of flashcards is being generated, and stays there until the work is done — including when you move to another page.",
+    items: [
+      "Quizzes show a live count as questions arrive, so you can tell progress from a stall.",
+      "It no longer matters that the menu or dialog you started from has closed — the progress is not tied to that button.",
+    ],
+  },
+  {
+    id: "2026-08-01-i",
+    date: "August 1, 2026",
+    title: "Quizzes build a few questions at a time",
+    tag: "fix",
+    summary:
+      "Making a quiz often failed with \"an unexpected response was received from the server\". It was writing every question in one go and running out of time on the server before it finished — so you got nothing, however good the source was.",
+    items: [
+      "Questions are now written in small batches, one request each, with a live count as they arrive.",
+      "The quiz is saved and openable from the first few questions onward, so a hiccup part-way through gives you a shorter quiz instead of no quiz.",
+    ],
+  },
+  {
+    id: "2026-08-01-h",
+    date: "August 1, 2026",
+    title: "No more blank screens on mobile, and faster folders",
+    tag: "fix",
+    summary:
+      "On a phone, opening a folder or tapping an article could show a completely empty page until you reloaded. The page was loading the whole time — the loading placeholder was only ever set up to appear on desktop, so there was nothing on screen to say so.",
+    items: [
+      "Feeds, Directory and the article and item views now show a loading state on every screen size.",
+      "Opening a busy folder is much faster: the list is sorted by Trending by default, but the database had no matching index, so a folder with thousands of unread articles was re-sorted from scratch every time you opened it.",
+      "Simplifying an article no longer replaces it with a message from the AI asking for the content. Sections with nothing to rewrite are now left alone, and a reply that isn't a rewrite is discarded in favour of the original text.",
+    ],
+  },
+  {
     id: "2026-08-01-g",
     date: "August 1, 2026",
     title: "AI usage is now counted everywhere",

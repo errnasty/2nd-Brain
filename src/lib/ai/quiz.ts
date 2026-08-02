@@ -6,10 +6,13 @@ import { extractJsonValues } from "./generate-json";
 import {
   clamp,
   DEFAULT_QUIZ_COUNT,
+  QUIZ_BATCH,
   DEFAULT_STUDY_DIFFICULTY,
   QUIZ_COUNT_RANGE,
   type StudyDifficulty,
 } from "./study-options";
+
+export { QUIZ_BATCH };
 
 // Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
 // bounded output (mirrors study-plan.ts). Desktop runs the server locally with
@@ -112,9 +115,6 @@ const DIFFICULTY_GUIDANCE: Record<StudyDifficulty, string> = {
 const MC_DISTINCT_RULE =
   'For "mc": give exactly 4 options and ensure all four are DIFFERENT, meaningful choices. Never repeat an option, never list "all of the above"/"none of the above", and never reword the same idea twice to pad the list.';
 
-/** Questions requested per model call. */
-export const QUIZ_BATCH = 4;
-
 /** Pull an array of (loosely-typed) questions out of a raw model reply for the
  *  text-mode fallback. Accepts the contract shape `{"questions":[...]}` or a
  *  bare `[...]` array, and tolerates prose, reasoning chains, and code-fence
@@ -132,26 +132,6 @@ export function extractQuestions(text: string): FlatQuestion[] {
   return [];
 }
 
-/**
- * Wall-clock budget for the whole action — a runaway safety valve, NOT the
- * thing that should decide how many questions you get.
- *
- * The original code asked for all 8+ questions in one call with a 3000-token
- * ceiling. On Netlify a function is killed at ~10s regardless of `maxDuration`,
- * and 3000 tokens of quiz takes considerably longer than that to produce — so
- * the request died and the user got "couldn't generate a quiz from this text",
- * every time, no matter how good the text was.
- *
- * Questions are generated a few at a time and the loop stops when the budget
- * is spent, returning whatever landed. A 7s budget on the non-desktop runtime
- * turned out to be shorter than ONE batch takes to return, so it fired right
- * after the first batch and silently capped every quiz at QUIZ_BATCH (4) — the
- * user's chosen count was never reached. A hard serverless kill (~10s) already
- * bounds the cloud path on its own, so a generous budget here costs nothing
- * there and lets every other host actually deliver the requested count.
- */
-const GENERATION_BUDGET_MS = 60_000;
-
 export type QuizGeneration = {
   questions: GeneratedQuizQuestion[];
   /**
@@ -162,49 +142,53 @@ export type QuizGeneration = {
   error?: string;
 };
 
-/**
- * Generate a mixed multiple-choice / open-ended quiz from one or more
- * documents' text.
- *
- * Never throws. Returns whatever questions were produced plus, when that is
- * none, the reason.
- */
-export async function generateQuiz(
-  sources: { title: string; text: string }[],
-  opts?: { count?: number; difficulty?: StudyDifficulty },
-): Promise<QuizGeneration> {
-  if (!aiAvailable()) return { questions: [] };
-
-  const combined = sources
+/** The prompt sources, prepared once and reused by every batch. */
+function combineSources(sources: { title: string; text: string }[]): string {
+  return sources
     .filter((s) => s.text.trim())
     .map((s, i) => `Document ${i + 1}: ${s.title}\n${s.text.slice(0, 5000)}`)
-    .join("\n\n---\n\n");
-  if (!combined.trim()) return { questions: [] };
+    .join("\n\n---\n\n")
+    .slice(0, 20_000);
+}
 
-  const count = clamp(opts?.count ?? DEFAULT_QUIZ_COUNT, QUIZ_COUNT_RANGE.min, QUIZ_COUNT_RANGE.max);
-  const difficulty = opts?.difficulty ?? DEFAULT_STUDY_DIFFICULTY;
-  const text = combined.slice(0, 20_000);
+/**
+ * Generate ONE batch of questions — a single model call.
+ *
+ * This is the unit of work that fits a serverless request. Netlify kills a
+ * function at ~10s regardless of `maxDuration` (that export is Vercel-only),
+ * and a full quiz is several model calls, so anything that loops over batches
+ * inside one HTTP request is running a race it cannot win: the request dies
+ * part-way and the caller gets a truncated HTML error page instead of a
+ * result, which surfaces as "An unexpected response was received from the
+ * server". Callers on the cloud runtime therefore drive one batch per request
+ * — the same shape the Daily Brief and ThinkTank already use.
+ *
+ * `existing` is the questions already written for this quiz; later batches are
+ * shown them so they don't cheerfully ask the same thing again — the most
+ * obvious concepts are the most obvious to every batch.
+ *
+ * Never throws.
+ */
+export async function generateQuizBatch(
+  sources: { title: string; text: string }[],
+  opts: { want: number; difficulty?: StudyDifficulty; existing?: string[] },
+): Promise<QuizGeneration> {
+  if (!aiAvailable()) return { questions: [] };
+  const text = combineSources(sources);
+  if (!text.trim()) return { questions: [] };
 
-  const started = Date.now();
-  const questions: GeneratedQuizQuestion[] = [];
-  let lastError: string | undefined;
+  const want = clamp(opts.want, 1, QUIZ_BATCH);
+  const difficulty = opts.difficulty ?? DEFAULT_STUDY_DIFFICULTY;
+  const existing = opts.existing ?? [];
+  const schema = z.object({ questions: z.array(FlatQuestionSchema).min(1).max(want + 2) });
 
-  while (questions.length < count) {
-    // Stop before starting a batch we haven't time to finish. Checked at the
-    // top so a first batch always runs — returning zero questions because the
-    // clock was already spent would be the old bug in a new place.
-    if (questions.length > 0 && Date.now() - started > GENERATION_BUDGET_MS) break;
-
-    const want = Math.min(QUIZ_BATCH, count - questions.length);
-    const schema = z.object({ questions: z.array(FlatQuestionSchema).min(1).max(want + 2) });
-
-    // Not every model — especially via the OpenAI-compatible OpenRouter client —
-    // honors `generateObject`'s structured-output mode reliably. Some wrap the
-    // JSON in prose or ``` fences, and the SDK throws "No object generated:
-    // could not parse the response", which used to abort the whole quiz. So a
-    // batch first tries `generateObject`; on ANY failure it is retried once as
-    // plain text with a tolerant parse, so a picky model still yields a quiz.
-    const system = `You create quiz questions that test understanding of the provided document(s).
+  // Not every model — especially via the OpenAI-compatible OpenRouter client —
+  // honors `generateObject`'s structured-output mode reliably. Some wrap the
+  // JSON in prose or ``` fences, and the SDK throws "No object generated:
+  // could not parse the response", which used to abort the whole quiz. So a
+  // batch first tries `generateObject`; on ANY failure it is retried once as
+  // plain text with a tolerant parse, so a picky model still yields a quiz.
+  const system = `You create quiz questions that test understanding of the provided document(s).
 
 Rules:
 - Generate EXACTLY ${want} question${want === 1 ? "" : "s"}, mixing multiple-choice ("mc") and open-ended ("open") types.
@@ -217,62 +201,87 @@ Rules:
 
 Output ONLY a JSON object with this shape — no prose, no code fence:
 {"questions":[{"type":"mc"|"open","question":string,"options":string[],"correctIndex":number,"explanation":string,"answer":string}]}`;
-    const prompt =
-      questions.length === 0
-        ? text
-        : // Later batches see what already exists, or they cheerfully ask
-          // the same thing again — the most obvious concepts are the most
-          // obvious to every batch.
-          `${text}\n\n---\nQuestions already written (do NOT repeat these):\n${questions
-            .map((q) => `- ${q.question}`)
-            .join("\n")}`;
-    const model = await (isDesktop ? userSmartModel() : userFastModel());
-    // Sized to the batch, not the quiz — this is what keeps each call short.
-    const maxTokens = Math.min(MAX_OUTPUT_TOKENS, 400 + want * 320);
+  const prompt =
+    existing.length === 0
+      ? text
+      : `${text}\n\n---\nQuestions already written (do NOT repeat these):\n${existing
+          .map((q) => `- ${q}`)
+          .join("\n")}`;
+  const model = await (isDesktop ? userSmartModel() : userFastModel());
+  // Sized to the batch, not the quiz — this is what keeps each call short.
+  const maxTokens = Math.min(MAX_OUTPUT_TOKENS, 400 + want * 320);
 
-    let flat: FlatQuestion[];
+  let flat: FlatQuestion[];
+  try {
+    const { object } = await generateObject({ model, schema, maxTokens, system, prompt });
+    flat = object.questions;
+  } catch (err) {
+    const firstError = err instanceof Error ? err.message : "Quiz generation failed";
+    console.warn("generateQuizBatch generateObject failed, retrying as text:", firstError);
     try {
-      const { object } = await generateObject({ model, schema, maxTokens, system, prompt });
-      flat = object.questions;
-    } catch (err) {
-      // Recoverable failure — fall back to text mode + tolerant parse.
-      lastError = err instanceof Error ? err.message : "Quiz generation failed";
-      console.warn("generateQuiz generateObject failed, retrying as text:", lastError);
-      try {
-        const { text: reply } = await generateText({
-          model,
-          // Give the text pass more headroom than the schema pass: reasoning
-          // models spend tokens "thinking" before the JSON, and a too-tight
-          // cap truncates the answer mid-object so nothing parses.
-          maxTokens: Math.min(MAX_OUTPUT_TOKENS, Math.max(maxTokens, 400 + want * 500)),
-          system,
-          prompt,
-        });
-        flat = extractQuestions(reply);
-        if (flat.length === 0) {
-          // Keep a short trace so the next failure is diagnosable instead of a
-          // mystery — the reply shape dictates whether it's truncation or a
-          // model that won't emit JSON at all.
-          console.warn("generateQuiz text fallback had no parseable JSON. reply:", reply.slice(0, 400));
-          lastError = "The model returned no parseable JSON";
-          break;
-        }
-      } catch (err2) {
-        lastError = err2 instanceof Error ? err2.message : "Quiz generation failed";
-        // Keep whatever earlier batches produced — a partial quiz is still a quiz.
-        break;
+      const { text: reply } = await generateText({
+        model,
+        // Give the text pass more headroom than the schema pass: reasoning
+        // models spend tokens "thinking" before the JSON, and a too-tight
+        // cap truncates the answer mid-object so nothing parses.
+        maxTokens: Math.min(MAX_OUTPUT_TOKENS, Math.max(maxTokens, 400 + want * 500)),
+        system,
+        prompt,
+      });
+      flat = extractQuestions(reply);
+      if (flat.length === 0) {
+        // Keep a short trace so the next failure is diagnosable instead of a
+        // mystery — the reply shape dictates whether it's truncation or a
+        // model that won't emit JSON at all.
+        console.warn("generateQuizBatch text fallback had no parseable JSON. reply:", reply.slice(0, 400));
+        return { questions: [], error: "The model returned no parseable JSON" };
       }
+    } catch (err2) {
+      return { questions: [], error: err2 instanceof Error ? err2.message : "Quiz generation failed" };
     }
+  }
 
-    const normalized = flat
-      .map(normalizeQuestion)
-      .filter((q): q is GeneratedQuizQuestion => q !== null);
+  const normalized = flat
+    .map(normalizeQuestion)
+    .filter((q): q is GeneratedQuizQuestion => q !== null);
+  return normalized.length > 0
+    ? { questions: normalized }
+    : { questions: [], error: "The model returned no usable questions" };
+}
 
-    if (normalized.length === 0) {
-      lastError = "The model returned no usable questions";
+/**
+ * Generate a whole quiz in one call, batch after batch.
+ *
+ * Only safe where a request can run long — the desktop build, or a host
+ * without a hard function ceiling. The cloud path drives `generateQuizBatch`
+ * one request at a time instead; see the note on that function.
+ *
+ * Never throws. Returns whatever questions were produced plus, when that is
+ * none, the reason.
+ */
+export async function generateQuiz(
+  sources: { title: string; text: string }[],
+  opts?: { count?: number; difficulty?: StudyDifficulty },
+): Promise<QuizGeneration> {
+  if (!aiAvailable()) return { questions: [] };
+  if (!combineSources(sources).trim()) return { questions: [] };
+
+  const count = clamp(opts?.count ?? DEFAULT_QUIZ_COUNT, QUIZ_COUNT_RANGE.min, QUIZ_COUNT_RANGE.max);
+  const questions: GeneratedQuizQuestion[] = [];
+  let lastError: string | undefined;
+
+  while (questions.length < count) {
+    const batch = await generateQuizBatch(sources, {
+      want: Math.min(QUIZ_BATCH, count - questions.length),
+      difficulty: opts?.difficulty,
+      existing: questions.map((q) => q.question),
+    });
+    if (batch.questions.length === 0) {
+      // Keep whatever earlier batches produced — a partial quiz is still a quiz.
+      lastError = batch.error;
       break;
     }
-    questions.push(...normalized);
+    questions.push(...batch.questions);
   }
 
   return questions.length > 0

@@ -15,10 +15,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { buildQuiz } from "@/components/study/build-quiz";
 import { toast } from "sonner";
 import {
   fetchQuizItemOptionsAction,
-  generateQuizAction,
   type QuizItemOption,
 } from "@/app/(app)/study/quiz-actions";
 
@@ -75,7 +75,7 @@ export function QuizPickerDialog({
   function create() {
     if (selected.size === 0 || creating) return;
     setCreating(true);
-    generateQuizAction(Array.from(selected))
+    buildQuiz(Array.from(selected))
       .then((r) => {
         if (r.ok) {
           toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);

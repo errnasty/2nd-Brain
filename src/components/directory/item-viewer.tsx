@@ -28,8 +28,8 @@ import {
 } from "@/app/(app)/directory/actions";
 import { editAssistAction } from "@/app/(app)/directory/ai-actions";
 import type { EditAssistMode } from "@/lib/ai/edit-assist";
-import { generateFlashcardsAction } from "@/app/(app)/review/actions";
-import { generateQuizAction } from "@/app/(app)/study/quiz-actions";
+import { buildFlashcards } from "@/components/study/build-flashcards";
+import { buildQuiz } from "@/components/study/build-quiz";
 import { celebrate } from "@/lib/gamify/celebrate";
 import { useConfirm } from "@/components/ui/app-dialogs";
 import { toast } from "sonner";
@@ -355,7 +355,7 @@ export function ItemViewer({
     setMakingCards(true);
     startTransition(async () => {
       try {
-        const r = await generateFlashcardsAction(item.id);
+        const r = await buildFlashcards(item.id);
         if (r.ok) {
           toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
           celebrate(r.xp);
@@ -375,7 +375,7 @@ export function ItemViewer({
     setMakingQuiz(true);
     startTransition(async () => {
       try {
-        const r = await generateQuizAction([item.id]);
+        const r = await buildQuiz([item.id]);
         if (r.ok) {
           toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
           celebrate(r.xp);

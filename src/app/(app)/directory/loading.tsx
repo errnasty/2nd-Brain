@@ -3,10 +3,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 /**
  * Rendered by Next.js during route transitions into /directory. Shape mirrors
  * the real Directory list so the page doesn't visually pop on load.
+ *
+ * Visible at every width, deliberately. As `hidden … lg:flex` this skeleton
+ * showed nothing at all on a phone, so tapping the Directory tab left the
+ * content area empty until the data arrived — indistinguishable from a page
+ * that failed to load. See the note in `feeds/loading.tsx`.
  */
 export default function DirectoryLoading() {
   return (
-    <section className="hidden w-full max-w-sm shrink-0 flex-col border-r border-border lg:flex">
+    <section className="flex w-full flex-col border-r border-border lg:max-w-sm lg:shrink-0">
       <div className="flex items-center justify-between px-3 py-3">
         <Skeleton className="h-4 w-24" />
         <div className="flex gap-1">

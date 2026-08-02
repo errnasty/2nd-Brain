@@ -7,9 +7,14 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { quizzes, quizAttempts, directoryFlashcards, type QuizQuestion, type QuizAnswer } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
-import { generateQuiz } from "@/lib/ai/quiz";
+import { generateQuizBatch, QUIZ_BATCH } from "@/lib/ai/quiz";
 import { aiAvailable } from "@/lib/ai/provider";
-import { DEFAULT_QUIZ_COUNT, DEFAULT_STUDY_DIFFICULTY } from "@/lib/ai/study-options";
+import {
+  clamp,
+  DEFAULT_QUIZ_COUNT,
+  DEFAULT_STUDY_DIFFICULTY,
+  QUIZ_COUNT_RANGE,
+} from "@/lib/ai/study-options";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { awardXp } from "@/lib/gamify/award";
 import { quizXp } from "@/lib/gamify/rules";
@@ -33,9 +38,64 @@ export async function fetchQuizItemOptionsAction(): Promise<QuizItemOption[]> {
   }
 }
 
-/** Generate a quiz (multiple-choice + open-ended mix) from one or more
- *  Directory items — the "select one or several documents" flow. */
-export async function generateQuizAction(itemIds: string[]) {
+/**
+ * Quiz generation is STAGGERED: one model call per request.
+ *
+ * A quiz is several batches of questions, and this deploys to Netlify, where a
+ * function is killed at ~10s no matter what `maxDuration` says (that export is
+ * Vercel-only). Looping over batches inside a single action therefore ran a
+ * race it could not win — the request died part-way, and because a killed
+ * function returns an HTML error page rather than an RSC payload, the user saw
+ * Next's generic "An unexpected response was received from the server" with no
+ * hint that a timeout caused it.
+ *
+ * So `generateQuizAction` creates the quiz and writes the FIRST batch, and
+ * `continueQuizAction` adds one batch per call until the quiz is full. The
+ * client drives that loop and shows progress, exactly like the Daily Brief
+ * fills itself section by section. Each request is one short model call, a
+ * severed request costs only its own batch, and the quiz is openable from the
+ * first batch onward instead of being all-or-nothing.
+ */
+
+/** Shared shape for both generation steps, so the client can drive one loop. */
+export type QuizProgress = {
+  ok: true;
+  id: string;
+  /** Questions written so far. */
+  count: number;
+  /** Questions the finished quiz will have. */
+  total: number;
+  /** No further `continueQuizAction` call is needed. */
+  done: boolean;
+  xp?: Awaited<ReturnType<typeof awardXp>>;
+};
+export type QuizStepResult = QuizProgress | { ok: false; error: string };
+
+/** Resolve the stored source items back into text for a batch. Kept out of the
+ *  quiz row: the text can be hundreds of KB, and it is already on disk. */
+async function loadSources(userId: string, itemIds: string[]) {
+  const resolved = await Promise.all(itemIds.map((id) => getDirectoryItemStudyText(userId, id)));
+  return resolved
+    .map((r) => (r ? { title: r.title, text: r.text } : null))
+    .filter((s): s is { title: string; text: string } => s !== null);
+}
+
+/** How many questions this user's quizzes should have. */
+async function quizPrefs(userId: string) {
+  const settings = await getUserSettings(userId);
+  return {
+    total: clamp(
+      settings.quizCount ?? DEFAULT_QUIZ_COUNT,
+      QUIZ_COUNT_RANGE.min,
+      QUIZ_COUNT_RANGE.max,
+    ),
+    difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
+  };
+}
+
+/** Step 1: create the quiz from one or more Directory items and write its
+ *  first batch of questions. */
+export async function generateQuizAction(itemIds: string[]): Promise<QuizStepResult> {
   const ids = [...new Set(itemIds)].filter(Boolean).slice(0, MAX_ITEMS_PER_QUIZ);
   if (ids.length === 0) return { ok: false as const, error: "Select at least one document" };
   const { user } = await requireUser();
@@ -47,13 +107,10 @@ export async function generateQuizAction(itemIds: string[]) {
       .filter((s): s is { title: string; text: string; itemId: string } => s !== null);
     if (sources.length === 0) return { ok: false as const, error: "None of the selected items were found" };
 
-    const settings = await getUserSettings(user.id);
-    const { questions, error: genError } = await generateQuiz(
+    const { total, difficulty } = await quizPrefs(user.id);
+    const { questions, error: genError } = await generateQuizBatch(
       sources.map(({ title, text }) => ({ title, text })),
-      {
-        count: settings.quizCount ?? DEFAULT_QUIZ_COUNT,
-        difficulty: settings.quizDifficulty ?? DEFAULT_STUDY_DIFFICULTY,
-      },
+      { want: Math.min(QUIZ_BATCH, total), difficulty },
     );
     if (questions.length === 0) {
       // Distinguish WHY generation came back empty, same reasoning as flashcards.
@@ -91,6 +148,7 @@ export async function generateQuizAction(itemIds: string[]) {
 
     // Gamify: making a quiz is meaningful work, same tier as making flashcards.
     // Only attribute a skill when there's a single unambiguous source item.
+    // Awarded once, on creation — later batches extend the same quiz.
     const xp = await awardXp(user.id, {
       source: "quiz_made",
       itemId: sources.length === 1 ? sources[0].itemId : null,
@@ -99,10 +157,81 @@ export async function generateQuizAction(itemIds: string[]) {
     });
 
     revalidatePath("/study");
-    return { ok: true as const, id: row.id, count: withIds.length, xp };
+    return {
+      ok: true as const,
+      id: row.id,
+      count: withIds.length,
+      total,
+      done: withIds.length >= total,
+      xp,
+    };
   } catch (err) {
     const msg = dbErrorMessage(err, "Couldn't create the quiz");
     console.error("generateQuizAction failed:", msg);
+    return { ok: false as const, error: msg };
+  }
+}
+
+/**
+ * Step 2..n: add one more batch to a quiz that isn't full yet.
+ *
+ * Appends rather than replaces, and re-reads the row each call, so two
+ * overlapping drives can't lose each other's questions. A batch that comes
+ * back empty ends the loop with `done: true` rather than erroring — the
+ * questions already written are a usable quiz, which is the whole point of
+ * generating them a few at a time.
+ */
+export async function continueQuizAction(quizId: string): Promise<QuizStepResult> {
+  const { user } = await requireUser();
+  try {
+    const [row] = await db
+      .select({ id: quizzes.id, itemIds: quizzes.itemIds, questions: quizzes.questions })
+      .from(quizzes)
+      .where(and(eq(quizzes.id, quizId), eq(quizzes.userId, user.id)))
+      .limit(1);
+    if (!row) return { ok: false as const, error: "Quiz not found" };
+
+    const { total, difficulty } = await quizPrefs(user.id);
+    const have = row.questions.length;
+    if (have >= total) {
+      return { ok: true as const, id: row.id, count: have, total, done: true };
+    }
+
+    const sources = await loadSources(user.id, row.itemIds);
+    if (sources.length === 0) {
+      return { ok: true as const, id: row.id, count: have, total, done: true };
+    }
+
+    const { questions } = await generateQuizBatch(sources, {
+      want: Math.min(QUIZ_BATCH, total - have),
+      difficulty,
+      existing: row.questions.map((q) => q.question),
+    });
+    if (questions.length === 0) {
+      // Stop cleanly: a shorter quiz beats an error over one that already works.
+      return { ok: true as const, id: row.id, count: have, total, done: true };
+    }
+
+    const merged: QuizQuestion[] = [
+      ...row.questions,
+      ...questions.map((q) => ({ ...q, id: randomUUID() })),
+    ].slice(0, total);
+    await db
+      .update(quizzes)
+      .set({ questions: merged, updatedAt: new Date() })
+      .where(and(eq(quizzes.id, quizId), eq(quizzes.userId, user.id)));
+
+    revalidatePath("/study");
+    return {
+      ok: true as const,
+      id: row.id,
+      count: merged.length,
+      total,
+      done: merged.length >= total,
+    };
+  } catch (err) {
+    const msg = dbErrorMessage(err, "Couldn't add more questions");
+    console.error("continueQuizAction failed:", msg);
     return { ok: false as const, error: msg };
   }
 }

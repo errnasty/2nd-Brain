@@ -69,6 +69,64 @@ export function normalizeModelHtml(raw: string): string {
     .join("");
 }
 
+/** The words a reader actually sees, with markup and entities removed. */
+export function visibleText(html: string): string {
+  return html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&(?:nbsp|amp|lt|gt|quot|#\d+|[a-z]+);/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Phrases that only occur when a model is talking ABOUT the job instead of
+ * doing it — asking for the content, announcing what it is about to do, or
+ * declining.
+ *
+ * Deliberately narrow. These are matched against the rewritten article body,
+ * so anything that could plausibly appear in real reporting would silently
+ * discard good rewrites. Each alternative here names the task itself, which
+ * an article about the world does not.
+ */
+const META_COMMENTARY = new RegExp(
+  [
+    // Every alternative below ties its verb to one of the TASK's own nouns —
+    // the message, the section, the HTML, the content it was handed. That
+    // anchoring is what keeps real reporting out. An earlier, looser version
+    // matched a minister quoted as saying "I'm ready to rewrite the rules",
+    // and matched "As an AI company" and "Users paste the code into a
+    // terminal" — each of which would have silently thrown away a good
+    // rewrite and left the reader with the harder original.
+    String.raw`(?:don'?t|do not|cannot|can'?t|didn'?t) see (?:the|any) (?:content|text|html|section)`,
+    String.raw`no (?:content|text|html) (?:was |were )?(?:provided|given|included|supplied)`,
+    String.raw`(?:message|input|section|prompt) (?:just |only )?contains? (?:an? )?(?:opening|closing|empty|single)`,
+    String.raw`(?:content|text|section|input|message|html) (?:appears?|seems?) to be empty`,
+    String.raw`please (?:paste|provide|share|send) (?:the|your|it|in)\b`,
+    String.raw`(?:paste|provide|share|send) the (?:full |complete |entire )?(?:section|content|html|article|text)\b`,
+    String.raw`(?:you'?d|you) (?:like|want) me to (?:rewrite|simplify)`,
+    String.raw`i'?m ready to (?:rewrite|simplify) (?:your|the|this) (?:html|section|content|text|article)`,
+    String.raw`as an ai (?:language )?model`,
+    String.raw`i(?:'?m| am) (?:unable|not able) to (?:rewrite|simplify|process|see|access)`,
+    String.raw`i cannot (?:rewrite|simplify|process) (?:the|this|your|it)\b`,
+  ].join("|"),
+  "i",
+);
+
+/**
+ * Whether a rewritten body is the model addressing the request rather than
+ * answering it.
+ *
+ * The failure this exists for: handed a chunk with markup but no prose, the
+ * model replied "I'm ready to rewrite your HTML section, but I don't see the
+ * content yet… please paste the full section". That reply was sanitised,
+ * returned as `content`, and rendered as the article. The reader lost the
+ * article and got a chat transcript in its place.
+ */
+export function looksLikeMetaCommentary(html: string): boolean {
+  return META_COMMENTARY.test(visibleText(html));
+}
+
 /** Longest a rewritten headline may be, in absolute terms. Headlines that run
  *  past this are prose, whatever they claim to be. */
 const TITLE_MAX = 140;
