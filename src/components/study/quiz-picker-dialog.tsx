@@ -75,23 +75,18 @@ export function QuizPickerDialog({
   function create() {
     if (selected.size === 0 || creating) return;
     setCreating(true);
-    const t = toast.loading("Building quiz…");
-    buildQuiz(Array.from(selected), {
-      onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
-    })
+    buildQuiz(Array.from(selected))
       .then((r) => {
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
           onOpenChange(false);
           router.push(`/study?tab=quiz&quiz=${r.id}`);
           router.refresh();
         } else {
-          toast.error(r.error, { id: t });
+          toast.error(r.error);
         }
       })
-      .catch((err) =>
-        toast.error(err instanceof Error ? err.message : "Couldn't create the quiz", { id: t }),
-      )
+      .catch((err) => toast.error(err instanceof Error ? err.message : "Couldn't create the quiz"))
       .finally(() => setCreating(false));
   }
 

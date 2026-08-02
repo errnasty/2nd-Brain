@@ -947,3 +947,23 @@ pre:has(> code.hljs) {
 
 /* Inline `code` is NOT highlighted (rehype-highlight only touches fenced
    blocks), so it keeps the muted chip treatment the prose styles give it. */
+
+/* The indeterminate sweep on the generation status strip
+   (components/shell/generation-status.tsx). Used when the work reports no
+   countable units, so the bar shows activity without implying a position. */
+@keyframes generation-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Hold the sliver still rather than sweeping; the spinner beside it already
+     carries the "working" signal. */
+  .animate-\[generation-sweep_1\.2s_ease-in-out_infinite\] {
+    animation: none;
+  }
+}

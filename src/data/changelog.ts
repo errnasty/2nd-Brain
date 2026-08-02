@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-j",
+    date: "August 1, 2026",
+    title: "See quizzes and flashcards being made",
+    tag: "improvement",
+    summary:
+      "A status strip now appears at the top of the app while a quiz or a set of flashcards is being generated, and stays there until the work is done — including when you move to another page.",
+    items: [
+      "Quizzes show a live count as questions arrive, so you can tell progress from a stall.",
+      "It no longer matters that the menu or dialog you started from has closed — the progress is not tied to that button.",
+    ],
+  },
+  {
     id: "2026-08-01-i",
     date: "August 1, 2026",
     title: "Quizzes build a few questions at a time",

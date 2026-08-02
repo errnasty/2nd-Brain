@@ -30,7 +30,7 @@ import {
   renameDirectoryFolderAction,
   uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
-import { generateFlashcardsAction } from "@/app/(app)/review/actions";
+import { buildFlashcards } from "@/components/study/build-flashcards";
 import { buildQuiz } from "@/components/study/build-quiz";
 import {
   CONTEXT_MENU_PRIMITIVES,
@@ -431,30 +431,28 @@ export function DirectoryShell({
   // Row-level "Make flashcards" / "Make quiz" — run straight from the list
   // without opening the item first.
   const rowMakeCards = useCallback((id: string) => {
-    const t = toast.loading("Making flashcards…");
-    generateFlashcardsAction(id)
+    // No loading toast: the generation strip in the app layout reports the
+    // work, and two things saying "making flashcards" is one too many.
+    buildFlashcards(id)
       .then((r) => {
-        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`, { id: t });
-        else toast.error(r.error, { id: t });
+        if (r.ok) toast.success(`Made ${r.count} flashcard${r.count === 1 ? "" : "s"}`);
+        else toast.error(r.error);
       })
-      .catch(() => toast.error("Couldn't make flashcards", { id: t }));
+      .catch(() => toast.error("Couldn't make flashcards"));
   }, []);
 
   const rowMakeQuiz = useCallback(
     (id: string) => {
-      const t = toast.loading("Building quiz…");
-      buildQuiz([id], {
-        onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
-      })
+      buildQuiz([id])
         .then((r) => {
           if (r.ok) {
-            toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
+            toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
             router.push(`/study?tab=quiz&quiz=${r.id}`);
           } else {
-            toast.error(r.error, { id: t });
+            toast.error(r.error);
           }
         })
-        .catch(() => toast.error("Couldn't build quiz", { id: t }));
+        .catch(() => toast.error("Couldn't build quiz"));
     },
     [router],
   );

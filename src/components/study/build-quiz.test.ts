@@ -9,6 +9,7 @@ vi.mock("@/app/(app)/study/quiz-actions", () => ({
 }));
 
 const { buildQuiz } = await import("./build-quiz");
+const { getGenerationJobs } = await import("@/lib/ui/generation-jobs");
 
 /** A successful step result. */
 const step = (count: number, total: number, done = count >= total) => ({
@@ -91,5 +92,39 @@ describe("buildQuiz", () => {
     continueQuizAction.mockResolvedValue(step(8, 8));
     const r = await buildQuiz(["a"]);
     expect(r).toMatchObject({ ok: true, xp: { gained: 20 } });
+  });
+});
+
+describe("buildQuiz progress reporting", () => {
+  // The strip lives in the app layout and outlives the caller, so a job that
+  // is never cleared sits on screen forever.
+  it("clears its generation job when the build finishes", async () => {
+    generateQuizAction.mockResolvedValue(step(4, 8));
+    continueQuizAction.mockResolvedValue(step(8, 8));
+    await buildQuiz(["a"]);
+    expect(getGenerationJobs()).toEqual([]);
+  });
+
+  it("clears its generation job when the first step fails", async () => {
+    generateQuizAction.mockResolvedValue({ ok: false, error: "nope" });
+    await buildQuiz(["a"]);
+    expect(getGenerationJobs()).toEqual([]);
+  });
+
+  it("clears its generation job when an action throws", async () => {
+    generateQuizAction.mockRejectedValue(new Error("network"));
+    await expect(buildQuiz(["a"])).rejects.toThrow("network");
+    expect(getGenerationJobs()).toEqual([]);
+  });
+
+  it("publishes progress to the store while building", async () => {
+    generateQuizAction.mockResolvedValue(step(4, 8));
+    continueQuizAction.mockImplementation(async () => {
+      // Mid-build the job should be visible with the first batch's count.
+      expect(getGenerationJobs()).toMatchObject([{ label: "Building quiz", done: 4, total: 8 }]);
+      return step(8, 8);
+    });
+    await buildQuiz(["a"]);
+    expect(continueQuizAction).toHaveBeenCalled();
   });
 });

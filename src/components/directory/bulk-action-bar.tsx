@@ -40,20 +40,17 @@ export function BulkActionBar({
   function handleMakeQuiz() {
     if (makingQuiz) return;
     setMakingQuiz(true);
-    const t = toast.loading("Building quiz…");
-    buildQuiz(selectedIds, {
-      onProgress: (n, total) => toast.loading(`Building quiz… ${n} of ${total}`, { id: t }),
-    })
+    buildQuiz(selectedIds)
       .then((r) => {
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`, { id: t });
+          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
           onClear();
           router.push(`/study?tab=quiz&quiz=${r.id}`);
         } else {
-          toast.error(r.error, { id: t });
+          toast.error(r.error);
         }
       })
-      .catch((e) => toast.error(`Quiz failed: ${e instanceof Error ? e.message : "error"}`, { id: t }))
+      .catch((e) => toast.error(`Quiz failed: ${e instanceof Error ? e.message : "error"}`))
       .finally(() => setMakingQuiz(false));
   }
 

@@ -4,6 +4,11 @@ import {
   type QuizProgress,
 } from "@/app/(app)/study/quiz-actions";
 import { QUIZ_BATCH, QUIZ_COUNT_RANGE } from "@/lib/ai/study-options";
+import {
+  finishGenerationJob,
+  startGenerationJob,
+  updateGenerationJob,
+} from "@/lib/ui/generation-jobs";
 
 /**
  * Drive a staggered quiz build from the client.
@@ -30,24 +35,36 @@ export async function buildQuiz(
   itemIds: string[],
   opts?: { onProgress?: (count: number, total: number) => void },
 ): Promise<BuildQuizResult> {
-  const first = await generateQuizAction(itemIds);
-  if (!first.ok) return first;
+  // Registered here rather than at the five call sites, so every entry point
+  // — row menu, bulk bar, item viewer, picker dialog — reports progress the
+  // same way, including the ones that navigate away mid-build.
+  const jobId = startGenerationJob("Building quiz");
+  try {
+    const first = await generateQuizAction(itemIds);
+    if (!first.ok) return first;
 
-  const { id, total, xp } = first;
-  let count = first.count;
-  let done = first.done;
-  opts?.onProgress?.(count, total);
+    const { id, total, xp } = first;
+    let count = first.count;
+    let done = first.done;
+    const report = () => {
+      updateGenerationJob(jobId, { done: count, total });
+      opts?.onProgress?.(count, total);
+    };
+    report();
 
-  for (let round = 0; !done && round < MAX_ROUNDS; round += 1) {
-    const next = await continueQuizAction(id);
-    // Keep what already landed. The quiz exists and is takeable from the first
-    // batch on, so a failed or empty later batch means a shorter quiz — never
-    // a lost one. This is the whole reason for generating a few at a time.
-    if (!next.ok || next.count <= count) break;
-    count = next.count;
-    done = next.done;
-    opts?.onProgress?.(count, total);
+    for (let round = 0; !done && round < MAX_ROUNDS; round += 1) {
+      const next = await continueQuizAction(id);
+      // Keep what already landed. The quiz exists and is takeable from the
+      // first batch on, so a failed or empty later batch means a shorter quiz
+      // — never a lost one. This is the whole reason for batching.
+      if (!next.ok || next.count <= count) break;
+      count = next.count;
+      done = next.done;
+      report();
+    }
+
+    return { ok: true, id, count, total, xp };
+  } finally {
+    finishGenerationJob(jobId);
   }
-
-  return { ok: true, id, count, total, xp };
 }
