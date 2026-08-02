@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-02-a",
+    date: "August 2, 2026",
+    title: "Your character sheet",
+    tag: "feature",
+    summary:
+      "The Study hub now has a character: a sigil that is uniquely yours, a five-stat block worked out from how you actually study, and a title that describes your habits rather than your total. There is a pixel-art view if you want it, and a switch back to the normal look if you don't.",
+    items: [
+      "Five stats — Intellect, Memory, Grit, Precision and Craft — each derived from what you've genuinely done. Nothing is allocated or bought.",
+      "Your title changes with your strongest stat and your level: a Rememberer becomes a Mnemonist, then an Archivist.",
+      "Your sigil's shape never changes — it's yours. Only its colours shift as you climb the ranks.",
+      "Pixel view is off by default and switches on from the character panel; both views show exactly the same numbers.",
+    ],
+  },
+  {
     id: "2026-08-01-k",
     date: "August 1, 2026",
     title: "Brief XP shows up, quizzes reach your chosen length, folders open faster",

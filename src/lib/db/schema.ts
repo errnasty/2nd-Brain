@@ -1168,6 +1168,11 @@ export type UserSettingsData = {
   // these lead the brief and get a section first. Shallow-merge caveat: always
   // send the whole array. Additive jsonb key — no migration needed.
   briefTopics?: string[];
+  // Render the Study hub's game layer as a pixel-art console rather than
+  // ordinary UI. Purely cosmetic: both skins show the same numbers from the
+  // same GameState, so nothing is reachable in one and not the other. Unset =
+  // off. Additive jsonb key — no migration needed.
+  pixelMode?: boolean;
 };
 
 export const userSettings = pgTable(

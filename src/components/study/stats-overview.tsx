@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import type { StudyStats } from "@/app/(app)/study/actions";
 import type { GameState } from "@/lib/gamify/state";
 import { GamifyDashboard } from "./gamify-dashboard";
+import { CharacterSheet } from "./character-sheet";
 
 export type SessionSummary = {
   /** Cards in this session (capped). */
@@ -42,12 +43,17 @@ function Sparkline({ data }: { data: number[] }) {
 export function StatsOverview({
   stats,
   game,
+  characterSeed,
+  initialPixel = false,
   canStartSession = false,
   sessionSummary,
   onStartSession,
 }: {
   stats: StudyStats;
   game: GameState | null;
+  /** Stable per-user seed for the character sigil (see character-sheet.tsx). */
+  characterSeed?: string;
+  initialPixel?: boolean;
   canStartSession?: boolean;
   sessionSummary?: SessionSummary;
   onStartSession?: () => void;
@@ -161,6 +167,12 @@ export function StatsOverview({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {game && characterSeed && (
+        <div className="mt-6">
+          <CharacterSheet game={game} seed={characterSeed} initialPixel={initialPixel} />
         </div>
       )}
 

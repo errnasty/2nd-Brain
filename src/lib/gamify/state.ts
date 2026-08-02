@@ -67,6 +67,10 @@ export type GameState = {
   skills: GameSkill[];
   recent: GameFeedEntry[];
   achievements: GameAchievement[];
+  /** Raw activity tallies from `player_profile.counters`. Already on the row
+   *  this function selects, so exposing them costs no extra query — the
+   *  character sheet derives its stat block from these (see `stats.ts`). */
+  counters: Record<string, number>;
 };
 
 /** Shared shaping of the player's rank/milestone fields. */
@@ -151,7 +155,12 @@ export async function fetchGameState(userId: string): Promise<GameState> {
     skill: r.skill, at: r.at.toISOString(),
   }));
 
-  return { player: gamePlayer, skills: gameSkills, recent, achievements };
+  const counters =
+    player && player.counters && typeof player.counters === "object"
+      ? (player.counters as Record<string, number>)
+      : {};
+
+  return { player: gamePlayer, skills: gameSkills, recent, achievements, counters };
 }
 
 function todayKey(): string {
