@@ -37,6 +37,50 @@ export { DIRECTORY_PAGE_SIZE } from "./constants";
  */
 export type DirectorySort = "updated" | "created" | "title" | "tags";
 
+/**
+ * The SQL for a row's preview snippet.
+ *
+ * Migration 0031 adds a stored generated `preview` column so the list never has
+ * to slice `content` — which lives in TOAST for any sizeable note or document,
+ * making a 50-row page pay up to fifty out-of-line fetches on a cold cache.
+ *
+ * But the column cannot simply be assumed. Code and migrations deploy
+ * separately, and selecting a column that isn't there yet does not degrade —
+ * it rejects the whole query, which took the Directory page's entire
+ * `Promise.all` down with it and rendered "0 items" with no folder names. So
+ * the column is used only once it has been confirmed to exist, and the old
+ * expression serves until then. Same shape as the tsvector fallback in
+ * `lib/ai/rag.ts`.
+ *
+ * Checked once per process and cached: it is a catalog lookup, and the answer
+ * only ever changes when a migration runs, which restarts nothing but is
+ * picked up on the next cold start.
+ */
+let hasPreviewColumn: boolean | null = null;
+
+async function previewSql() {
+  if (hasPreviewColumn === null) {
+    try {
+      const res: unknown = await db.execute(sql`
+        select 1 from information_schema.columns
+        where table_name = 'directory_items' and column_name = 'preview'
+        limit 1
+      `);
+      // postgres-js hands back a bare array; PGlite (desktop) wraps it in
+      // `{ rows }`. Treating the wrapper as truthy would report the column
+      // present on every desktop database, migrated or not.
+      const rows = Array.isArray(res) ? res : ((res as { rows?: unknown[] })?.rows ?? []);
+      hasPreviewColumn = rows.length > 0;
+    } catch {
+      // Catalog unreadable — assume the slow-but-always-correct path.
+      hasPreviewColumn = false;
+    }
+  }
+  return hasPreviewColumn
+    ? sql<string | null>`preview`
+    : sql<string | null>`substring(${directoryItems.content}, 1, 240)`;
+}
+
 export async function fetchDirectoryPage(
   userId: string,
   opts: {
@@ -48,6 +92,8 @@ export async function fetchDirectoryPage(
   },
 ): Promise<DirectoryPage> {
   const { folder = null, tagIds = [], offset = 0, limit = 50, sort = "updated" } = opts;
+
+  const preview = await previewSql();
 
   const conds = [eq(directoryItems.userId, userId)];
   if (folder === "unsorted") conds.push(isNull(directoryItems.folderId));
@@ -109,7 +155,7 @@ export async function fetchDirectoryPage(
       .select({
         id: directoryItems.id,
         title: directoryItems.title,
-        preview: directoryItems.preview,
+        preview: preview.as("preview"),
         kind: directoryItems.kind,
         folderId: directoryItems.folderId,
         sourceUrl: directoryItems.sourceUrl,
