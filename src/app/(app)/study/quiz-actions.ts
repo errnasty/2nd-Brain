@@ -67,6 +67,8 @@ export type QuizProgress = {
   total: number;
   /** No further `continueQuizAction` call is needed. */
   done: boolean;
+  /** This round added nothing usable. Not fatal — see `continueQuizAction`. */
+  stalled?: boolean;
   xp?: Awaited<ReturnType<typeof awardXp>>;
 };
 export type QuizStepResult = QuizProgress | { ok: false; error: string };
@@ -208,8 +210,13 @@ export async function continueQuizAction(quizId: string): Promise<QuizStepResult
       existing: row.questions.map((q) => q.question),
     });
     if (questions.length === 0) {
-      // Stop cleanly: a shorter quiz beats an error over one that already works.
-      return { ok: true as const, id: row.id, count: have, total, done: true };
+      // Nothing usable THIS round — which is not the same as nothing more being
+      // possible. A batch routinely under-delivers: the model repeats a question
+      // it was told not to, or emits four options that aren't distinct, and
+      // `normalizeQuestion` drops them. Declaring the quiz finished here meant a
+      // single bad batch capped it permanently — asking for 10 and getting 7.
+      // Report the stall instead and let the caller decide whether to try again.
+      return { ok: true as const, id: row.id, count: have, total, done: have >= total, stalled: true };
     }
 
     const merged: QuizQuestion[] = [

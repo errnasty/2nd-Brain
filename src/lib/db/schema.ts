@@ -447,6 +447,21 @@ export const directoryItems = pgTable(
     // separate documents row). For saved_article + uploaded_document this is
     // left null — their embeddings live on article_embeddings / document_chunks.
     embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
+    /**
+     * The first 240 characters of `content`, maintained by Postgres.
+     *
+     * The Directory list needs a snippet per row and used to compute it in the
+     * query with `substring(content, 1, 240)`. `content` holds whole notes and
+     * document bodies, so it lives in TOAST storage — and asking for a slice of
+     * it still means an out-of-line fetch PER ROW. Fifty of those on a cold
+     * cache is what made opening a folder for the first time slow, while every
+     * later visit (warm) felt fine.
+     *
+     * Stored and generated, so it is written once per update, sits inline in
+     * the main tuple, and can never drift from `content`. The sync engine skips
+     * generated columns already (see `sharedColumns` in lib/sync/engine.ts).
+     */
+    preview: text("preview").generatedAlwaysAs(sql`substring(content, 1, 240)`),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

@@ -8,7 +8,7 @@ vi.mock("@/app/(app)/study/quiz-actions", () => ({
   continueQuizAction: (...a: unknown[]) => continueQuizAction(...a),
 }));
 
-const { buildQuiz } = await import("./build-quiz");
+const { buildQuiz, quizReadyMessage } = await import("./build-quiz");
 const { getGenerationJobs } = await import("@/lib/ui/generation-jobs");
 
 /** A successful step result. */
@@ -68,22 +68,36 @@ describe("buildQuiz", () => {
     expect(r).toMatchObject({ ok: true, id: "quiz-1", count: 8 });
   });
 
-  it("stops when a batch adds nothing, instead of looping", async () => {
-    generateQuizAction.mockResolvedValue(step(4, 12));
-    continueQuizAction.mockResolvedValue(step(4, 12, false)); // never progresses
+  // A batch that returns nothing usable is common (the model repeats a
+  // question, or emits options that fail validation), and treating the first
+  // one as "finished" is what turned a 10-question setting into 7.
+  it("retries a stalled batch instead of settling immediately", async () => {
+    generateQuizAction.mockResolvedValue(step(4, 10));
+    continueQuizAction
+      .mockResolvedValueOnce({ ...step(4, 10, false), stalled: true }) // nothing usable
+      .mockResolvedValueOnce(step(8, 10))
+      .mockResolvedValueOnce(step(10, 10));
     const r = await buildQuiz(["a"]);
-    expect(continueQuizAction).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ ok: true, count: 10 });
+  });
+
+  it("gives up after repeated stalls rather than looping", async () => {
+    generateQuizAction.mockResolvedValue(step(4, 12));
+    continueQuizAction.mockResolvedValue({ ...step(4, 12, false), stalled: true });
+    const r = await buildQuiz(["a"]);
+    expect(continueQuizAction).toHaveBeenCalledTimes(2);
     expect(r).toMatchObject({ ok: true, count: 4 });
   });
 
   // A model that returns one fewer question than asked on every call must not
-  // be able to spin requests forever.
+  // be able to spin requests forever. The exact ceiling is a tuning constant;
+  // what matters is that the loop terminates well short of unbounded.
   it("gives up after a bounded number of rounds", async () => {
     generateQuizAction.mockResolvedValue(step(1, 20, false));
     let n = 1;
     continueQuizAction.mockImplementation(async () => step(++n, 20, false));
     const r = await buildQuiz(["a"]);
-    expect(continueQuizAction.mock.calls.length).toBeLessThanOrEqual(8);
+    expect(continueQuizAction.mock.calls.length).toBeLessThanOrEqual(12);
     expect(r).toMatchObject({ ok: true });
   });
 
@@ -126,5 +140,19 @@ describe("buildQuiz progress reporting", () => {
     });
     await buildQuiz(["a"]);
     expect(continueQuizAction).toHaveBeenCalled();
+  });
+});
+
+describe("quizReadyMessage", () => {
+  it("names the shortfall so a capped quiz doesn't look like an ignored setting", () => {
+    expect(quizReadyMessage({ count: 7, total: 10 })).toBe("Quiz ready — 7 of 10 questions");
+  });
+
+  it("stays plain when the full count was delivered", () => {
+    expect(quizReadyMessage({ count: 10, total: 10 })).toBe("Quiz ready — 10 questions");
+  });
+
+  it("uses the singular for one question", () => {
+    expect(quizReadyMessage({ count: 1, total: 1 })).toBe("Quiz ready — 1 question");
   });
 });

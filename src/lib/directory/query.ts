@@ -109,7 +109,7 @@ export async function fetchDirectoryPage(
       .select({
         id: directoryItems.id,
         title: directoryItems.title,
-        preview: sql<string | null>`substring(${directoryItems.content}, 1, 240)`.as("preview"),
+        preview: directoryItems.preview,
         kind: directoryItems.kind,
         folderId: directoryItems.folderId,
         sourceUrl: directoryItems.sourceUrl,

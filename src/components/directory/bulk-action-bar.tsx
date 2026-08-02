@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { buildQuiz } from "@/components/study/build-quiz";
+import { buildQuiz, quizReadyMessage } from "@/components/study/build-quiz";
 import { toast } from "sonner";
 import type { DirectoryFolder } from "@/lib/db/schema";
 
@@ -43,7 +43,7 @@ export function BulkActionBar({
     buildQuiz(selectedIds)
       .then((r) => {
         if (r.ok) {
-          toast.success(`Quiz ready — ${r.count} question${r.count === 1 ? "" : "s"}`);
+          toast.success(quizReadyMessage(r));
           onClear();
           router.push(`/study?tab=quiz&quiz=${r.id}`);
         } else {
