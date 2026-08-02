@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDownUp, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -54,7 +54,15 @@ import { FolderBulkActionBar } from "./folder-bulk-action-bar";
 // treatment /feeds already gives its article reader.
 const ItemViewer = dynamic(() => import("./item-viewer").then((m) => m.ItemViewer), {
   ssr: false,
-  loading: () => <section className="hidden flex-1 lg:flex" aria-busy="true" />,
+  // Visible at every width — on mobile the list is already hidden once an item
+  // is open, so a desktop-only fallback meant tapping an item showed an empty
+  // screen until the chunk arrived. Same fix as /feeds' article reader.
+  loading: () => (
+    <section className="flex flex-1 items-center justify-center" aria-busy="true">
+      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <span className="sr-only">Loading item</span>
+    </section>
+  ),
 });
 const DirectoryBoard = dynamic(() => import("./directory-board").then((m) => m.DirectoryBoard), {
   ssr: false,

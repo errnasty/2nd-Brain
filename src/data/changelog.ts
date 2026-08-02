@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-01-h",
+    date: "August 1, 2026",
+    title: "No more blank screens on mobile, and faster folders",
+    tag: "fix",
+    summary:
+      "On a phone, opening a folder or tapping an article could show a completely empty page until you reloaded. The page was loading the whole time — the loading placeholder was only ever set up to appear on desktop, so there was nothing on screen to say so.",
+    items: [
+      "Feeds, Directory and the article and item views now show a loading state on every screen size.",
+      "Opening a busy folder is much faster: the list is sorted by Trending by default, but the database had no matching index, so a folder with thousands of unread articles was re-sorted from scratch every time you opened it.",
+      "Simplifying an article no longer replaces it with a message from the AI asking for the content. Sections with nothing to rewrite are now left alone, and a reply that isn't a rewrite is discarded in favour of the original text.",
+    ],
+  },
+  {
     id: "2026-08-01-g",
     date: "August 1, 2026",
     title: "AI usage is now counted everywhere",

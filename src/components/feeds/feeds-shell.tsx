@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
+import { Loader2 } from "lucide-react";
 import { ArticleList, type ArticleListItem } from "./article-list";
 import { useListCollapse } from "@/components/shell/use-list-collapse";
 import { lastLocation } from "@/lib/last-location";
@@ -16,7 +17,18 @@ const ArticleReader = dynamic(
   () => import("./article-reader").then((m) => m.ArticleReader),
   {
     ssr: false,
-    loading: () => <section className="hidden flex-1 lg:flex" aria-busy="true" />,
+    // Visible at every width. This fallback stands in for the reader while its
+    // chunk downloads, and on mobile the list is already hidden by then (see
+    // ArticleList's `selectedId ? "hidden" : "flex"`) — so as `hidden … lg:flex`
+    // it left tapping an article showing an empty screen for the length of that
+    // download. On a phone on mobile data that is the app looking broken at the
+    // exact moment the user asked it to do something.
+    loading: () => (
+      <section className="flex flex-1 items-center justify-center" aria-busy="true">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <span className="sr-only">Loading article</span>
+      </section>
+    ),
   },
 );
 

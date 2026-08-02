@@ -155,6 +155,27 @@ export const articles = pgTable(
       t.readStatus,
       t.publishDate.desc(),
     ),
+    // …and the same two views under the DEFAULT sort, which is trending, not
+    // date (src/lib/feeds/sort.ts). The *_status_pub_idx pair above matches the
+    // filter but not that order, so opening a folder with thousands of unread
+    // articles sorted the whole matching set to find 100. These carry
+    // trend_score, and `id` for a total order — the list pages with OFFSET, and
+    // a non-unique sort key skips/repeats rows at page boundaries.
+    // See migration 0030 for the NULLS-ordering constraint.
+    folderStatusTrendIdx: index("articles_folder_status_trend_idx").on(
+      t.folderId,
+      t.readStatus,
+      t.trendScore.desc(),
+      t.publishDate.desc(),
+      t.id.desc(),
+    ),
+    feedStatusTrendIdx: index("articles_feed_status_trend_idx").on(
+      t.feedId,
+      t.readStatus,
+      t.trendScore.desc(),
+      t.publishDate.desc(),
+      t.id.desc(),
+    ),
     folderIdx: index("articles_folder_idx").on(t.folderId),
     publishIdx: index("articles_publish_idx").on(t.publishDate),
     // Feeds "All" view: per-user list across every read status. The

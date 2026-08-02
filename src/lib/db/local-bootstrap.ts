@@ -468,14 +468,18 @@ create index if not exists thinktank_saved_due_idx
   on thinktank_saved (user_id, next_refresher_at);
 `;
 
-// Feeds/Directory perf indexes — mirrors cloud migrations 0015 + 0023. No
-// CONCURRENTLY: PGlite is single-connection and runs these inline.
+// Feeds/Directory perf indexes — mirrors cloud migrations 0015 + 0023 + 0030.
+// No CONCURRENTLY: PGlite is single-connection and runs these inline.
 // create-if-not-exists = idempotent.
 const PERF_INDEX_SQL = `
 create index if not exists articles_feed_status_pub_idx
   on articles (feed_id, read_status, publish_date desc);
 create index if not exists articles_folder_status_pub_idx
   on articles (folder_id, read_status, publish_date desc);
+create index if not exists articles_folder_status_trend_idx
+  on articles (folder_id, read_status, trend_score desc, publish_date desc, id desc);
+create index if not exists articles_feed_status_trend_idx
+  on articles (feed_id, read_status, trend_score desc, publish_date desc, id desc);
 create index if not exists articles_user_pub_idx
   on articles (user_id, publish_date desc, id desc);
 create index if not exists articles_user_starred_idx
