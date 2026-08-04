@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-04-a",
+    date: "August 4, 2026",
+    title: "Trending now means today",
+    tag: "improvement",
+    summary:
+      "Trending used to rank two days of news at once, so yesterday's big story could still be sitting at the top of your feeds this morning. It now covers the day, and your Daily Brief is built from that same day — it opens with the stories breaking now, not the ones that broke last night.",
+    items: [
+      "A story that carried over from yesterday keeps the credit for every outlet that covered it, but it's today's write-up that gets ranked, not last night's first take.",
+      "Older articles stay exactly where they were in your feeds, still showing how many outlets carried them — they just no longer compete with today's news.",
+      "\"Outside your feeds\" now only offers stories from the last day, as it always said it did.",
+    ],
+  },
+  {
     id: "2026-08-02-a",
     date: "August 2, 2026",
     title: "Your character sheet",

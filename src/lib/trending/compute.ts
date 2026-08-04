@@ -18,6 +18,19 @@
  * unaffordable, and worse, non-deterministic — the same queue would rank
  * differently on each run. Same reasoning as the keyword desk classifier in
  * `src/lib/today/topics.ts`.
+ *
+ * ## Two windows, deliberately
+ *
+ * The pass READS 48 hours but SCORES one day (`src/lib/trending/day.ts`). What
+ * comes out of it is the trending articles *for the day*, and nothing else
+ * carries a score at all.
+ *
+ * The wider read window is not a contradiction — it's what makes the day's
+ * scores correct. Corroboration and velocity are properties of a story, not of
+ * an article, and a story that broke at eleven last night has most of its
+ * evidence on the far side of the boundary. Clustering over 48 hours lets this
+ * morning's telling inherit the full "nine outlets, six hours" picture; scoring
+ * only the day's tellings keeps yesterday's copies out of today's ranking.
  */
 
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
@@ -25,13 +38,16 @@ import { db } from "@/lib/db";
 import { articles, storyClusters } from "@/lib/db/schema";
 import { classifyArticle } from "@/lib/today/topics";
 import { clusterArticles, cosine, representativeTitle, type ClusterableArticle } from "./cluster";
+import { isWithinTrendingDay, trendingDayStart } from "./day";
 import { externalHeat, personalRelevance, scoreCluster } from "./score";
 import { loadTrendingTerms } from "./signals";
 import { matchTerms, type WeightedTerm } from "./terms";
 
 /**
- * Hours of articles considered. Matches the clustering window — an article
- * outside it can't join a cluster anyway, so fetching it would be waste.
+ * Hours of articles read into the pass — the CLUSTERING window, not the scoring
+ * one. An article outside it can't join a cluster anyway, so fetching it would
+ * be waste; an article inside it but outside the day joins clusters and lends
+ * them its corroboration, and then scores 0 (see the header).
  */
 export const WINDOW_HOURS = 48;
 
@@ -279,10 +295,19 @@ export async function computeTrendingForUser(
     for (const m of members) {
       assignments.push({
         articleId: m.id,
-        // Every telling of a story inherits the story's score: they are the
+        // Every telling of a story inherits the story's score — they are the
         // same news, and ranking one Reuters copy above another because of a
-        // wording difference would be noise dressed as signal.
-        score: scored.score,
+        // wording difference would be noise dressed as signal — but only the
+        // tellings published within the day do. This is what makes the pass
+        // return TODAY's trending articles: a story that ran yesterday and is
+        // still running scores its fresh tellings and leaves the stale copies
+        // at zero, so the reader is pointed at the current write-up rather than
+        // at last night's first take of the same events.
+        score: isWithinTrendingDay(m.publishDate, now) ? scored.score : 0,
+        // The cluster id is assigned regardless, because it answers a different
+        // question — "how many outlets carried this" — which is still true of a
+        // copy that has aged out of the ranking, and is what the Feeds list
+        // shows as a source badge.
         clusterKey: index,
       });
     }
@@ -366,14 +391,26 @@ async function writeArticleScores(
 }
 
 /**
- * Clear scores that have aged out of the window.
+ * Clear scores that have aged out of the day.
  *
  * Without this, an article scored highly yesterday keeps that score forever and
  * outranks today's news indefinitely — the ranking would silently become a
  * record of what was once hot rather than what is.
+ *
+ * The pass above already zeroes everything it reads, so this is the sweeper for
+ * what it *didn't* read: articles past the 48-hour clustering window, and the
+ * tail of a very busy day that fell beyond `MAX_ARTICLES`. Between them, the
+ * invariant holds for every article a user owns — a non-zero `trend_score`
+ * means "trending today", with no qualifiers.
+ *
+ * The cluster id outlives the score by another day, until the article leaves
+ * the clustering window and the cluster row itself is rebuilt without it. It
+ * answers "how many outlets carried this", which stays true of a story after it
+ * stops being current, and is what the Feeds source badge reads.
  */
 export async function decayStaleScores(userId: string, now: Date = new Date()): Promise<number> {
-  const cutoff = new Date(now.getTime() - WINDOW_HOURS * HOUR_MS);
+  const dayStart = trendingDayStart(now);
+  const clusterCutoff = new Date(now.getTime() - WINDOW_HOURS * HOUR_MS);
   try {
     const stale = await db
       .select({ id: articles.id })
@@ -382,14 +419,18 @@ export async function decayStaleScores(userId: string, now: Date = new Date()): 
         and(
           eq(articles.userId, userId),
           gte(articles.trendScore, 0.0001),
-          sql`${articles.publishDate} < ${cutoff.toISOString()}`,
+          sql`(${articles.publishDate} is null or ${articles.publishDate} < ${dayStart.toISOString()})`,
         ),
       )
       .limit(1000);
     if (stale.length === 0) return 0;
     await db
       .update(articles)
-      .set({ trendScore: 0, clusterId: null, trendScoredAt: now })
+      .set({
+        trendScore: 0,
+        clusterId: sql`case when ${articles.publishDate} is null or ${articles.publishDate} < ${clusterCutoff.toISOString()} then null else ${articles.clusterId} end`,
+        trendScoredAt: now,
+      })
       .where(
         and(
           eq(articles.userId, userId),

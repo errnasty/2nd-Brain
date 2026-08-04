@@ -8,10 +8,11 @@
  * get an app blocked from services that are generously not charging for this.
  */
 
-import { and, desc, gte, lt, sql } from "drizzle-orm";
+import { and, desc, gte, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { externalStories, trendingTerms } from "@/lib/db/schema";
 import { classifyArticle } from "@/lib/today/topics";
+import { trendingDayStart } from "./day";
 import { fetchGdelt } from "./sources/gdelt";
 import { fetchGoogleNews } from "./sources/gnews";
 import { fetchHackerNews } from "./sources/hn";
@@ -224,7 +225,21 @@ export type ExternalStoryRow = {
   publishedAt: Date | null;
 };
 
-/** The biggest current external stories, for the "you're missing" section. */
+/**
+ * The biggest external stories of the day, for the "you're missing" section.
+ *
+ * Two age tests, because they catch different failures. `fetched_at` bounds how
+ * stale our *knowledge* is — it's the only guard when a source doesn't report a
+ * date, and it's what the prune uses. `published_at` bounds how old the *story*
+ * is, and is the one that matters here: a still-referenced piece from Tuesday
+ * can go on being re-fetched with a fresh timestamp for a day and a half, and
+ * without this test it would sit in a section that tells the reader, in those
+ * words, that these are the stories of the last day.
+ *
+ * A story with no `published_at` is kept. Not every source reports one, and
+ * dropping them would quietly reduce the section to whichever sources happen
+ * to — the freshness of the fetch is a weaker guarantee, but it is a real one.
+ */
 export async function loadExternalStories(
   limit: number,
   now: Date = new Date(),
@@ -247,6 +262,10 @@ export async function loadExternalStories(
           gte(
             externalStories.fetchedAt,
             new Date(now.getTime() - STORY_MAX_AGE_HOURS * HOUR_MS),
+          ),
+          or(
+            isNull(externalStories.publishedAt),
+            gte(externalStories.publishedAt, trendingDayStart(now)),
           ),
         ),
       )
