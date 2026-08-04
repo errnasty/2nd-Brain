@@ -26,7 +26,7 @@ const SHARED_RULES = [
   "Plain Markdown. No code fences, no tables.",
 ];
 
-function rules(lines: (string | false)[]): string {
+function rules(lines: (string | false | undefined)[]): string {
   return [...lines, ...SHARED_RULES]
     .filter((l): l is string => Boolean(l))
     .map((l) => `- ${l}`)
@@ -43,8 +43,28 @@ function hasStories(section: PlannedSection): boolean {
   return Boolean(section.stories && section.stories.length > 0);
 }
 
+/**
+ * What the section knows beyond its own articles.
+ *
+ * Both of these are context the model can only act on if it's TOLD, and both
+ * change what a good section looks like — so they gate their own rules rather
+ * than being permanently in the prompt. A rule about continuing stories, in a
+ * brief where nothing is continuing, is a rule the model spends attention
+ * discarding.
+ */
+export type SectionContext = {
+  /** Articles the reader already went through today (background, not refs). */
+  readContext?: boolean;
+  /** Stories this brief has covered before — see `story-memory.ts`. */
+  continuing?: boolean;
+};
+
 /** The system prompt for one section. */
-export function sectionSystemPrompt(section: PlannedSection, level: BriefLevel): string {
+export function sectionSystemPrompt(
+  section: PlannedSection,
+  level: BriefLevel,
+  ctx: SectionContext = {},
+): string {
   const cfg = BRIEF_LEVEL_CONFIG[level];
 
   if (section.kind === "lead") {
@@ -61,6 +81,10 @@ ${rules([
     "Some references are marked as the same story carried by several outlets. Write ONE item for such a story, citing every one of its numbers — the number of outlets carrying it is itself part of why it leads.",
   hasStories(section) &&
     'Where outlets on the same story emphasise different things, say so in a clause — "the FT frames it as X, Reuters as Y" — rather than averaging them into one bland sentence.',
+  ctx.continuing &&
+    "Some stories are marked as ones I was briefed on before. Do not introduce those from scratch — open with what has CHANGED since, and say plainly if the answer is very little.",
+  ctx.readContext &&
+    "A short list of pieces I have already read today is supplied for background. Never cite them — they have no reference number. Use them to avoid telling me what I know, and to build on it where today's items take it further.",
   "Separate items with a blank line.",
 ])}`;
   }
@@ -82,6 +106,10 @@ ${rules([
     'If today\'s items disagree or cut against each other — including two outlets on the SAME story reporting it differently — add a final line starting "*Tension:*" naming the disagreement and citing both sides.',
   cfg.topicOpenQuestion &&
     'Close with a line starting "*Open question:*" — the thing today\'s items do not settle.',
+  ctx.continuing &&
+    "Stories marked as previously briefed are not new to me. Lead those bullets with the development, not the background.",
+  ctx.readContext &&
+    "Pieces I have already read today are listed for background only. Never cite them — they have no reference number — and don't spend a bullet retelling one.",
   "If an item was clearly misfiled onto this desk, leave it out rather than stretching the desk's remit.",
 ])}`;
   }
@@ -169,6 +197,37 @@ export function storyBlock(section: PlannedSection): string {
     return `- ${refs} — one story, ${g.sourceCount} outlets`;
   });
   return `Same-story groups (each group is ONE development, told by several outlets):\n${lines.join("\n")}`;
+}
+
+/**
+ * The "you already read these" block.
+ *
+ * Titles and outlets only, and explicitly unnumbered. The numbering is the
+ * whole reason for the separation: every `[n]` in a section resolves against
+ * the client's source map, so background material that could be mistaken for a
+ * ref would produce citations pointing at the wrong article. Making it visibly
+ * a different KIND of line — no bracket, no number — is cheaper insurance than
+ * a rule telling the model not to cite them, and it carries both.
+ */
+/**
+ * The "you have seen these before" block.
+ *
+ * Keyed by ref, and stated once per ref rather than woven into the article
+ * entries, for the same reason `storyBlock` is: a relationship stated beside
+ * the article it belongs to gets restated in the prose, and the point here is
+ * for the model to write LESS background, not to mention the history.
+ */
+export function continuityBlock(section: PlannedSection): string {
+  const refs = section.continuing ?? [];
+  if (refs.length === 0) return "";
+  const lines = refs.map((c) => `- [${c.ref}] — I was first briefed on this ${c.since}`);
+  return `Already briefed (report what has changed; do not introduce these from scratch):\n${lines.join("\n")}`;
+}
+
+export function readContextBlock(items: { title: string; feedTitle: string }[]): string {
+  if (items.length === 0) return "";
+  const lines = items.map((a) => `- (${a.feedTitle}) ${a.title}`);
+  return `Already read today (background only — these have no reference number and must never be cited):\n${lines.join("\n")}`;
 }
 
 /**

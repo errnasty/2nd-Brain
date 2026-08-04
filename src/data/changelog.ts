@@ -27,6 +27,22 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-04-b",
+    date: "August 4, 2026",
+    title: "A brief that remembers, and feeds that group",
+    tag: "feature",
+    summary:
+      "Your Daily Brief now knows what it told you yesterday and what you have already read today, so it opens with what changed instead of starting every story from scratch. Feeds groups the same story into one row and tells you why it ranked where it did.",
+    items: [
+      "Stories carried over from a previous brief are marked as such — you get the development, not the background again.",
+      "Anything you have already read today is handed to the brief as context, so it stops re-telling you things you know.",
+      "Thumbs up or down on any section. More of that desk tomorrow, less of the other one — and the effect fades over a few weeks, so an off day doesn't follow you around.",
+      "The depth picker is now a reading time: pick how many minutes you have, not how deep you'd like it to go.",
+      "\"Group by story\" in Feeds collapses every telling of a story into one row you can expand, and reading it marks the whole story read.",
+      "Feed rows say why something is trending — \"9 outlets in 2h\" rather than a bare count — and stay quiet on ordinary articles.",
+    ],
+  },
+  {
     id: "2026-08-04-a",
     date: "August 4, 2026",
     title: "Trending now means today",

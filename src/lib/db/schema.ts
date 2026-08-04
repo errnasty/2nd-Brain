@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import type { RememberedStory } from "@/lib/today/story-memory";
 import {
   bigint,
   boolean,
@@ -944,6 +945,9 @@ export type AiJob = typeof aiJobs.$inferSelect;
 
 // Daily Brief cache — the latest generated brief per user (one row, upserted).
 // NOT synced (derived/transient, like ai_jobs). See migration 0025.
+// The story-memory type is imported rather than restated so the column and the
+// code that folds it can't drift; `import type` is erased at build, so this
+// costs the bundle nothing and creates no cycle.
 export type BriefSourceRef = { n: number; id: string; title: string; url: string; feedTitle: string };
 export type BriefUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
 
@@ -956,9 +960,37 @@ export const dailyBriefs = pgTable("daily_briefs", {
   content: text("content").notNull(),
   sourceMap: jsonb("source_map").$type<BriefSourceRef[]>().notNull().default([]),
   usage: jsonb("usage").$type<BriefUsage | null>(),
+  /** Stories the brief has already covered, so tomorrow's can say what
+   *  changed instead of introducing them again. See migration 0032 and
+   *  `src/lib/today/story-memory.ts`. */
+  storyMemory: jsonb("story_memory").$type<RememberedStory[]>().notNull().default([]),
   generatedAt: timestamp("generated_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+/**
+ * Verdicts on the Daily Brief's sections — the only signal that teaches it
+ * anything. One row per verdict (see migration 0033); the planner reads them
+ * aggregated and decayed in `src/lib/today/brief-feedback.ts`.
+ */
+export const briefFeedback = pgTable(
+  "brief_feedback",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    /** The plan's section key ("lead", "topic:ai", …). */
+    sectionKey: text("section_key").notNull(),
+    /** Desk the verdict is about; null for the lead, which spans desks. */
+    topicId: text("topic_id"),
+    verdict: text("verdict").$type<"more" | "less">().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    userCreatedIdx: index("brief_feedback_user_created_idx").on(t.userId, t.createdAt.desc()),
+  }),
+);
 
 // Ask conversation persistence — durable chat threads + messages (previously
 // client-only React state). NOT synced (cloud DB is the web source of truth,

@@ -6,6 +6,8 @@ import {
   findSection,
   isBriefLevel,
   deskRefs,
+  estimateBriefMinutes,
+  estimateBriefWords,
   leadCandidateRefs,
   planBrief,
   storyGroupsFor,
@@ -14,7 +16,9 @@ import {
 import { OTHER_TOPIC_ID } from "./topics";
 import {
   MAX_SECTION_TOKENS,
+  continuityBlock,
   externalBlock,
+  readContextBlock,
   sectionArticleBlock,
   sectionMaxTokens,
   sectionSystemPrompt,
@@ -392,5 +396,148 @@ describe("storyBlock", () => {
   it("is empty when no story has more than one telling", () => {
     const plan = planBrief(queue(), { level: "deep" });
     expect(storyBlock(findSection(plan, "skip")!)).toBe("");
+  });
+});
+
+describe("estimateBriefMinutes", () => {
+  it("gives every level a whole number of minutes, in order", () => {
+    const [concise, standard, deep] = BRIEF_LEVELS.map((l) => estimateBriefMinutes(l));
+    expect(concise).toBeGreaterThanOrEqual(1);
+    expect(standard).toBeGreaterThan(concise);
+    expect(deep).toBeGreaterThan(standard);
+  });
+
+  it("tracks the knobs rather than a written-down number", () => {
+    // The whole point of deriving it: a level that generates more desks has to
+    // report a longer read, with nothing else edited.
+    const full = estimateBriefWords("deep");
+    const halved = estimateBriefWords("deep", { topics: BRIEF_LEVEL_CONFIG.deep.maxTopics / 2 });
+    expect(halved).toBeLessThan(full);
+  });
+
+  it("estimates against the desks actually planned, not the ceiling", () => {
+    const quiet = estimateBriefMinutes("standard", { topics: 1 });
+    expect(quiet).toBeLessThan(estimateBriefMinutes("standard"));
+  });
+
+  it("never promises a zero-minute brief", () => {
+    expect(estimateBriefMinutes("concise", { topics: 0, externals: 0 })).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("continuity markers", () => {
+  const NOW = new Date("2026-08-04T08:00:00Z");
+  const daysAgo = (n: number) =>
+    new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+  const memory = [
+    {
+      title: "NATO weighs fresh sanctions on Russia",
+      firstBriefedAt: daysAgo(2),
+      lastBriefedAt: daysAgo(1),
+    },
+  ];
+
+  it("marks a lead ref the brief has covered before", () => {
+    const plan = planBrief(queue(), { level: "standard", memory, now: NOW });
+    const lead = findSection(plan, "lead")!;
+    expect(lead.continuing).toEqual([{ ref: 1, since: "2 days ago" }]);
+  });
+
+  it("marks the same story on its desk section too", () => {
+    const plan = planBrief(queue(), { level: "deep", memory, now: NOW });
+    const marked = plan.sections
+      .filter((s) => s.kind === "topic")
+      .flatMap((s) => s.continuing ?? []);
+    expect(marked.map((c) => c.ref)).toContain(1);
+  });
+
+  it("marks nothing when the brief has no memory", () => {
+    const plan = planBrief(queue(), { level: "standard", now: NOW });
+    expect(findSection(plan, "lead")!.continuing).toEqual([]);
+  });
+
+  it("does not claim continuity with a story first briefed today", () => {
+    const plan = planBrief(queue(), {
+      level: "standard",
+      memory: [
+        {
+          title: "NATO weighs fresh sanctions on Russia",
+          firstBriefedAt: NOW.toISOString(),
+          lastBriefedAt: NOW.toISOString(),
+        },
+      ],
+      now: NOW,
+    });
+    expect(findSection(plan, "lead")!.continuing).toEqual([]);
+  });
+
+  it("renders one line per continuing ref, keyed by number", () => {
+    const plan = planBrief(queue(), { level: "standard", memory, now: NOW });
+    const block = continuityBlock(findSection(plan, "lead")!);
+    expect(block).toContain("[1] — I was first briefed on this 2 days ago");
+    expect(continuityBlock(findSection(plan, "skip")!)).toBe("");
+  });
+
+  it("only tells the model about continuity when there is some", () => {
+    const lead = findSection(planBrief(queue(), { level: "standard", memory, now: NOW }), "lead")!;
+    const plain = findSection(planBrief(queue(), { level: "standard", now: NOW }), "lead")!;
+    expect(sectionSystemPrompt(lead, "standard", { continuing: true })).toContain("briefed on before");
+    expect(sectionSystemPrompt(plain, "standard")).not.toContain("briefed on before");
+  });
+
+  it("keeps already-read background out of the citable namespace", () => {
+    const block = readContextBlock([{ title: "A piece I read", feedTitle: "Reuters" }]);
+    expect(block).toContain("must never be cited");
+    expect(block).not.toMatch(/\[\d+\]/);
+    expect(readContextBlock([])).toBe("");
+  });
+});
+
+describe("desk feedback in the plan", () => {
+  /** A queue with several desks, so the ordering has something to reorder. */
+  function multiDesk(): PlanArticle[] {
+    return [
+      { title: "Ransomware crew breaches a hospital network" },
+      { title: "Zero day exploited in the wild" },
+      { title: "OpenAI ships smaller open weights model" },
+      { title: "LLM inference costs keep falling" },
+      { title: "AI agents arrive in the enterprise" },
+    ];
+  }
+
+  it("moves a desk the reader asked for more of ahead of the neutral ones", () => {
+    const plain = planBrief(multiDesk(), { level: "standard" });
+    const boosted = planBrief(multiDesk(), {
+      level: "standard",
+      deskWeights: { security: 1 },
+    });
+    const firstDesk = (p: ReturnType<typeof planBrief>) =>
+      p.sections.find((s) => s.kind === "topic")?.topicId;
+    // AI leads on size alone; a thumbs-up on security overtakes it.
+    expect(firstDesk(plain)).toBe("ai");
+    expect(firstDesk(boosted)).toBe("security");
+  });
+
+  it("pushes a down-voted desk behind the rest", () => {
+    const demoted = planBrief(multiDesk(), { level: "standard", deskWeights: { ai: -1 } });
+    const topicIds = demoted.sections.filter((s) => s.kind === "topic").map((s) => s.topicId);
+    expect(topicIds[topicIds.length - 1]).toBe("ai");
+  });
+
+  it("does not overrule a desk the reader explicitly follows", () => {
+    // Feedback is worth 2 points against the followed-desk bonus's 3, so a
+    // followed desk still leads the shortlist.
+    const refs = leadCandidateRefs(multiDesk(), {
+      priority: ["security"],
+      count: 1,
+      deskWeights: { ai: 1 },
+    });
+    expect(refs).toEqual([1]);
+  });
+
+  it("changes nothing for a reader who has never rated a section", () => {
+    const withEmpty = planBrief(multiDesk(), { level: "standard", deskWeights: {} });
+    const without = planBrief(multiDesk(), { level: "standard" });
+    expect(withEmpty.sections.map((s) => s.key)).toEqual(without.sections.map((s) => s.key));
   });
 });

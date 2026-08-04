@@ -29,6 +29,7 @@ import {
   groupByTopic,
   type ClassifiableArticle,
 } from "./topics";
+import { continuingSince, matchRemembered, type RememberedStory } from "./story-memory";
 
 export const BRIEF_LEVELS = ["concise", "standard", "deep"] as const;
 export type BriefLevel = (typeof BRIEF_LEVELS)[number];
@@ -142,6 +143,82 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
   },
 };
 
+// ── How long the brief takes to read ────────────────────────────────────
+
+/**
+ * The depth levels are an author's abstraction: "concise", "standard", "deep"
+ * describe how much work the brief does. Nobody opens a morning brief wanting
+ * an amount of work — they open it with a number of minutes before the next
+ * thing, and that is the question the picker should answer.
+ *
+ * So the levels stay exactly as they are internally (they are the knobs the
+ * planner actually turns) and are PRESENTED as the reading time they produce.
+ * The estimate is derived from the same knobs rather than written down beside
+ * them, because a hardcoded "≈5 min" is a promise that quietly stops being
+ * true the first time `topicBullets` is tuned, and nothing would catch it.
+ */
+
+/** Reading pace for dense prose. Matches the Feeds row's estimate. */
+export const BRIEF_READING_WPM = 220;
+
+/** A brief sentence, in words. Measured from generated sections, not guessed. */
+const WORDS_PER_SENTENCE = 22;
+/** The bold claim that opens each lead item. */
+const LEAD_CLAIM_WORDS = 12;
+/** "*Watch:* …" and "*Open question:* …" lines. */
+const APPENDED_LINE_WORDS = 18;
+/** A desk bullet is "one or two sentences" — call it one and a half. */
+const BULLET_SENTENCES = 1.5;
+/** A quick-clear entry: shortened title plus a reason of at most eight words. */
+const SKIP_BULLET_WORDS = 14;
+/**
+ * Quick-clear entries in a typical brief. Not the queue size: the section is
+ * told to be conservative and only list what is genuinely skippable, so it
+ * runs to a handful of lines whether the queue is 40 articles or 120.
+ */
+const TYPICAL_SKIP_ITEMS = 6;
+
+/** What the brief will actually contain, when it is known. */
+export type BriefShape = {
+  /** Desk sections generated. Defaults to the level's ceiling. */
+  topics?: number;
+  /** External stories offered. Defaults to the level's ceiling. */
+  externals?: number;
+};
+
+/** Words the brief is expected to run to at this level. */
+export function estimateBriefWords(level: BriefLevel, shape: BriefShape = {}): number {
+  const cfg = BRIEF_LEVEL_CONFIG[level];
+  const topics = shape.topics ?? cfg.maxTopics;
+  const externals = shape.externals ?? cfg.externalPicks;
+
+  const lead =
+    cfg.leadPicks *
+    (LEAD_CLAIM_WORDS +
+      cfg.leadSentences * WORDS_PER_SENTENCE +
+      (cfg.leadWatch ? APPENDED_LINE_WORDS : 0));
+
+  const perTopic =
+    WORDS_PER_SENTENCE +
+    cfg.topicBullets * BULLET_SENTENCES * WORDS_PER_SENTENCE +
+    (cfg.topicTension ? WORDS_PER_SENTENCE : 0) +
+    (cfg.topicOpenQuestion ? APPENDED_LINE_WORDS : 0);
+
+  const skip = cfg.includeSkip ? TYPICAL_SKIP_ITEMS * SKIP_BULLET_WORDS : 0;
+  const external = externals > 0 ? LEAD_CLAIM_WORDS + externals * BULLET_SENTENCES * WORDS_PER_SENTENCE : 0;
+
+  return Math.round(lead + topics * perTopic + skip + external);
+}
+
+/**
+ * Minutes the brief is expected to take. Rounded to whole minutes and never
+ * below one — "≈0 min" reads as a bug, and a brief with any content at all
+ * takes a moment.
+ */
+export function estimateBriefMinutes(level: BriefLevel, shape: BriefShape = {}): number {
+  return Math.max(1, Math.round(estimateBriefWords(level, shape) / BRIEF_READING_WPM));
+}
+
 export type SectionKind = "lead" | "topic" | "skip" | "external";
 
 /**
@@ -169,6 +246,13 @@ export type ExternalRef = {
   sourceCount: number;
 };
 
+/** A ref whose story the brief has covered before. */
+export type ContinuingRef = {
+  ref: number;
+  /** How long ago it was first briefed, in words: "yesterday", "3 days ago". */
+  since: string;
+};
+
 export type PlannedSection = {
   /** Stable id the client sends back to generate this one section. */
   key: string;
@@ -180,6 +264,9 @@ export type PlannedSection = {
   refs: number[];
   /** Multi-source stories among this section's refs. Only groups of 2+. */
   stories?: StoryGroup[];
+  /** Refs the reader has already been briefed on — report the change, not the
+   *  background. Only on sections that write prose about a story. */
+  continuing?: ContinuingRef[];
   /** External stories, for the "you're missing" section only. */
   externals?: ExternalRef[];
 };
@@ -237,6 +324,37 @@ export function storyGroupsFor(items: PlanArticle[], refs: number[]): StoryGroup
     .sort((a, b) => a.refs[0] - b.refs[0]);
 }
 
+/**
+ * Which of a section's refs the brief has covered before.
+ *
+ * One entry per REF rather than per story: the section prompt cites refs, so
+ * telling it "[3] — you were briefed on this yesterday" is directly actionable,
+ * where naming the story would leave it to work out which number that was.
+ *
+ * A story first briefed today is deliberately absent (`continuingSince`
+ * returns null under a day). It's in the memory because this morning's brief
+ * put it there, and claiming continuity with a brief the reader is currently
+ * reading would be nonsense.
+ */
+export function continuingRefs(
+  items: PlanArticle[],
+  refs: number[],
+  memory: RememberedStory[],
+  now: Date = new Date(),
+): ContinuingRef[] {
+  if (memory.length === 0) return [];
+  const out: ContinuingRef[] = [];
+  for (const ref of refs) {
+    const item = items[ref - 1];
+    if (!item) continue;
+    const remembered = matchRemembered(item.title, memory);
+    if (!remembered) continue;
+    const since = continuingSince(remembered, now);
+    if (since) out.push({ ref, since });
+  }
+  return out;
+}
+
 /** Rough substance signal: a fetched 2000-word essay outranks a 3-line stub. */
 function substanceScore(a: PlanArticle): number {
   const words = a.wordCount ?? 0;
@@ -263,16 +381,18 @@ function substanceScore(a: PlanArticle): number {
  */
 export function leadCandidateRefs(
   items: PlanArticle[],
-  opts: { priority?: string[]; count: number },
+  opts: { priority?: string[]; count: number; deskWeights?: Record<string, number> },
 ): number[] {
   const priority = new Set(opts.priority ?? []);
+  const weights = opts.deskWeights ?? {};
   const buckets = groupByTopic(items);
   const topicOf = new Map<number, string>();
   for (const b of buckets) for (const ref of b.refs) topicOf.set(ref, b.topicId);
 
   const scored = items.map((a, i) => {
     const ref = i + 1;
-    const onPriorityDesk = priority.has(topicOf.get(ref) ?? "");
+    const topicId = topicOf.get(ref) ?? "";
+    const onPriorityDesk = priority.has(topicId);
     // Recency is a tie-breaker, not a driver: items arrive newest-first, so a
     // shrinking bonus down the list keeps today ahead of last week.
     const recency = items.length > 1 ? (1 - i / (items.length - 1)) * 1.5 : 1.5;
@@ -285,6 +405,10 @@ export function leadCandidateRefs(
         // short wire stub on a desk the user never picked.
         (a.trendScore ?? 0) * 8 +
         (onPriorityDesk ? 3 : 0) +
+        // Sits below the followed-desk bonus on purpose. Feedback should be
+        // able to break a tie between two comparable candidates, not overrule
+        // a desk the reader explicitly asked to lead.
+        (weights[topicId] ?? 0) * 2 +
         (a.hasFullText ? 2 : 0) +
         substanceScore(a) +
         recency,
@@ -351,15 +475,31 @@ export function deskRefs(items: PlanArticle[], refs: number[], maxRefs: number):
  */
 export function planBrief(
   items: PlanArticle[],
-  opts: { level?: BriefLevel; priority?: string[]; externals?: ExternalCandidate[] } = {},
+  opts: {
+    level?: BriefLevel;
+    priority?: string[];
+    externals?: ExternalCandidate[];
+    /** Stories previous briefs covered, for the continuity markers. */
+    memory?: RememberedStory[];
+    /** Desk verdicts, in [-1, 1]. See `brief-feedback.ts`. */
+    deskWeights?: Record<string, number>;
+    now?: Date;
+  } = {},
 ): BriefPlan {
   const level = opts.level ?? DEFAULT_BRIEF_LEVEL;
   const cfg = BRIEF_LEVEL_CONFIG[level];
   const priority = opts.priority ?? [];
+  const memory = opts.memory ?? [];
+  const weights = opts.deskWeights ?? {};
+  const now = opts.now ?? new Date();
 
   if (items.length === 0) return { level, sections: [], desks: [] };
 
-  const leadRefs = leadCandidateRefs(items, { priority, count: cfg.leadCandidates });
+  const leadRefs = leadCandidateRefs(items, {
+    priority,
+    count: cfg.leadCandidates,
+    deskWeights: weights,
+  });
   const sections: PlannedSection[] = [
     {
       key: "lead",
@@ -372,6 +512,7 @@ export function planBrief(
       stories: storyGroupsFor(items, items.map((_, i) => i + 1)).filter((g) =>
         g.refs.some((r) => leadRefs.includes(r)),
       ),
+      continuing: continuingRefs(items, leadRefs, memory, now),
     },
   ];
 
@@ -380,7 +521,16 @@ export function planBrief(
     (b) =>
       b.refs.length >= cfg.minTopicSize && (b.topicId !== OTHER_TOPIC_ID || cfg.includeOther),
   );
-  const chosen = eligible.slice(0, cfg.maxTopics);
+  // Verdicts reorder the desks competing for the level's slots. Only the SIGN
+  // is used, and the sort is stable, so a desk the reader asked for more of
+  // moves ahead of the neutral ones while everything inside a group keeps the
+  // order it already earned on priority and size. Using the magnitude here
+  // would let a fortnight of clicks rebuild the desk order from scratch, which
+  // is a bigger claim than a thumbs-up makes.
+  const ranked = [...eligible].sort(
+    (a, b) => Math.sign(weights[b.topicId] ?? 0) - Math.sign(weights[a.topicId] ?? 0),
+  );
+  const chosen = ranked.slice(0, cfg.maxTopics);
   const chosenIds = new Set(chosen.map((b) => b.topicId));
 
   for (const b of chosen) {
@@ -392,6 +542,7 @@ export function planBrief(
       label: b.label,
       refs,
       stories: storyGroupsFor(items, refs),
+      continuing: continuingRefs(items, refs, memory, now),
     });
   }
 

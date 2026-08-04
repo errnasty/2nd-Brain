@@ -6,7 +6,7 @@ import { resolveUserSmartModel } from "@/lib/ai/user-model";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
-import { getMatchingBrief, saveUserBrief } from "@/lib/brief-cache";
+import { getMatchingBrief, loadStoryMemory, saveUserBrief } from "@/lib/brief-cache";
 import { getUserSettings } from "@/lib/settings/store";
 import {
   BRIEF_LEVEL_CONFIG,
@@ -17,7 +17,9 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import {
+  continuityBlock,
   externalBlock,
+  readContextBlock,
   sectionArticleBlock,
   sectionMaxTokens,
   sectionPreamble,
@@ -31,6 +33,7 @@ import {
   briefSourceMap,
   fetchBodies,
   fetchPlanRows,
+  fetchReadContext,
   queueLimit,
   stripHtml,
   toArticleInputs,
@@ -38,6 +41,7 @@ import {
   unreadBriefIds,
 } from "@/lib/today/brief-queue";
 import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, briefStream } from "@/lib/today/brief-stream";
+import { loadDeskWeights } from "@/lib/today/feedback-store";
 import { loadExternalStories } from "@/lib/trending/signals";
 import { TITLE_SHINGLE_THRESHOLD, jaccard, titleShingles } from "@/lib/trending/cluster";
 import type { BriefSourceRef } from "@/lib/db/schema";
@@ -72,6 +76,14 @@ export const maxDuration = 60;
 
 // Raw full_text cap in SQL — ~6× the plain-text budget leaves HTML headroom.
 const RAW_FULLTEXT_MULTIPLIER = 6;
+
+/**
+ * Already-read articles offered to a section as background. A dozen titles is
+ * a few hundred tokens and covers a heavy morning's reading; more than that
+ * starts competing for attention with the articles the section is actually
+ * supposed to be writing about.
+ */
+const READ_CONTEXT_LIMIT = 12;
 
 /** The user's stored brief preferences, validated. */
 async function briefPrefs(userId: string): Promise<{ level: BriefLevel; priority: string[] }> {
@@ -121,18 +133,22 @@ export async function GET(req: Request) {
   const level = isBriefLevel(levelParam) ? levelParam : prefs.level;
   const priority = prefs.priority;
   const cfg = BRIEF_LEVEL_CONFIG[level];
-  const [{ rows, windowLabel }, externals] = await Promise.all([
+  const [{ rows, windowLabel }, externals, memory, weights] = await Promise.all([
     fetchPlanRows(userId, queueLimit(cfg.articleLimit)),
     // Fail-soft and independent: no trending run yet, or all four public
     // signals down, simply means no "outside your feeds" section today.
     cfg.externalPicks > 0
       ? loadExternalStories(EXTERNAL_CANDIDATE_POOL).catch(() => [])
       : Promise.resolve([]),
+    loadStoryMemory(userId),
+    loadDeskWeights(userId),
   ]);
   const plan = planBrief(toPlanArticles(rows), {
     level,
     priority,
     externals: pickExternals(externals, rows, priority),
+    memory,
+    deskWeights: weights,
   });
   const ids = rows.map((r) => r.id);
   return Response.json({
@@ -324,7 +340,17 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
         )
       : [];
 
-  const plan = planBrief(planArticles, { level, priority: prefs.priority, externals });
+  // Re-planned here rather than trusted from the client, so the continuity
+  // markers and desk ordering this section is generated under are the same ones
+  // the plan endpoint computed — same memory row, same verdicts, same queue.
+  const [memory, weights] = await Promise.all([loadStoryMemory(userId), loadDeskWeights(userId)]);
+  const plan = planBrief(planArticles, {
+    level,
+    priority: prefs.priority,
+    externals,
+    memory,
+    deskWeights: weights,
+  });
   const section = body.section ? findSection(plan, body.section) : plan.sections[0];
   if (!section) {
     return new Response("No such brief section", { status: 404 });
@@ -336,6 +362,12 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     totalCount: rows.length,
     deskCount,
   });
+
+  // What the reader already went through today. Only for the sections that
+  // write prose about a story: the quick-clear list judges titles in isolation,
+  // and the external section is by definition about things NOT in their feeds.
+  const wantsReadContext = section.kind === "lead" || section.kind === "topic";
+  const readContext = wantsReadContext ? await fetchReadContext(userId, READ_CONTEXT_LIMIT) : [];
 
   let inputBlock: string;
   if (section.kind === "external") {
@@ -351,8 +383,12 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
             section.refs.map((n) => rows[n - 1]?.id).filter((id): id is string => Boolean(id)),
             bodyChars * RAW_FULLTEXT_MULTIPLIER,
           );
-    const stories = storyBlock(section);
-    inputBlock = [sectionArticleBlock(section, toArticleInputs(rows, section.refs, bodies), level), stories]
+    inputBlock = [
+      sectionArticleBlock(section, toArticleInputs(rows, section.refs, bodies), level),
+      storyBlock(section),
+      continuityBlock(section),
+      readContextBlock(readContext),
+    ]
       .filter(Boolean)
       .join("\n\n");
   }
@@ -367,7 +403,10 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
   const run = (maxTokens: number, tuned: boolean) =>
     streamText({
       model: resolved.model,
-      system: sectionSystemPrompt(section, level),
+      system: sectionSystemPrompt(section, level, {
+        readContext: readContext.length > 0,
+        continuing: (section.continuing?.length ?? 0) > 0,
+      }),
       messages: [
         {
           role: "user",

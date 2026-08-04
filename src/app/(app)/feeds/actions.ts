@@ -394,6 +394,15 @@ export type ArticleSearchResult = {
   imageUrl: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
+  // Story columns, optional because only some of the queries returning this
+  // shape join them: `loadMoreArticlesAction` does, so an appended page groups
+  // and explains itself like the first one; full-text search does not, so its
+  // results fall back to title matching and show no trending chip.
+  clusterId?: string | null;
+  sourceCount?: number | null;
+  firstSeen?: Date | null;
+  lastSeen?: Date | null;
+  externalVolume?: number | null;
 };
 
 export async function searchArticlesAction(input: {
@@ -494,7 +503,13 @@ export async function loadMoreArticlesAction(input: {
       imageUrl: articles.imageUrl,
       feedTitle: feeds.title,
       feedIconUrl: feeds.iconUrl,
+      // Same story columns as the first page — an appended page has to be able
+      // to group and explain itself exactly like the rows above it.
+      clusterId: articles.clusterId,
       sourceCount: storyClusters.sourceCount,
+      firstSeen: storyClusters.firstSeen,
+      lastSeen: storyClusters.lastSeen,
+      externalVolume: storyClusters.externalVolume,
     })
     .from(articles)
     .innerJoin(feeds, eq(feeds.id, articles.feedId))

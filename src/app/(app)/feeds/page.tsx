@@ -10,6 +10,8 @@ type Search = Promise<{
   folder?: string;
   view?: "unread" | "all" | "starred" | "readlater";
   sort?: FeedSort;
+  // Read client-side only (ArticleList) — collapsing into stories happens
+  // there, so the server render doesn't depend on it.
   dedupe?: string;
   // `article` is intentionally NOT read here — selection lives in client state
   // (FeedsShell) so opening an article doesn't trigger a server re-render.
@@ -17,16 +19,10 @@ type Search = Promise<{
 
 const ARTICLE_LIMIT = 100;
 
-/** Normalize a title for cross-feed duplicate detection. */
-function normTitle(t: string): string {
-  return t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
 export default async function FeedsPage({ searchParams }: { searchParams: Search }) {
   const sp = await searchParams;
   const view = sp.view ?? "unread";
   const sort: FeedSort = parseFeedSort(sp.sort);
-  const dedupe = sp.dedupe === "1";
   const { user } = await requireUser();
 
   const where = [eq(articles.userId, user.id)];
@@ -63,7 +59,11 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     imageUrl: string | null;
     feedTitle: string;
     feedIconUrl: string | null;
+    clusterId: string | null;
     sourceCount: number | null;
+    firstSeen: Date | null;
+    lastSeen: Date | null;
+    externalVolume: number | null;
   };
   let rows: Row[] = [];
   let articleTagsById: Record<string, string[]> = {};
@@ -96,10 +96,16 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
           imageUrl: articles.imageUrl,
           feedTitle: feeds.title,
           feedIconUrl: feeds.iconUrl,
-          // How many outlets carried this story. Null when the trending cron
-          // hasn't run or the story is unique to one feed — the row then shows
-          // no badge at all rather than a misleading "1 source".
+          // The story this is one telling of, and the evidence behind its
+          // placement. All null when the trending cron hasn't run — the row
+          // then shows no chip at all rather than a misleading "1 source", and
+          // groups on its title instead of its cluster. See
+          // `src/lib/feeds/trend-reason.ts`.
+          clusterId: articles.clusterId,
           sourceCount: storyClusters.sourceCount,
+          firstSeen: storyClusters.firstSeen,
+          lastSeen: storyClusters.lastSeen,
+          externalVolume: storyClusters.externalVolume,
         })
         .from(articles)
         .innerJoin(feeds, eq(feeds.id, articles.feedId))
@@ -125,18 +131,13 @@ export default async function FeedsPage({ searchParams }: { searchParams: Search
     ]);
     rows = articleRows;
 
-    // Collapse cross-feed duplicates (same story syndicated to multiple feeds)
-    // by normalized title, keeping the first (already sort-ordered) copy.
-    // (Tags were fetched for pre-dedupe ids; extra entries are simply unused.)
-    if (dedupe) {
-      const seen = new Set<string>();
-      rows = rows.filter((r) => {
-        const key = normTitle(r.title);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
+    // Collapsing duplicate coverage happens on the CLIENT now
+    // (`src/lib/feeds/stories.ts`), for two reasons. It groups on the story
+    // cluster the trending pass computed rather than on an exact title match,
+    // and it keeps the extra tellings attached to the row instead of dropping
+    // them — which is what lets the row say "3 more outlets" and expand. Doing
+    // that here would also have left the infinite-scroll pages ungrouped,
+    // since `loadMoreArticlesAction` never applied the old filter.
 
     articleTagsById = tagRows.reduce((acc, r) => {
       (acc[r.itemId] ??= []).push(r.name);

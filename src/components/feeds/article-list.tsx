@@ -43,6 +43,8 @@ import {
   parseFeedSort,
   type FeedSort,
 } from "@/lib/feeds/sort";
+import { groupStories, storyReadTargets } from "@/lib/feeds/stories";
+import { trendReason } from "@/lib/feeds/trend-reason";
 
 const FEED_PAGE_SIZE = 100;
 import { toast } from "sonner";
@@ -63,8 +65,14 @@ export type ArticleListItem = {
   imageUrl: string | null;
   feedTitle: string;
   feedIconUrl: string | null;
+  /** The story this is one telling of — what the list groups on. */
+  clusterId?: string | null;
   /** Distinct feeds covering this story; null/1 when it stands alone. */
   sourceCount?: number | null;
+  /** Cluster span and external heat, for the row's "why" chip. */
+  firstSeen?: Date | string | null;
+  lastSeen?: Date | string | null;
+  externalVolume?: number | null;
 };
 
 /** Estimated read time at ~220 wpm. Returns null for missing/trivial counts. */
@@ -288,10 +296,16 @@ export function ArticleList({
     fetch(`/api/articles/${id}/full-text`, { method: "POST" }).catch(() => {});
   }, []);
 
+  // Declared as a ref rather than read directly, because the story grouping is
+  // derived further down (it depends on the optimistic list this callback
+  // patches) and the swipe/keyboard handlers below are defined before it.
+  const storyTargetsRef = useRef<(id: string) => string[]>((id) => [id]);
+
   const markReadOne = useCallback(
     (id: string) => {
-      startTransition(() => applyOptimistic({ id, readStatus: "read" }));
-      setReadStatusAction({ articleIds: [id], status: "read" }).catch(() => {});
+      const ids = storyTargetsRef.current(id);
+      startTransition(() => ids.forEach((articleId) => applyOptimistic({ id: articleId, readStatus: "read" })));
+      setReadStatusAction({ articleIds: ids, status: "read" }).catch(() => {});
     },
     [applyOptimistic],
   );
@@ -409,16 +423,41 @@ export function ArticleList({
     return () => clearTimeout(handle);
   }, [query, view, feedId, folderId]);
 
-  const displayed: ArticleListItem[] = useMemo(() => {
+  const loaded: ArticleListItem[] = useMemo(() => {
     if (results !== null) {
       return results.map((r) => ({ ...r }));
     }
     return optimistic;
   }, [results, optimistic]);
 
+  // Collapse duplicate coverage into stories. The grouping is derived from the
+  // rows already on screen rather than done in SQL, so it applies uniformly to
+  // the first page, every appended page and the optimistic patches on top of
+  // them — and so the tellings it hides stay available to expand.
+  const collapseStories = params.get("dedupe") === "1";
+  const [expandedStories, setExpandedStories] = useState<Set<string>>(new Set());
+  const grouping = useMemo(
+    () => groupStories(loaded, { collapse: collapseStories, expanded: expandedStories }),
+    [loaded, collapseStories, expandedStories],
+  );
+  const displayed = grouping.visible;
+
+  storyTargetsRef.current = (id: string) => storyReadTargets(id, grouping, expandedStories);
+
+  const toggleStory = useCallback((leadId: string) => {
+    setExpandedStories((prev) => {
+      const next = new Set(prev);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      return next;
+    });
+  }, []);
+
   // Publish the on-screen order upward. Keyed on the id sequence so appending
   // a page (or running a search) republishes, while read/star toggles — which
-  // don't reorder anything — don't churn the reader.
+  // don't reorder anything — don't churn the reader. Collapsed tellings are
+  // deliberately absent: the reader's next/prev should follow what the list
+  // shows, or "next" walks through six copies of the story just finished.
   const orderKey = displayed.map((i) => i.id).join(",");
   useEffect(() => {
     onOrderChange?.(displayed.map((i) => ({ id: i.id, title: i.title })));
@@ -438,11 +477,18 @@ export function ArticleList({
 
   function openArticle(id: string) {
     onSelect(id);
-    const target = displayed.find((i) => i.id === id);
+    const target = loaded.find((i) => i.id === id);
     if (target && target.readStatus !== "read") {
+      // Reading one telling of a collapsed story reads the story: the other
+      // tellings are the same news, they are not on screen to be dealt with
+      // separately, and leaving them unread means the queue count never falls
+      // for work the reader has actually done.
+      const ids = storyReadTargets(id, grouping, expandedStories).filter(
+        (articleId) => loaded.find((i) => i.id === articleId)?.readStatus !== "read",
+      );
       startTransition(async () => {
-        applyOptimistic({ id, readStatus: "read" });
-        await setReadStatusAction({ articleIds: [id], status: "read" });
+        ids.forEach((articleId) => applyOptimistic({ id: articleId, readStatus: "read" }));
+        await setReadStatusAction({ articleIds: ids, status: "read" });
       });
     }
   }
@@ -617,6 +663,9 @@ export function ArticleList({
         <VirtualizedArticleList
           items={displayed}
           itemTagsById={itemTagsById}
+          tellings={grouping.tellings}
+          expandedStories={expandedStories}
+          onToggleStory={toggleStory}
           selectedId={selectedId}
           onOpen={openArticle}
           selected={selected}
@@ -655,6 +704,9 @@ export function ArticleList({
 function VirtualizedArticleList({
   items,
   itemTagsById,
+  tellings,
+  expandedStories,
+  onToggleStory,
   selectedId,
   onOpen,
   selected,
@@ -674,6 +726,10 @@ function VirtualizedArticleList({
 }: {
   items: ArticleListItem[];
   itemTagsById: Record<string, string[]>;
+  /** Lead article id → the other tellings of its story. */
+  tellings: Map<string, ArticleListItem[]>;
+  expandedStories: ReadonlySet<string>;
+  onToggleStory: (leadId: string) => void;
   selectedId: string | null;
   onOpen: (id: string) => void;
   selected: Set<string>;
@@ -765,6 +821,9 @@ function VirtualizedArticleList({
         {virtualizer.getVirtualItems().map((row) => {
           const item = items[row.index];
           const isSelected = selectedId === item.id;
+          const reason = trendReason(item);
+          const otherTellings = tellings.get(item.id)?.length ?? 0;
+          const storyOpen = expandedStories.has(item.id);
           const rowMenu = (prims: MenuPrimitives) => (
             <ArticleRowMenuItems
               prims={prims}
@@ -858,15 +917,21 @@ function VirtualizedArticleList({
                         <span className="shrink-0 tabular-nums">≈{readMinutes(item.wordCount)}m</span>
                       </>
                     )}
-                    {/* Why this is high in a trending list. Shown only at 2+,
-                        because "1 source" is every article and says nothing. */}
-                    {(item.sourceCount ?? 0) > 1 && (
+                    {/* Why this is high in a trending list — the evidence, not
+                        just the count. Absent on an ordinary article, which is
+                        what makes it mean something when it shows up. */}
+                    {reason && (
                       <span
-                        className="shrink-0 rounded-full bg-brand/10 px-1.5 font-medium normal-case text-brand"
+                        className={cn(
+                          "shrink-0 rounded-full px-1.5 font-medium normal-case",
+                          reason.kind === "burst"
+                            ? "bg-brand/15 text-brand"
+                            : "bg-muted text-muted-foreground",
+                        )}
                         style={{ letterSpacing: 0 }}
-                        title={`${item.sourceCount} of your feeds are covering this story`}
+                        title={reason.detail}
                       >
-                        {item.sourceCount} sources
+                        {reason.label}
                       </span>
                     )}
                     {item.starred && <Star className="h-3 w-3 shrink-0 fill-current text-yellow-500" />}
@@ -913,6 +978,25 @@ function VirtualizedArticleList({
                   />
                 )}
               </button>
+              {/* The rest of the story. A sibling of the row button rather
+                  than a control inside it — nesting buttons is invalid, and
+                  expanding a story is a different intent from opening it. */}
+              {otherTellings > 0 && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onToggleStory(item.id);
+                  }}
+                  className={cn(
+                    "-mt-1 mb-2 block text-left font-mono text-[10px] text-muted-foreground transition-colors hover:text-foreground",
+                    selected.size > 0 ? "pl-9" : "pl-4",
+                  )}
+                >
+                  {storyOpen
+                    ? "− hide other tellings"
+                    : `+ ${otherTellings} more ${otherTellings === 1 ? "telling" : "tellings"}`}
+                </button>
+              )}
               {/* Read Later toggle */}
               <button
                 onClick={(e) => {
@@ -1026,7 +1110,7 @@ function SortControls({
         >
           <ArrowDownUp className="h-3.5 w-3.5" />
           {FEED_SORT_LABELS[sort]}
-          {dedupe && <span className="text-muted-foreground">· uniq</span>}
+          {dedupe && <span className="text-muted-foreground">· grouped</span>}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
@@ -1050,7 +1134,7 @@ function SortControls({
           onCheckedChange={(c) => setParam("dedupe", c ? "1" : null)}
         >
           <Copy className="mr-2 h-3.5 w-3.5" />
-          Hide duplicates
+          Group by story
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem checked={compact} onCheckedChange={onToggleCompact}>
           <AlignJustify className="mr-2 h-3.5 w-3.5" />
