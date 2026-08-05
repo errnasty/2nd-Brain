@@ -282,8 +282,9 @@ create table if not exists ai_jobs (
 create index if not exists ai_jobs_user_created_idx on ai_jobs (user_id, created_at desc);
 `;
 
-// Daily Brief cache — mirrors cloud migration 0025. One row per user, not
-// synced. Always-run + idempotent.
+// Daily Brief cache — mirrors cloud migrations 0025 and 0032. One row per
+// user, not synced. Always-run + idempotent. The `alter` carries the story
+// memory onto local databases created before it existed.
 const DAILY_BRIEFS_SQL = `
 create table if not exists daily_briefs (
   user_id uuid primary key references profiles(id) on delete cascade,
@@ -292,9 +293,26 @@ create table if not exists daily_briefs (
   content text not null,
   source_map jsonb not null default '[]'::jsonb,
   usage jsonb,
+  story_memory jsonb not null default '[]'::jsonb,
   generated_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table daily_briefs add column if not exists story_memory jsonb not null default '[]'::jsonb;
+`;
+
+// Verdicts on brief sections — mirrors cloud migration 0033. Not synced: the
+// weights are read only while planning, on whichever machine is planning.
+const BRIEF_FEEDBACK_SQL = `
+create table if not exists brief_feedback (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references profiles(id) on delete cascade,
+  section_key text not null,
+  topic_id text,
+  verdict text not null check (verdict in ('more', 'less')),
+  created_at timestamptz not null default now()
+);
+create index if not exists brief_feedback_user_created_idx
+  on brief_feedback (user_id, created_at desc);
 `;
 
 // Ask conversation threads + messages — mirrors cloud migration 0026. Not
@@ -592,6 +610,13 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(DAILY_BRIEFS_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] daily_briefs table failed:", err instanceof Error ? err.message : err);
+  }
+
+  // Always run: brief section feedback (not synced, no triggers).
+  try {
+    await client.exec(BRIEF_FEEDBACK_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] brief_feedback table failed:", err instanceof Error ? err.message : err);
   }
 
   // Always run: Ask conversation threads + messages (not synced, no triggers).

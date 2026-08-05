@@ -14,17 +14,30 @@ import { createHash } from "crypto";
 import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds, type BriefSourceRef } from "@/lib/db/schema";
+import { trendingDayStart } from "@/lib/trending/day";
 import type { BriefArticleInput } from "./brief-prompts";
 import type { PlanArticle } from "./brief-plan";
 
 /**
- * Widening windows: last 24h, then a week, then most-recent unread — so the
- * brief still works when the user hasn't synced today.
+ * Widening windows: today, then a week, then most-recent unread — so the brief
+ * still works when the user hasn't synced today.
+ *
+ * The first window is deliberately the *trending* day, taken from the same
+ * helper the scoring pass uses rather than a second `now - 24h` written out
+ * here. That shared boundary is what makes a daily brief a brief on the day's
+ * trending stories: everything the trending pass scored is inside this window
+ * by construction, and everything it retired is outside it. Two independent
+ * definitions would have left a seam at the edge where the brief either quotes
+ * a story trending no longer, or drops one that is.
+ *
+ * The wider windows are the "you haven't synced in days" path. Nothing in them
+ * carries a trend score — the pass only scores the day — so they degrade to
+ * exactly the reverse-chronological brief that ran before trending existed.
  */
-export function briefWindows() {
+export function briefWindows(now: Date = new Date()) {
   return [
-    { since: new Date(Date.now() - 24 * 60 * 60 * 1000), label: "the last 24 hours" },
-    { since: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), label: "the last week" },
+    { since: trendingDayStart(now), label: "today" },
+    { since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), label: "the last week" },
     { since: null as Date | null, label: "your most recent unread" },
   ];
 }
@@ -99,12 +112,18 @@ const baseConds = (userId: string, since: Date | null) => {
 /**
  * The queue order, shared by every read so the `[n]` numbering agrees.
  *
- * Trending first, then newest. The publish-date tie-break is not decoration:
- * `trend_score` is 0 until the trending cron has scored an article, so on a
- * fresh database — or the desktop app, where no cron runs — this collapses to
- * exactly the reverse-chronological order the brief used before. The id is the
- * final tie-break, because publish_date is nullable and non-unique and a
- * partial order would let two reads of the same set disagree about `[n]`.
+ * Trending first, then newest — and since the pass scores the day and nothing
+ * else, the head of this queue IS the day's trending stories, in order of how
+ * hot they are, followed by the rest of the day newest-first. That is what the
+ * brief's lead, its desk sections and its article cap all draw from, so the
+ * biggest stories of the day survive every one of those cuts.
+ *
+ * The publish-date tie-break is not decoration: `trend_score` is 0 until the
+ * trending cron has scored an article, so on a fresh database — or the desktop
+ * app, where no cron runs — this collapses to exactly the reverse-chronological
+ * order the brief used before. The id is the final tie-break, because
+ * publish_date is nullable and non-unique and a partial order would let two
+ * reads of the same set disagree about `[n]`.
  */
 const QUEUE_ORDER = [
   desc(articles.trendScore),
@@ -184,6 +203,59 @@ export async function fetchPlanRows(
       .orderBy(...QUEUE_ORDER)
       .limit(limit),
   );
+}
+
+/** An article the reader has already been through, offered as background. */
+export type ReadContextRow = { title: string; feedTitle: string };
+
+/**
+ * Stories from today that the reader has already read.
+ *
+ * The brief's queue is unread-only, which is right — it exists to deal with
+ * what is left. But it means the brief is blind to what the reader did an hour
+ * ago: read three pieces on a story over breakfast and the lead will either
+ * introduce it from scratch as though it were news to them, or drop it. Both
+ * are worse than the obvious thing, which is to carry on from what they know.
+ *
+ * So these go into the prompt as CONTEXT, never as citable refs — they aren't
+ * in the source map, and a citation pointing at them would resolve to the
+ * wrong article.
+ *
+ * ## "Read today" is inferred, not recorded
+ *
+ * There is no `read_at` column; `updated_at` can't stand in for one, because
+ * the hourly trending pass rewrites scores on every recent article and would
+ * make every one of them look freshly touched. What IS sound is the day
+ * window: an article published inside it that is already marked read was, in
+ * all but the strangest cases, read inside it too. That keeps this honest
+ * without inventing a signal the database doesn't have.
+ */
+export async function fetchReadContext(
+  userId: string,
+  limit: number,
+  now: Date = new Date(),
+): Promise<ReadContextRow[]> {
+  try {
+    return await db
+      .select({ title: articles.title, feedTitle: feeds.title })
+      .from(articles)
+      .innerJoin(feeds, eq(feeds.id, articles.feedId))
+      .where(
+        and(
+          eq(articles.userId, userId),
+          eq(articles.readStatus, "read"),
+          gte(articles.publishDate, trendingDayStart(now)),
+        ),
+      )
+      // Trending first: of what they read, the stories the brief is most
+      // likely to want to build on are the ones everyone else covered too.
+      .orderBy(desc(articles.trendScore), desc(articles.publishDate))
+      .limit(limit);
+  } catch {
+    // Background is a bonus, never a dependency — a failure here costs the
+    // brief nothing but the continuity.
+    return [];
+  }
 }
 
 export type SectionRow = PlanRow & { fullText: string | null };

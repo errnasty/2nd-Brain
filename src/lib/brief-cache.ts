@@ -8,6 +8,12 @@
 import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { dailyBriefs, type BriefSourceRef, type BriefUsage } from "@/lib/db/schema";
+import {
+  coveredTitles,
+  mergeStoryMemory,
+  parseStoryMemory,
+  type RememberedStory,
+} from "@/lib/today/story-memory";
 
 export type StoredBrief = {
   fingerprint: string;
@@ -53,7 +59,39 @@ export async function getMatchingBrief(
   return stored;
 }
 
-/** Upsert the user's latest brief (replaces the previous one). */
+/**
+ * What the brief has told this user about, from the row that gets replaced
+ * every time a brief is saved.
+ *
+ * Selected on its own rather than through `loadUserBrief`, which would drag
+ * the whole markdown body across to read a small JSON array — and this is read
+ * on the plan request, which the Today tab makes on every visit.
+ */
+export async function loadStoryMemory(userId: string): Promise<RememberedStory[]> {
+  try {
+    const [row] = await db
+      .select({ storyMemory: dailyBriefs.storyMemory })
+      .from(dailyBriefs)
+      .where(eq(dailyBriefs.userId, userId))
+      .limit(1);
+    return parseStoryMemory(row?.storyMemory);
+  } catch {
+    // No memory is the pre-migration state and a perfectly good brief — every
+    // story simply reads as new.
+    return [];
+  }
+}
+
+/**
+ * Upsert the user's latest brief (replaces the previous one), folding the
+ * stories it covered into the memory.
+ *
+ * The merge happens here, not at the call sites, because there are two of them
+ * (the sectioned brief posts its assembled markdown to `/api/brief/store`, the
+ * custom-prompt brief saves itself as it streams) and a memory updated by only
+ * one of them would quietly claim continuity that depends on which mode the
+ * reader happens to use.
+ */
 export async function saveUserBrief(
   userId: string,
   value: {
@@ -66,12 +104,17 @@ export async function saveUserBrief(
 ): Promise<void> {
   const now = new Date();
   try {
+    const storyMemory = mergeStoryMemory(
+      await loadStoryMemory(userId),
+      coveredTitles(value.content, value.sourceMap),
+      now,
+    );
     await db
       .insert(dailyBriefs)
-      .values({ userId, ...value, generatedAt: now, updatedAt: now })
+      .values({ userId, ...value, storyMemory, generatedAt: now, updatedAt: now })
       .onConflictDoUpdate({
         target: dailyBriefs.userId,
-        set: { ...value, generatedAt: now, updatedAt: now },
+        set: { ...value, storyMemory, generatedAt: now, updatedAt: now },
       });
   } catch {
     // Persisting is best-effort — a failed write just means the next load

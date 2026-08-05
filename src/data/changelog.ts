@@ -27,6 +27,35 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-04-b",
+    date: "August 4, 2026",
+    title: "A brief that remembers, and feeds that group",
+    tag: "feature",
+    summary:
+      "Your Daily Brief now knows what it told you yesterday and what you have already read today, so it opens with what changed instead of starting every story from scratch. Feeds groups the same story into one row and tells you why it ranked where it did.",
+    items: [
+      "Stories carried over from a previous brief are marked as such — you get the development, not the background again.",
+      "Anything you have already read today is handed to the brief as context, so it stops re-telling you things you know.",
+      "Thumbs up or down on any section. More of that desk tomorrow, less of the other one — and the effect fades over a few weeks, so an off day doesn't follow you around.",
+      "The depth picker is now a reading time: pick how many minutes you have, not how deep you'd like it to go.",
+      "\"Group by story\" in Feeds collapses every telling of a story into one row you can expand, and reading it marks the whole story read.",
+      "Feed rows say why something is trending — \"9 outlets in 2h\" rather than a bare count — and stay quiet on ordinary articles.",
+    ],
+  },
+  {
+    id: "2026-08-04-a",
+    date: "August 4, 2026",
+    title: "Trending now means today",
+    tag: "improvement",
+    summary:
+      "Trending used to rank two days of news at once, so yesterday's big story could still be sitting at the top of your feeds this morning. It now covers the day, and your Daily Brief is built from that same day — it opens with the stories breaking now, not the ones that broke last night.",
+    items: [
+      "A story that carried over from yesterday keeps the credit for every outlet that covered it, but it's today's write-up that gets ranked, not last night's first take.",
+      "Older articles stay exactly where they were in your feeds, still showing how many outlets carried them — they just no longer compete with today's news.",
+      "\"Outside your feeds\" now only offers stories from the last day, as it always said it did.",
+    ],
+  },
+  {
     id: "2026-08-02-a",
     date: "August 2, 2026",
     title: "Your character sheet",

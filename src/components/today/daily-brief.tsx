@@ -20,6 +20,8 @@ import {
   RotateCw,
   Settings,
   Sparkles,
+  ThumbsDown,
+  ThumbsUp,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,6 +40,7 @@ import { SourceRow, SourceBadge } from "@/components/ui/source-list";
 import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
+import { recordBriefFeedbackAction } from "@/app/(app)/today/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
 import { fetchRecallCardsAction, gradeCardAction, type RecallCard } from "@/app/(app)/review/actions";
 import { updateUserSettingsAction } from "@/lib/settings/actions";
@@ -45,6 +48,7 @@ import {
   BRIEF_LEVELS,
   BRIEF_LEVEL_CONFIG,
   DEFAULT_BRIEF_LEVEL,
+  estimateBriefMinutes,
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import { BRIEF_TOPICS } from "@/lib/today/topics";
@@ -860,6 +864,44 @@ export function DailyBrief({
     }
   }, [savedIds]);
 
+  /**
+   * Verdicts given on this brief's sections, so the buttons can show what was
+   * clicked. Deliberately local: the record on the server is what shapes
+   * tomorrow, and re-reading it to decorate today's brief would be a query per
+   * visit for a decoration.
+   */
+  const [verdicts, setVerdicts] = useState<Record<string, "more" | "less">>({});
+
+  const rateSection = useCallback((sectionKey: string, verdict: "more" | "less") => {
+    setVerdicts((prev) => ({ ...prev, [sectionKey]: verdict }));
+    void recordBriefFeedbackAction({ sectionKey, verdict }).then((res) => {
+      if (res.ok) return;
+      // Put the button back the way it was: a verdict that silently failed to
+      // save is worse than one that visibly didn't take.
+      setVerdicts((prev) => {
+        const next = { ...prev };
+        delete next[sectionKey];
+        return next;
+      });
+      toast.error(res.error ?? "Couldn't save that");
+    });
+  }, []);
+
+  /**
+   * How long this brief should take to read.
+   *
+   * Once a plan has landed we know how many desks actually made the cut, which
+   * is usually fewer than the level allows — estimating against the ceiling
+   * would over-promise on a quiet day. Before then the level's own maxima are
+   * the only thing to go on, which is exactly what the picker wants anyway:
+   * what each level WOULD cost.
+   */
+  const plannedDesks = desks.filter((d) => d.included).length;
+  const briefMinutes = estimateBriefMinutes(
+    level,
+    desks.length > 0 ? { topics: plannedDesks } : {},
+  );
+
   /** Change how much detail the brief goes into, then rebuild it. */
   const changeLevel = useCallback(
     (next: BriefLevel) => {
@@ -1108,8 +1150,11 @@ export function DailyBrief({
                   custom prompt
                 </span>
               ) : (
-                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
-                  {BRIEF_LEVEL_CONFIG[level].label.toLowerCase()}
+                <span
+                  className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
+                  title={`${BRIEF_LEVEL_CONFIG[level].label} — ${BRIEF_LEVEL_CONFIG[level].blurb}`}
+                >
+                  ≈{briefMinutes} min read
                 </span>
               )}
             </>
@@ -1201,17 +1246,18 @@ export function DailyBrief({
                 </DropdownMenuContent>
               </DropdownMenu>
 
-              {/* Depth. Each level is more SECTIONS, never one longer call — that's
-                  what keeps every request inside the host's function budget. */}
+              {/* How long you have. Each step is more SECTIONS, never one
+                  longer call — that's what keeps every request inside the
+                  host's function budget — but "more sections" is the
+                  implementation, and minutes are the question. */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="ghost" title="How much detail the brief goes into">
-                    <Layers className="mr-1.5 h-3.5 w-3.5" />
-                    {BRIEF_LEVEL_CONFIG[level].label}
+                  <Button size="sm" variant="ghost" title="How long the brief should take to read">
+                    <Layers className="mr-1.5 h-3.5 w-3.5" />≈{briefMinutes} min
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel>Depth</DropdownMenuLabel>
+                  <DropdownMenuLabel>Reading time</DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   {BRIEF_LEVELS.map((l) => (
                     <DropdownMenuItem
@@ -1220,7 +1266,12 @@ export function DailyBrief({
                       className="flex flex-col items-start gap-0.5"
                     >
                       <span className="flex w-full items-center justify-between gap-2">
-                        <span className="font-medium">{BRIEF_LEVEL_CONFIG[l].label}</span>
+                        <span className="font-medium">
+                          ≈{estimateBriefMinutes(l)} min
+                          <span className="ml-1.5 font-normal text-muted-foreground">
+                            {BRIEF_LEVEL_CONFIG[l].label}
+                          </span>
+                        </span>
                         {l === level && <Check className="h-3.5 w-3.5" />}
                       </span>
                       <span className="text-[11px] leading-snug text-muted-foreground">
@@ -1402,7 +1453,10 @@ export function DailyBrief({
               // Each section is its own markdown root, so `h3:first-child`
               // zeroes every heading's top margin — the rhythm between sections
               // has to live on the wrapper instead.
-              className={cn("mt-9 first:mt-0", b.status === "pending" && "opacity-60")}
+              className={cn(
+                "group/section mt-9 first:mt-0",
+                b.status === "pending" && "opacity-60",
+              )}
             >
               {b.text.trim() ? (
                 <CitedMarkdown
@@ -1447,6 +1501,43 @@ export function DailyBrief({
                       {g.leveledUp && <Sparkles className="h-3 w-3" />}
                     </span>
                   ))}
+                </div>
+              )}
+              {/* The only thing that teaches the brief anything. On finished
+                  generated sections only: a stored brief's single block spans
+                  every desk, so a verdict on it would say nothing the planner
+                  could act on. Dimmed rather than hidden-until-hover, because
+                  a touch device has no hover and a feedback control nobody can
+                  find collects no feedback. */}
+              {b.status === "done" && b.kind !== "stored" && b.text.trim() && (
+                <div className="not-prose mt-3 flex items-center gap-1 text-[11px] text-muted-foreground opacity-50 transition-opacity focus-within:opacity-100 hover:opacity-100 group-hover/section:opacity-100">
+                  <span className="mr-0.5">
+                    {verdicts[b.key] === "more"
+                      ? "More of this tomorrow"
+                      : verdicts[b.key] === "less"
+                        ? "Less of this tomorrow"
+                        : "Useful?"}
+                  </span>
+                  <button
+                    onClick={() => rateSection(b.key, "more")}
+                    aria-label="More sections like this"
+                    className={cn(
+                      "rounded p-1 transition-colors hover:bg-accent hover:text-foreground",
+                      verdicts[b.key] === "more" && "text-brand",
+                    )}
+                  >
+                    <ThumbsUp className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={() => rateSection(b.key, "less")}
+                    aria-label="Fewer sections like this"
+                    className={cn(
+                      "rounded p-1 transition-colors hover:bg-accent hover:text-foreground",
+                      verdicts[b.key] === "less" && "text-brand",
+                    )}
+                  >
+                    <ThumbsDown className="h-3 w-3" />
+                  </button>
                 </div>
               )}
               {b.status === "streaming" && (
@@ -1531,7 +1622,7 @@ export function DailyBrief({
                 onClick={() => changeLevel("deep")}
                 className="underline decoration-border underline-offset-2 hover:decoration-foreground"
               >
-                go deep to cover them
+                cover them in ≈{estimateBriefMinutes("deep")} min
               </button>
             </>
           )}
