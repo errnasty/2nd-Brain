@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-05-a",
+    date: "August 5, 2026",
+    title: "Your reading progress stays put",
+    tag: "fix",
+    summary:
+      "Leaving the Today tab and coming back used to blank the reading progress bar and the XP line, as though the morning's reading hadn't counted. It had — the brief was just being redrawn as one block with no desks in it. Your progress, XP and streak now come back exactly as you left them.",
+    items: [
+      "Sections you haven't got to yet are still live: you can finish the brief later in the day and the rest of the XP lands normally.",
+      "\"Outside your feeds\" links work after a revisit too, instead of going flat.",
+    ],
+  },
+  {
     id: "2026-08-04-b",
     date: "August 4, 2026",
     title: "A brief that remembers, and feeds that group",
