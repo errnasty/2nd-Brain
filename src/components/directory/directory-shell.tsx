@@ -43,6 +43,8 @@ import { toast } from "sonner";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { pushRecent } from "@/lib/directory/recently-viewed";
 import { replaceUrl } from "@/lib/ui/replace-url";
+import { lastResolvedIndex, resolveVirtualRows } from "@/lib/ui/virtual-rows";
+import { folderPathTo } from "@/lib/directory/folder-tree";
 import { BulkActionBar } from "./bulk-action-bar";
 import { FolderBulkActionBar } from "./folder-bulk-action-bar";
 
@@ -208,6 +210,16 @@ export function DirectoryShell({
         setExtraTags((prev) => ({ ...prev, ...r.itemTagsById }));
         setPageHasMore(r.hasMore);
         setOffset((o) => o + r.items.length);
+      } catch {
+        // The action has no error handling of its own, and React sends a
+        // rejection thrown inside an async transition to the global error
+        // handler — so without this, a failed page left the list simply
+        // refusing to grow, with nothing said and nothing to retry. Stop
+        // paging and say so. Stopping is not politeness: the end-of-list
+        // sentinel re-fires the moment `loadingMore` clears, so leaving it
+        // armed would retry a just-failed server on every frame.
+        setPageHasMore(false);
+        toast.error("Couldn't load more items. Reload the page to try again.");
       } finally {
         setLoadingMore(false);
       }
@@ -542,18 +554,13 @@ export function DirectoryShell({
     });
   }
 
-  // Ancestor chain for the current folder (breadcrumb), root-first.
-  const folderPath = useMemo(() => {
-    if (!activeFolder || activeFolder === "unsorted") return [];
-    const byId = new Map(folders.map((f) => [f.id, f]));
-    const path: DirectoryFolder[] = [];
-    let cur = byId.get(activeFolder);
-    while (cur) {
-      path.unshift(cur);
-      cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-    }
-    return path;
-  }, [folders, activeFolder]);
+  // Ancestor chain for the current folder (breadcrumb), root-first. The walk
+  // is cycle-guarded: a folder that is its own ancestor used to spin this
+  // `while` forever, freezing the tab mid-render. See `folder-tree.ts`.
+  const folderPath = useMemo(
+    () => (activeFolder === "unsorted" ? [] : folderPathTo(folders, activeFolder)),
+    [folders, activeFolder],
+  );
 
   // Inline folder rename from the header (real folders only).
   const canRename = !!activeFolder && activeFolder !== "unsorted" && activeTagIds.length === 0;
@@ -996,8 +1003,13 @@ function VirtualizedDirectoryList({
     measureElement: (el) => el.getBoundingClientRect().height,
   });
 
-  const virtualRows = virtualizer.getVirtualItems();
-  const lastIndex = virtualRows.length > 0 ? virtualRows[virtualRows.length - 1].index : 0;
+  // Rows the virtualizer can't back with an item are dropped rather than
+  // dereferenced: deleting (which hides rows for six seconds before the server
+  // ever hears about it) and the type/age filters both shrink this list
+  // underneath the geometry, and one unbacked row used to take the whole
+  // Directory down with it. See `src/lib/ui/virtual-rows.ts`.
+  const virtualRows = resolveVirtualRows(virtualizer.getVirtualItems(), items);
+  const lastIndex = lastResolvedIndex(virtualRows);
   useEffect(() => {
     if (hasMore && !loadingMore && lastIndex >= items.length - 5) {
       onReachEnd();
@@ -1010,8 +1022,7 @@ function VirtualizedDirectoryList({
         className="relative w-full divide-y divide-border"
         style={{ height: `${virtualizer.getTotalSize()}px` }}
       >
-        {virtualRows.map((row) => {
-          const item = items[row.index];
+        {virtualRows.map(({ row, item }) => {
           return (
             <div
               key={item.id}

@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-05-b",
+    date: "August 5, 2026",
+    title: "The Directory stops falling over",
+    tag: "fix",
+    summary:
+      "A long session in the Directory could end with \"Something went wrong\" and the whole view gone. The most likely cause was a list row losing the item behind it — usually just after deleting or filtering — which took the entire page down instead of the one row. Several quieter faults went with it.",
+    items: [
+      "Deleting, filtering and grouping no longer risk crashing the list in either the Directory or Feeds.",
+      "If the app updates while you have a tab open, you now get \"A new version is available\" and a reload that actually fixes it, instead of a Try again button that never works.",
+      "Scrolling to the end of a long library tells you when it can't fetch more, rather than quietly stopping.",
+      "Opening an item with a bad connection says so instead of showing a blank panel.",
+      "Folders that somehow ended up inside each other no longer disappear from the sidebar or hang the page when opened.",
+    ],
+  },
+  {
     id: "2026-08-05-a",
     date: "August 5, 2026",
     title: "Your reading progress stays put",

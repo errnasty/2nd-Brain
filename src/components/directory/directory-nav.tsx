@@ -46,6 +46,7 @@ import {
   renameDirectoryFolderAction,
 } from "@/app/(app)/directory/actions";
 import type { DirectoryFolder } from "@/lib/db/schema";
+import { buildFolderTree, type FolderTreeNode } from "@/lib/directory/folder-tree";
 import type { FolderTreeItem } from "@/lib/directory/query";
 import { usePromptText } from "@/components/ui/app-dialogs";
 // Dialogs are rare, one-off actions — deferred so the folder tree isn't paying
@@ -582,19 +583,7 @@ export function DirectoryNav({
 
 // ── Folder tree (nested) ──────────────────────────────────────────────
 
-type FolderNode = { folder: DirectoryFolder; children: FolderNode[] };
-
-function buildFolderTree(folders: DirectoryFolder[]): FolderNode[] {
-  const byId = new Map<string, FolderNode>();
-  folders.forEach((f) => byId.set(f.id, { folder: f, children: [] }));
-  const roots: FolderNode[] = [];
-  for (const node of byId.values()) {
-    const parent = node.folder.parentId ? byId.get(node.folder.parentId) : null;
-    if (parent) parent.children.push(node);
-    else roots.push(node);
-  }
-  return roots;
-}
+type FolderNode = FolderTreeNode<DirectoryFolder>;
 
 const TREE_KIND_ICON: Record<FolderTreeItem["kind"], React.ReactNode> = {
   saved_article: <Newspaper className="h-3.5 w-3.5 shrink-0" />,
