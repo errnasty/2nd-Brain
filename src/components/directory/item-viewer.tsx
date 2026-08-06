@@ -209,6 +209,12 @@ export function ItemViewer({
           editBufRef.current = { id: data.id, kind: data.kind, title: data.title, content: body };
         }
       })
+      // Without this the rejection was unhandled: offline, or a dropped
+      // connection, left the viewer showing an empty item with no explanation
+      // and an error only the console ever saw.
+      .catch(() => {
+        if (!aborted) toast.error("Couldn't load this item — check your connection.");
+      })
       .finally(() => !aborted && setFullLoading(false));
 
     return () => {
@@ -266,9 +272,15 @@ export function ItemViewer({
             .then((res) => {
               if (aborted || !res?.content) return;
               setArticleData((prev) => (prev ? { ...prev, fullText: res.content } : prev));
-            });
+            })
+            // Best-effort enrichment: the excerpt is already on screen, so a
+            // failure here costs the full text and nothing else. Swallowed
+            // rather than reported — but swallowed deliberately, not by
+            // leaving the rejection unhandled.
+            .catch(() => {});
         }
-      });
+      })
+      .catch(() => {});
     return () => {
       aborted = true;
     };

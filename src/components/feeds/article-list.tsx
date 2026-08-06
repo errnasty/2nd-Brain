@@ -44,6 +44,7 @@ import {
   type FeedSort,
 } from "@/lib/feeds/sort";
 import { groupStories, storyReadTargets } from "@/lib/feeds/stories";
+import { resolveVirtualRows } from "@/lib/ui/virtual-rows";
 import { trendReason } from "@/lib/feeds/trend-reason";
 
 const FEED_PAGE_SIZE = 100;
@@ -790,11 +791,8 @@ function VirtualizedArticleList({
     // One viewport of clearance: the row must be well and truly behind you.
     const cutoff = top - Math.max(120, el.clientHeight * 0.5);
     const past: string[] = [];
-    for (const vi of virtualizer.getVirtualItems()) {
-      if (vi.start + vi.size < cutoff) {
-        const it = items[vi.index];
-        if (it && it.readStatus === "unread") past.push(it.id);
-      }
+    for (const { row, item } of resolveVirtualRows(virtualizer.getVirtualItems(), items)) {
+      if (row.start + row.size < cutoff && item.readStatus === "unread") past.push(item.id);
     }
     if (past.length > 0) onAutoRead(past);
   }
@@ -818,8 +816,10 @@ function VirtualizedArticleList({
         className="relative w-full divide-y divide-border"
         style={{ height: `${virtualizer.getTotalSize()}px` }}
       >
-        {virtualizer.getVirtualItems().map((row) => {
-          const item = items[row.index];
+        {/* Rows with no item behind them are skipped, not dereferenced —
+            grouping stories collapses this list sharply, and the geometry is
+            briefly ahead of the data when it does. See virtual-rows.ts. */}
+        {resolveVirtualRows(virtualizer.getVirtualItems(), items).map(({ row, item }) => {
           const isSelected = selectedId === item.id;
           const reason = trendReason(item);
           const otherTellings = tellings.get(item.id)?.length ?? 0;

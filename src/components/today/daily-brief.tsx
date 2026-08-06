@@ -52,6 +52,11 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import { BRIEF_TOPICS } from "@/lib/today/topics";
+import {
+  assembleBrief,
+  blockMarkdown,
+  sectionsMatchContent,
+} from "@/lib/today/brief-blocks";
 import { useBriefReading } from "@/components/today/use-brief-reading";
 import { BriefProgressBar } from "@/components/today/brief-progress-bar";
 import { toast } from "sonner";
@@ -72,6 +77,19 @@ type BriefEntry = {
   sources: BriefSource[];
   usage: Usage | null;
   fingerprint: string | null;
+  /**
+   * The brief's sections, kept alongside the flat markdown.
+   *
+   * The markdown is what gets stored server-side and archived — one document,
+   * which is the right shape for reading and for a second device. But the
+   * reading progress bar, the "N of M desks read" line and the per-section
+   * feedback are all keyed by SECTION, so a brief restored as one opaque
+   * document had nothing for them to attach to and they vanished on every
+   * revisit. The reading state itself was never lost (it lives in
+   * `brief.reading.v1`, keyed by day); there was simply nothing on screen for
+   * it to decorate.
+   */
+  sections?: StoredSection[];
 };
 
 const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
@@ -189,15 +207,40 @@ type Block = {
   externals?: PlanSection["externals"];
 };
 
-function blockMarkdown(b: Block): string {
-  const text = b.text.trim();
-  if (!text) return "";
-  return b.label ? `### ${b.label}\n\n${text}` : text;
+/** A finished section, as cached for the next visit. */
+type StoredSection = {
+  key: string;
+  kind: Exclude<Block["kind"], "stored">;
+  label: string;
+  text: string;
+  /** Kept so the "outside your feeds" chips still resolve after a revisit. */
+  externals?: PlanSection["externals"];
+};
+
+/** Cache the sections of a finished brief. Dropped: `refs` (never read after
+ *  generation) and `status`, which is "done" by definition here. */
+function toStoredSections(blocks: Block[]): StoredSection[] {
+  return blocks
+    .filter((b): b is Block & { kind: StoredSection["kind"] } => b.kind !== "stored")
+    .map((b) => ({
+      key: b.key,
+      kind: b.kind,
+      label: b.label,
+      text: b.text,
+      externals: b.externals,
+    }));
 }
 
-/** The whole brief as one markdown document — what gets cached and archived. */
-function assembleBrief(blocks: Block[]): string {
-  return blocks.map(blockMarkdown).filter(Boolean).join("\n\n");
+function blocksFromSections(sections: StoredSection[]): Block[] {
+  return sections.map((s) => ({
+    key: s.key,
+    kind: s.kind,
+    label: s.label,
+    refs: [],
+    text: s.text,
+    status: "done" as const,
+    externals: s.externals,
+  }));
 }
 
 /** Run `fn` over `items` with at most `limit` in flight. Keeps a deep brief's
@@ -309,21 +352,32 @@ export function DailyBrief({
 
     // Hydrate a stored brief (from the server prop, else localStorage) so the
     // page paints instantly. Returns true when something was shown.
-    function hydrate(b: {
-      content: string;
-      generatedAt: string;
-      sources?: BriefSource[];
-      usage?: Usage | null;
-      fingerprint?: string | null;
-      settingsChanged?: boolean;
-    }): boolean {
+    function hydrate(
+      b: {
+        content: string;
+        generatedAt: string;
+        sources?: BriefSource[];
+        usage?: Usage | null;
+        fingerprint?: string | null;
+        settingsChanged?: boolean;
+      },
+      sections?: StoredSection[] | null,
+    ): boolean {
       if (!b.content) return false;
       const genDate = new Date(b.generatedAt);
       cacheHydratedRef.current = true;
       producedRef.current = false;
-      setBlocks([
-        { key: "stored", kind: "stored", label: "", refs: [], text: b.content, status: "done" },
-      ]);
+      // Restore the real sections when we have them: everything keyed by
+      // section — the progress bar, the desks-read count, the XP row, the
+      // per-section feedback — is dead weight against a single opaque block,
+      // which is why coming back to Today looked like the reading had been
+      // thrown away. Falls back to the flat document when the structure isn't
+      // available (a second device, which only ever had the markdown).
+      setBlocks(
+        sections && sections.length > 0
+          ? blocksFromSections(sections)
+          : [{ key: "stored", kind: "stored", label: "", refs: [], text: b.content, status: "done" }],
+      );
       setSources(b.sources ?? []);
       setUsage(b.usage ?? null);
       setFingerprint(b.fingerprint ?? null);
@@ -336,29 +390,37 @@ export function DailyBrief({
       return true;
     }
 
+    // The local cache is read up front because it is the only copy that
+    // carries the section structure — the server row stores the assembled
+    // markdown, which is the right thing to store and the wrong thing to
+    // rebuild a progress bar from.
+    let local: BriefEntry | null = null;
+    try {
+      const raw = localStorage.getItem(BRIEF_CACHE_KEY);
+      if (raw) local = JSON.parse(raw) as BriefEntry;
+    } catch {
+      // ignore parse errors
+    }
+    const cachedSections = local?.sections?.length ? local.sections : null;
+
     let shown = false;
     if (initialBrief) {
-      shown = hydrate(initialBrief);
+      // The server copy wins on content — it's authoritative and cross-device.
+      // Its sections come from the local cache only when they assemble to
+      // exactly the brief being shown; anything else means this brief was
+      // generated somewhere else, and decorating it with another brief's
+      // section boundaries would put the read marks on the wrong desks.
+      const structure =
+        cachedSections && sectionsMatchContent(cachedSections, initialBrief.content)
+          ? cachedSections
+          : null;
+      shown = hydrate(initialBrief, structure);
     }
-    if (!shown) {
-      try {
-        const raw = localStorage.getItem(BRIEF_CACHE_KEY);
-        if (raw) {
-          const parsed = JSON.parse(raw) as {
-            content: string;
-            generatedAt: string;
-            sources?: BriefSource[];
-            usage?: Usage;
-            fingerprint?: string;
-          };
-          // Same-day local cache → show it; prior-day → leave it so the
-          // auto-stream effect generates fresh (no stored server brief either).
-          if (parsed.content && isSameDay(new Date(parsed.generatedAt), new Date())) {
-            hydrate(parsed);
-          }
-        }
-      } catch {
-        // ignore parse errors
+    if (!shown && local) {
+      // Same-day local cache → show it; prior-day → leave it so the
+      // auto-stream effect generates fresh (no stored server brief either).
+      if (local.content && isSameDay(new Date(local.generatedAt), new Date())) {
+        hydrate(local, cachedSections);
       }
     }
 
@@ -718,6 +780,7 @@ export function DailyBrief({
       sources,
       usage: usageRef.current.totalTokens > 0 ? { ...usageRef.current } : null,
       fingerprint,
+      sections: toStoredSections(blocks),
     };
     try {
       localStorage.setItem(BRIEF_CACHE_KEY, JSON.stringify(entry));
@@ -725,8 +788,12 @@ export function DailyBrief({
       // quota errors — silently ignore
     }
     setHistory((prev) => {
+      // The archive keeps the document, not the structure: a past brief is
+      // rendered as one read-only block, and carrying every section's text a
+      // second time would double the size of ten stored briefs for nothing.
+      const archived: BriefEntry = { ...entry, sections: undefined };
       // Replace rather than prepend when a retry re-persists the same brief.
-      const next = [entry, ...prev.filter((e) => e.generatedAt !== entry.generatedAt)].slice(
+      const next = [archived, ...prev.filter((e) => e.generatedAt !== archived.generatedAt)].slice(
         0,
         MAX_HISTORY,
       );

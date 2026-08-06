@@ -22,6 +22,7 @@ import { chunkText } from "@/lib/documents/chunker";
 import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
+import { subtreeFolderIds } from "@/lib/directory/folder-tree";
 import { distill } from "@/lib/ai/distill";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
@@ -330,21 +331,10 @@ export async function deleteDirectoryFolderAction(
     .select({ id: directoryFolders.id, parentId: directoryFolders.parentId })
     .from(directoryFolders)
     .where(eq(directoryFolders.userId, user.id));
-  const childrenOf = new Map<string, string[]>();
-  for (const f of allFolders) {
-    if (!f.parentId) continue;
-    const list = childrenOf.get(f.parentId) ?? [];
-    list.push(f.id);
-    childrenOf.set(f.parentId, list);
-  }
-  const descendantIds: string[] = [];
-  const queue = [...(childrenOf.get(folderId) ?? [])];
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
-    descendantIds.push(cur);
-    queue.push(...(childrenOf.get(cur) ?? []));
-  }
-  const subtreeIds = [folderId, ...descendantIds];
+  // Cycle-guarded: `parent_id` has nothing in the database stopping a folder
+  // from being its own ancestor, and this walk used to queue a repeated child
+  // forever — a delete that never returned. See `lib/directory/folder-tree.ts`.
+  const subtreeIds = subtreeFolderIds(allFolders, folderId);
 
   if (mode === "cascade") {
     const inSubtree = await db
@@ -375,7 +365,9 @@ export async function deleteDirectoryFolderAction(
       .set({ folderId: null })
       .where(and(inArray(directoryItems.folderId, subtreeIds), eq(directoryItems.userId, user.id)));
 
-    const directChildren = childrenOf.get(folderId) ?? [];
+    const directChildren = allFolders
+      .filter((f) => f.parentId === folderId && f.id !== folderId)
+      .map((f) => f.id);
     if (directChildren.length > 0) {
       const grandparentId = allFolders.find((f) => f.id === folderId)?.parentId ?? null;
       await db
