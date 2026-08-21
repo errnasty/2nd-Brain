@@ -30,6 +30,31 @@ export const maxDuration = 60;
 // before the answer starts, not a response-header deadline.
 const PRESTREAM_TIMEOUT_MS = 8000;
 
+/**
+ * The inline backfill gets its own, much larger budget.
+ *
+ * It was sharing PRESTREAM_TIMEOUT_MS, which made the auto-heal path
+ * decorative: embedding 60 items cannot finish in 8 seconds, so on the exact
+ * library this exists to rescue — one whose embeddings have never been
+ * generated — it timed out every time and Ask answered from the directory map
+ * alone. It only runs when retrieval found NOTHING, so paying a minute there
+ * is worth it; the alternative is an answer with no sources at all.
+ */
+const BACKFILL_TIMEOUT_MS = 60_000;
+
+/**
+ * Budgets for the two model-backed refinements.
+ *
+ * Both were set when a whole request had ~10 seconds to live, so they had to
+ * be small enough to leave room for the answer itself. They no longer compete
+ * with a response deadline — they only decide how long the reader waits before
+ * text starts — and at 5-6 seconds both were timing out on ordinary load and
+ * silently degrading: the query went unrewritten (follow-ups like "the second
+ * one" retrieved nothing useful) and the sources went unranked.
+ */
+const REWRITE_TIMEOUT_MS = 20_000;
+const RERANK_TIMEOUT_MS = 20_000;
+
 // Marker appended after the answer text carrying token usage as JSON. The
 // client splits on this and never renders it. NOT exported — Next.js route
 // modules only allow specific named exports.
@@ -205,7 +230,7 @@ export async function POST(req: Request) {
         // and optionally fan out sub-queries. Fail-soft + time-boxed → raw question.
         let searchQueries = [question];
         try {
-          const rw = await withTimeout(rewriteQuery(question, history), 5000, "rewrite");
+          const rw = await withTimeout(rewriteQuery(question, history), REWRITE_TIMEOUT_MS, "rewrite");
           if (rw.queries.length > 0) searchQueries = rw.queries;
         } catch {
           // fall back to the raw question
@@ -256,7 +281,8 @@ export async function POST(req: Request) {
         // then retry once. Time-boxed so a slow backfill can't hang the request.
         if (sources.length === 0) {
           try {
-            const result = await withTimeout(backfillEmbeddings(userId, 60), PRESTREAM_TIMEOUT_MS, "backfill");
+            send("_(Preparing your library for search — this happens once.)_\n\n");
+            const result = await withTimeout(backfillEmbeddings(userId, 60), BACKFILL_TIMEOUT_MS, "backfill");
             if (result.articlesEmbedded + result.chunksEmbedded + result.notesEmbedded > 0) {
               sources = await withTimeout(
                 retrieveFromDirectory(userId, searchQueries[0], 20),
@@ -275,7 +301,7 @@ export async function POST(req: Request) {
         // closeness). Fail-soft + time-boxed → falls back to similarity order.
         if (sources.length > 8) {
           try {
-            sources = await withTimeout(rerankSources(question, sources, 10), 6000, "rerank");
+            sources = await withTimeout(rerankSources(question, sources, 10), RERANK_TIMEOUT_MS, "rerank");
           } catch {
             sources = sources.slice(0, 10);
           }

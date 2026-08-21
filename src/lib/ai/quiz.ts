@@ -1,7 +1,7 @@
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
-import { userFastModel, userSmartModel } from "./user-model";
+import { userSmartModel } from "./user-model";
 import { extractJsonValues } from "./generate-json";
 import {
   clamp,
@@ -9,17 +9,18 @@ import {
   QUIZ_BATCH,
   DEFAULT_STUDY_DIFFICULTY,
   QUIZ_COUNT_RANGE,
+  truncateText,
   type StudyDifficulty,
 } from "./study-options";
 
 export { QUIZ_BATCH };
 
-// Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
-// bounded output (mirrors study-plan.ts). Desktop runs the server locally with
-// no such limit, and a quiz can span several documents, so it gets the
-// stronger model + a bigger budget.
-const isDesktop = process.env.APP_RUNTIME === "desktop";
-const MAX_OUTPUT_TOKENS = isDesktop ? 6000 : 3000;
+// The cloud used to be held to a fast model and half the output budget so a
+// batch could finish inside a ~10s serverless limit. Railway has no such limit,
+// and the constraint was never about quiz quality — it was about the host. Both
+// runtimes now get the stronger model and the full budget, so a cloud quiz is
+// the same quiz the desktop app has always produced (mirrors study-plan.ts).
+const MAX_OUTPUT_TOKENS = 6000;
 
 /**
  * The question shape the app uses. Multiple-choice and open-ended are genuinely
@@ -51,18 +52,33 @@ export type GeneratedQuizQuestion =
  * by `normalizeQuestion`, where a malformed question costs one question instead
  * of the entire quiz.
  */
+/**
+ * Length limits live in `normalizeQuestion`, NOT here.
+ *
+ * A `.max()` in the schema does not shorten an over-long field — it fails
+ * validation, and one verbose explanation then discarded every question in the
+ * batch and forced the slower text-mode fallback. The fields are bounded on the
+ * way out instead, where over-length costs only the characters past the limit.
+ * `min` bounds stay: a two-character question is not salvageable.
+ */
 const FlatQuestionSchema = z.object({
   type: z.enum(["mc", "open"]),
-  question: z.string().min(3).max(300),
+  question: z.string().min(3),
   /** mc only: exactly 4 choices. */
-  options: z.array(z.string().min(1).max(200)).max(6).optional(),
+  options: z.array(z.string().min(1)).optional(),
   /** mc only: index into `options`. */
-  correctIndex: z.number().int().min(0).max(5).optional(),
+  correctIndex: z.number().int().min(0).optional(),
   /** mc only. */
-  explanation: z.string().max(400).optional(),
+  explanation: z.string().optional(),
   /** open only: the model answer. */
-  answer: z.string().max(800).optional(),
+  answer: z.string().optional(),
 });
+
+/** Rendered ceilings, applied after generation. */
+const MAX_QUESTION_CHARS = 300;
+const MAX_OPTION_CHARS = 200;
+const MAX_EXPLANATION_CHARS = 400;
+const MAX_ANSWER_CHARS = 800;
 
 type FlatQuestion = z.infer<typeof FlatQuestionSchema>;
 
@@ -74,32 +90,50 @@ type FlatQuestion = z.infer<typeof FlatQuestionSchema>;
  * difference between one bad question and no quiz at all.
  */
 export function normalizeQuestion(raw: FlatQuestion): GeneratedQuizQuestion | null {
-  const question = raw.question?.trim();
+  const question = truncateText(raw.question?.trim() ?? "", MAX_QUESTION_CHARS);
   if (!question) return null;
 
   if (raw.type === "mc") {
-    const options = (raw.options ?? []).map((o) => o.trim()).filter(Boolean);
+    // Blank options are dropped, but the model's `correctIndex` refers to the
+    // list it emitted — so the surviving options carry their ORIGINAL position
+    // and the index is remapped onto them. Filtering in place was silently
+    // mis-grading: ["A", "", "B", "C", "D"] with correctIndex 3 ("B") became
+    // ["A","B","C","D"] where index 3 is "D", and the quiz then marked the
+    // wrong answer correct with no sign anything was amiss.
+    const kept: { text: string; from: number }[] = [];
+    (raw.options ?? []).forEach((o, i) => {
+      const text = o.trim();
+      if (text) kept.push({ text, from: i });
+    });
     // Four is the contract the UI renders. Fewer can't be shown; more would
     // mean the correct index is anyone's guess.
-    if (options.length !== 4) return null;
+    if (kept.length !== 4) return null;
     // Budget/reasoning models sometimes cheat by repeating one distractor 4×.
     // Four genuinely DIFFERENT choices is the whole point of an MC question —
     // drop it rather than render four identical buttons.
-    if (new Set(options.map((o) => o.toLowerCase())).size !== 4) return null;
-    const correctIndex = raw.correctIndex ?? 0;
-    if (correctIndex < 0 || correctIndex >= options.length) return null;
+    if (new Set(kept.map((o) => o.text.toLowerCase())).size !== 4) return null;
+
+    // An absent correctIndex is NOT an answer of "A". Defaulting to 0 invented
+    // a grading key: the question rendered normally and marked the first option
+    // correct whatever the truth was. A question with no stated answer cannot
+    // be graded, so it is dropped.
+    if (raw.correctIndex === undefined) return null;
+    const correctIndex = kept.findIndex((o) => o.from === raw.correctIndex);
+    // The answer pointed at an option that was blank, or off the end.
+    if (correctIndex < 0) return null;
+
     return {
       type: "mc",
       question,
-      options,
+      options: kept.map((o) => truncateText(o.text, MAX_OPTION_CHARS)),
       correctIndex,
       // An explanation is genuinely useful but not worth losing a question
       // over — the score still works without it.
-      explanation: raw.explanation?.trim() || "",
+      explanation: truncateText(raw.explanation?.trim() ?? "", MAX_EXPLANATION_CHARS),
     };
   }
 
-  const answer = raw.answer?.trim();
+  const answer = truncateText(raw.answer?.trim() ?? "", MAX_ANSWER_CHARS);
   if (!answer) return null;
   return { type: "open", question, answer };
 }
@@ -135,6 +169,17 @@ export function extractQuestions(text: string): FlatQuestion[] {
 export type QuizGeneration = {
   questions: GeneratedQuizQuestion[];
   /**
+   * Questions the model returned that could not be used — no stated answer,
+   * options that weren't four distinct choices, an index pointing nowhere.
+   *
+   * Reported because the shortfall is otherwise invisible in a way that reads
+   * as a bug: asking for 10 and being handed 7 looks like the setting was
+   * ignored, when the model in fact produced 10 and three of them were not
+   * gradeable. Saying so is the difference between a quiz that looks broken
+   * and one that explains itself.
+   */
+  dropped?: number;
+  /**
    * Why generation produced nothing. Propagated so the UI can say something
    * true instead of "try again" — the old code logged this and returned [],
    * which made every distinct failure look identical to the user.
@@ -142,26 +187,36 @@ export type QuizGeneration = {
   error?: string;
 };
 
+/**
+ * How much of each source, and of all of them together, the quiz writer reads.
+ *
+ * Raised from 5k/20k. At the old figures a quiz over three documents saw only
+ * the opening of each, so questions clustered on introductions and anything
+ * past the first few pages was untestable. These are still bounded rather than
+ * unlimited because `combineSources` is re-sent with EVERY batch — the input
+ * cost is paid once per batch, not once per quiz.
+ */
+const PER_SOURCE_CHARS = 10_000;
+const TOTAL_SOURCE_CHARS = 40_000;
+
 /** The prompt sources, prepared once and reused by every batch. */
 function combineSources(sources: { title: string; text: string }[]): string {
   return sources
     .filter((s) => s.text.trim())
-    .map((s, i) => `Document ${i + 1}: ${s.title}\n${s.text.slice(0, 5000)}`)
+    .map((s, i) => `Document ${i + 1}: ${s.title}\n${s.text.slice(0, PER_SOURCE_CHARS)}`)
     .join("\n\n---\n\n")
-    .slice(0, 20_000);
+    .slice(0, TOTAL_SOURCE_CHARS);
 }
 
 /**
  * Generate ONE batch of questions — a single model call.
  *
- * This is the unit of work that fits a serverless request. Netlify kills a
- * function at ~10s regardless of `maxDuration` (that export is Vercel-only),
- * and a full quiz is several model calls, so anything that loops over batches
- * inside one HTTP request is running a race it cannot win: the request dies
- * part-way and the caller gets a truncated HTML error page instead of a
- * result, which surfaces as "An unexpected response was received from the
- * server". Callers on the cloud runtime therefore drive one batch per request
- * — the same shape the Daily Brief and ThinkTank already use.
+ * This is the unit of work one request commits. A full quiz is several model
+ * calls; looping over them inside one HTTP request meant a severed response
+ * lost everything and surfaced as "An unexpected response was received from the
+ * server". Callers therefore drive one batch per request — the same shape the
+ * Daily Brief and ThinkTank use — so questions land as they are written and a
+ * failed batch costs only itself.
  *
  * `existing` is the questions already written for this quiz; later batches are
  * shown them so they don't cheerfully ask the same thing again — the most
@@ -207,7 +262,7 @@ Output ONLY a JSON object with this shape — no prose, no code fence:
       : `${text}\n\n---\nQuestions already written (do NOT repeat these):\n${existing
           .map((q) => `- ${q}`)
           .join("\n")}`;
-  const model = await (isDesktop ? userSmartModel() : userFastModel());
+  const model = await userSmartModel();
   // Sized to the batch, not the quiz — this is what keeps each call short.
   const maxTokens = Math.min(MAX_OUTPUT_TOKENS, 400 + want * 320);
 
@@ -244,9 +299,10 @@ Output ONLY a JSON object with this shape — no prose, no code fence:
   const normalized = flat
     .map(normalizeQuestion)
     .filter((q): q is GeneratedQuizQuestion => q !== null);
+  const dropped = flat.length - normalized.length;
   return normalized.length > 0
-    ? { questions: normalized }
-    : { questions: [], error: "The model returned no usable questions" };
+    ? { questions: normalized, dropped }
+    : { questions: [], dropped, error: "The model returned no usable questions" };
 }
 
 /**

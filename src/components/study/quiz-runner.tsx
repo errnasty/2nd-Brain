@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Brain, Check, ChevronRight, Loader2, RotateCcw, X } from "lucide-react";
+import { Brain, Check, ChevronRight, Loader2, RotateCcw, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import type { OpenGrade } from "@/lib/ai/grade-open";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -34,6 +36,11 @@ export function QuizRunner({
   const [answers, setAnswers] = useState<QuizAnswer[]>([]);
   const [mcSelected, setMcSelected] = useState<number | null>(null);
   const [openRevealed, setOpenRevealed] = useState(false);
+  // What the learner wrote before revealing, and the model's read on it.
+  // Optional throughout: the quiz works exactly as before if you type nothing.
+  const [openDraft, setOpenDraft] = useState("");
+  const [grade, setGrade] = useState<OpenGrade | null>(null);
+  const [grading, setGrading] = useState(false);
   const [submitPhase, setSubmitPhase] = useState<"idle" | "submitting" | "error">("idle");
   const [result, setResult] = useState<{ score: number; total: number } | null>(null);
   const [attemptId, setAttemptId] = useState<string | null>(null);
@@ -144,6 +151,9 @@ export function QuizRunner({
     setAnswers(nextAnswers);
     setMcSelected(null);
     setOpenRevealed(false);
+    setOpenDraft("");
+    setGrade(null);
+    setGrading(false);
     setIndex((i) => i + 1);
     if (nextAnswers.length >= total) submit(nextAnswers);
   }
@@ -153,6 +163,9 @@ export function QuizRunner({
     setAnswers([]);
     setMcSelected(null);
     setOpenRevealed(false);
+    setOpenDraft("");
+    setGrade(null);
+    setGrading(false);
     setSubmitPhase("idle");
     setResult(null);
     setAttemptId(null);
@@ -283,23 +296,125 @@ export function QuizRunner({
             )}
           </div>
         ) : !openRevealed ? (
-          <Button onClick={() => setOpenRevealed(true)}>Show answer</Button>
+          <div className="flex w-full flex-col gap-3">
+            {/* Optional. Writing the answer down before seeing it is the whole
+                point of an open question — and it is what makes the "check my
+                answer" step below possible at all. Skipping it leaves the
+                original reveal-and-self-grade flow untouched. */}
+            <Textarea
+              value={openDraft}
+              onChange={(e) => setOpenDraft(e.target.value)}
+              placeholder="Write your answer first (optional)…"
+              rows={3}
+              className="resize-none"
+            />
+            <Button className="self-center" onClick={() => setOpenRevealed(true)}>
+              Show answer
+            </Button>
+          </div>
         ) : (
           <div className="flex w-full flex-col gap-4">
+            {openDraft.trim() && (
+              <div className="rounded-lg border border-border p-3 text-sm leading-relaxed">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Your answer
+                </div>
+                <div className="whitespace-pre-wrap">{openDraft}</div>
+              </div>
+            )}
             <div className="rounded-lg border border-border bg-muted/30 p-4 text-sm leading-relaxed">
+              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Reference answer
+              </div>
               {q.answer}
             </div>
+
+            {openDraft.trim() && !grade && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="self-center gap-1.5"
+                disabled={grading}
+                onClick={async () => {
+                  setGrading(true);
+                  try {
+                    const res = await fetch("/api/study/grade-open", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        quizId: quiz.id,
+                        questionId: q.id,
+                        answer: openDraft,
+                      }),
+                    });
+                    const data = (await res.json()) as { grade?: OpenGrade | null; error?: string };
+                    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+                    // A null grade is not an error — it means grading is
+                    // unavailable. Self-grading below still works.
+                    if (data.grade) setGrade(data.grade);
+                    else toast.message("Couldn't check this one — grade it yourself below.");
+                  } catch (err) {
+                    toast.error(
+                      `Couldn't check your answer: ${err instanceof Error ? err.message : "error"}`,
+                    );
+                  } finally {
+                    setGrading(false);
+                  }
+                }}
+              >
+                {grading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                Check my answer
+              </Button>
+            )}
+
+            {grade && (
+              <div
+                className={cn(
+                  "rounded-lg border p-3 text-sm leading-relaxed",
+                  grade.verdict === "correct"
+                    ? "border-emerald-500/40 bg-emerald-500/5"
+                    : grade.verdict === "partial"
+                      ? "border-yellow-500/40 bg-yellow-500/5"
+                      : "border-destructive/40 bg-destructive/5",
+                )}
+              >
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {grade.verdict === "correct"
+                    ? "Looks right"
+                    : grade.verdict === "partial"
+                      ? "Partly there"
+                      : "Not quite"}{" "}
+                  · you still decide
+                </div>
+                {grade.feedback}
+              </div>
+            )}
+
+            {/* The self-grade stays the score. The check above only suggests —
+                see the note in lib/ai/grade-open.ts for why a model must not
+                write to your results. "partial" suggests "Missed it": recall
+                that needed prompting has not landed yet. */}
             <div className="flex justify-center gap-2">
               <Button
                 variant="outline"
-                className="gap-1.5 hover:border-destructive hover:text-destructive"
+                className={cn(
+                  "gap-1.5 hover:border-destructive hover:text-destructive",
+                  grade && grade.verdict !== "correct" && "border-destructive text-destructive",
+                )}
                 onClick={() => advance({ questionId: q.id, type: "open", selfCorrect: false })}
               >
                 <X className="h-3.5 w-3.5" /> Missed it
               </Button>
               <Button
                 variant="outline"
-                className="gap-1.5 hover:border-emerald-500 hover:text-emerald-600"
+                className={cn(
+                  "gap-1.5 hover:border-emerald-500 hover:text-emerald-600",
+                  grade?.verdict === "correct" && "border-emerald-500 text-emerald-600",
+                )}
                 onClick={() => advance({ questionId: q.id, type: "open", selfCorrect: true })}
               >
                 <Check className="h-3.5 w-3.5" /> Got it

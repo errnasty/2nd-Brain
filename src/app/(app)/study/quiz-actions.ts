@@ -41,13 +41,14 @@ export async function fetchQuizItemOptionsAction(): Promise<QuizItemOption[]> {
 /**
  * Quiz generation is STAGGERED: one model call per request.
  *
- * A quiz is several batches of questions, and this deploys to Netlify, where a
- * function is killed at ~10s no matter what `maxDuration` says (that export is
- * Vercel-only). Looping over batches inside a single action therefore ran a
- * race it could not win — the request died part-way, and because a killed
+ * A quiz is several batches of questions. Looping over them inside a single
+ * action was a race that could not be won on the old serverless host, which
+ * killed a function at ~10s: the request died part-way, and because a killed
  * function returns an HTML error page rather than an RSC payload, the user saw
  * Next's generic "An unexpected response was received from the server" with no
- * hint that a timeout caused it.
+ * hint that a timeout caused it. Railway's ceiling is minutes, but staggering
+ * is kept — questions land as they are written, and one failed batch doesn't
+ * cost the whole quiz.
  *
  * So `generateQuizAction` creates the quiz and writes the FIRST batch, and
  * `continueQuizAction` adds one batch per call until the quiz is full. The
@@ -69,6 +70,8 @@ export type QuizProgress = {
   done: boolean;
   /** This round added nothing usable. Not fatal — see `continueQuizAction`. */
   stalled?: boolean;
+  /** Questions this round's model call produced that were not gradeable. */
+  dropped?: number;
   xp?: Awaited<ReturnType<typeof awardXp>>;
 };
 export type QuizStepResult = QuizProgress | { ok: false; error: string };
@@ -110,7 +113,7 @@ export async function generateQuizAction(itemIds: string[]): Promise<QuizStepRes
     if (sources.length === 0) return { ok: false as const, error: "None of the selected items were found" };
 
     const { total, difficulty } = await quizPrefs(user.id);
-    const { questions, error: genError } = await generateQuizBatch(
+    const { questions, dropped, error: genError } = await generateQuizBatch(
       sources.map(({ title, text }) => ({ title, text })),
       { want: Math.min(QUIZ_BATCH, total), difficulty },
     );
@@ -165,6 +168,7 @@ export async function generateQuizAction(itemIds: string[]): Promise<QuizStepRes
       count: withIds.length,
       total,
       done: withIds.length >= total,
+      dropped,
       xp,
     };
   } catch (err) {
@@ -204,7 +208,7 @@ export async function continueQuizAction(quizId: string): Promise<QuizStepResult
       return { ok: true as const, id: row.id, count: have, total, done: true };
     }
 
-    const { questions } = await generateQuizBatch(sources, {
+    const { questions, dropped } = await generateQuizBatch(sources, {
       want: Math.min(QUIZ_BATCH, total - have),
       difficulty,
       existing: row.questions.map((q) => q.question),
@@ -216,7 +220,7 @@ export async function continueQuizAction(quizId: string): Promise<QuizStepResult
       // `normalizeQuestion` drops them. Declaring the quiz finished here meant a
       // single bad batch capped it permanently — asking for 10 and getting 7.
       // Report the stall instead and let the caller decide whether to try again.
-      return { ok: true as const, id: row.id, count: have, total, done: have >= total, stalled: true };
+      return { ok: true as const, id: row.id, count: have, total, done: have >= total, stalled: true, dropped };
     }
 
     const merged: QuizQuestion[] = [
@@ -235,6 +239,7 @@ export async function continueQuizAction(quizId: string): Promise<QuizStepResult
       count: merged.length,
       total,
       done: merged.length >= total,
+      dropped,
     };
   } catch (err) {
     const msg = dbErrorMessage(err, "Couldn't add more questions");

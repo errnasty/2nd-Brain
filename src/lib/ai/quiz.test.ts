@@ -14,6 +14,46 @@ describe("normalizeQuestion", () => {
     expect(normalizeQuestion(mc)).toEqual(mc);
   });
 
+  // Dropping blank options used to shift every later option down a slot while
+  // correctIndex stayed put, so the quiz confidently marked the wrong answer
+  // correct. The index must follow the option it pointed at.
+  it("keeps correctIndex on the same option after blanks are dropped", () => {
+    const result = normalizeQuestion({
+      type: "mc",
+      question: "Which is a transport protocol?",
+      options: ["HTTP", "   ", "TCP", "HTML", "CSS"],
+      correctIndex: 2,
+    });
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe("mc");
+    if (result?.type === "mc") {
+      expect(result.options).toEqual(["HTTP", "TCP", "HTML", "CSS"]);
+      expect(result.options[result.correctIndex]).toBe("TCP");
+    }
+  });
+
+  it("drops the question when the answer itself was the blank option", () => {
+    expect(
+      normalizeQuestion({
+        type: "mc",
+        question: "Which one?",
+        options: ["A", "  ", "B", "C", "D"],
+        correctIndex: 1,
+      }),
+    ).toBeNull();
+  });
+
+  // Defaulting a missing correctIndex to 0 fabricated a grading key: the
+  // question looked normal and marked option A correct regardless of truth.
+  it("refuses to invent an answer when the model omits correctIndex", () => {
+    const { correctIndex: _omitted, ...withoutAnswer } = mc;
+    expect(normalizeQuestion(withoutAnswer)).toBeNull();
+  });
+
+  it("still rejects an index past the end of the options", () => {
+    expect(normalizeQuestion({ ...mc, correctIndex: 5 })).toBeNull();
+  });
+
   it("passes a well-formed open question through", () => {
     expect(normalizeQuestion({ type: "open", question: "Why use UDP?", answer: "Lower latency." })).toEqual({
       type: "open",

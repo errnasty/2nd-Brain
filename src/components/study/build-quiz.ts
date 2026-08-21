@@ -45,15 +45,30 @@ const MAX_STALLS = 2;
  * setting of 10 reads as the setting being ignored, when what actually
  * happened is that the model could not produce usable questions for the rest.
  */
-export function quizReadyMessage(r: { count: number; total: number }): string {
+export function quizReadyMessage(r: { count: number; total: number; dropped?: number }): string {
   const noun = r.count === 1 ? "question" : "questions";
-  return r.count < r.total
-    ? `Quiz ready — ${r.count} of ${r.total} ${noun}`
-    : `Quiz ready — ${r.count} ${noun}`;
+  if (r.count >= r.total) return `Quiz ready — ${r.count} ${noun}`;
+  // Naming the cause matters. "7 of 10" on its own reads as the count setting
+  // being ignored; what actually happened is that the model wrote questions
+  // that could not be graded — no stated answer, or options that weren't four
+  // distinct choices — and those were dropped rather than shown.
+  const because =
+    r.dropped && r.dropped > 0
+      ? ` (${r.dropped} weren't usable)`
+      : "";
+  return `Quiz ready — ${r.count} of ${r.total} ${noun}${because}`;
 }
 
 export type BuildQuizResult =
-  | { ok: true; id: string; count: number; total: number; xp?: QuizProgress["xp"] }
+  | {
+      ok: true;
+      id: string;
+      count: number;
+      total: number;
+      /** Questions the model produced across all batches that weren't gradeable. */
+      dropped: number;
+      xp?: QuizProgress["xp"];
+    }
   | { ok: false; error: string };
 
 export async function buildQuiz(
@@ -71,6 +86,7 @@ export async function buildQuiz(
     const { id, total, xp } = first;
     let count = first.count;
     let done = first.done;
+    let dropped = first.dropped ?? 0;
     const report = () => {
       updateGenerationJob(jobId, { done: count, total });
       opts?.onProgress?.(count, total);
@@ -84,6 +100,7 @@ export async function buildQuiz(
       // is takeable from the first batch on, so this means a shorter quiz —
       // never a lost one. That is the whole reason for batching.
       if (!next.ok) break;
+      dropped += next.dropped ?? 0;
       if (next.count <= count) {
         if (++stalls >= MAX_STALLS) break;
         continue;
@@ -94,7 +111,7 @@ export async function buildQuiz(
       report();
     }
 
-    return { ok: true, id, count, total, xp };
+    return { ok: true, id, count, total, dropped, xp };
   } finally {
     finishGenerationJob(jobId);
   }
