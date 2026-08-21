@@ -59,12 +59,46 @@ function build(): PostgresJsDatabase<Schema> {
   return pgDrizzle(client, { schema });
 }
 
-export const db = build();
+// Built on FIRST USE, not on import. `next build`'s "Collecting page data" step
+// imports every route module in the build container, where runtime secrets may
+// legitimately be absent — an eager build() turned a missing DATABASE_URL into
+// a hard build failure attributed to whichever route happened to be collected
+// first. Nothing here connects until a query actually runs, so a build no
+// longer depends on production database credentials.
+let instance: PostgresJsDatabase<Schema> | null = null;
+
+function getDb(): PostgresJsDatabase<Schema> {
+  return (instance ??= build());
+}
+
+/**
+ * Drizzle client. A Proxy so every call site keeps using `db.select()` etc.
+ * unchanged while construction stays deferred. Methods are bound to the real
+ * instance because Drizzle's builders rely on internal `this` state.
+ */
+export const db = new Proxy({} as PostgresJsDatabase<Schema>, {
+  get(_target, prop) {
+    const real = getDb() as unknown as Record<PropertyKey, unknown>;
+    const value = real[prop];
+    return typeof value === "function" ? value.bind(real) : value;
+  },
+  has(_target, prop) {
+    return prop in (getDb() as unknown as object);
+  },
+  set(_target, prop, value) {
+    (getDb() as unknown as Record<PropertyKey, unknown>)[prop] = value;
+    return true;
+  },
+});
+
 export { schema };
 
 export const dbKind: "pglite" | "postgres-js" = isDesktop ? "pglite" : "postgres-js";
 
 /** Raw PGlite client (desktop only) — for schema bootstrap + the sync engine. */
 export function getPgliteClient(): PgliteClient | null {
+  // Forces construction: `pgliteClient` is a side effect of build(), and these
+  // callers (schema bootstrap, sync engine) can run before any query has.
+  getDb();
   return pgliteClient;
 }

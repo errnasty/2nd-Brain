@@ -288,6 +288,12 @@ need to test something you haven't committed.
 
 ### Railway gotchas
 
+- **`Error: DATABASE_URL is not set` → `Failed to collect page data for /api/…`**
+  — the build no longer needs database credentials (the Drizzle client is
+  constructed on first query, not on import), so if you see this you are on an
+  older commit. Pull, or set `DATABASE_URL` as a service variable. Either way
+  the app still needs it at **runtime**. The route named in the error is
+  arbitrary — whichever one Next collected first.
 - **Build OOM / very slow builds** — the React Compiler plus `next build` is
   memory-hungry. If the build gets killed, raise the plan's memory or set
   `NODE_OPTIONS=--max-old-space-size=4096` as a service variable.
