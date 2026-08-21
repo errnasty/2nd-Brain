@@ -851,7 +851,7 @@ export function ArticleReader({
       >
         {/* Mobile-only back: returns to the article list (list is hidden on
             mobile while reading; side-by-side on md+ so no button needed). */}
-        <Button size="sm" variant="ghost" onClick={close} className="lg:hidden -ml-1 gap-1 px-2">
+        <Button size="sm" variant="ghost" onClick={close} className="lg:hidden -ml-1 shrink-0 gap-1 px-2">
           <ChevronLeft className="h-4 w-4" />
           Back
         </Button>
@@ -877,20 +877,26 @@ export function ArticleReader({
           <ChevronRight className="h-4 w-4" />
         </Button>
         <Separator orientation="vertical" className="mx-1 hidden h-5 sm:block" />
-        <div className="flex flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
+        {/* min-w-0 is load-bearing, not decoration. A flex item defaults to
+            min-width:auto, which refuses to shrink below its content — so a
+            long feed title pushed the trailing action buttons past the header's
+            overflow-hidden edge and they became unreachable on a phone. The
+            child's `truncate` cannot fix that on its own: the parent has to be
+            allowed to shrink first. */}
+        <div className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
           {article?.feedIconUrl ? (
             <Image
               src={article.feedIconUrl}
               alt=""
               width={16}
               height={16}
-              className="rounded-sm"
+              className="shrink-0 rounded-sm"
               unoptimized
             />
           ) : null}
           <span className="truncate">{article?.feedTitle ?? ""}</span>
           {readingMinutes && (
-            <span className="hidden sm:inline">
+            <span className="hidden shrink-0 sm:inline">
               {progress > 0.02
                 ? `· ≈${minutesRemaining} min left · ${Math.round(progress * 100)}%`
                 : `· ≈${readingMinutes} min`}
@@ -930,7 +936,7 @@ export function ArticleReader({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button size="icon" variant="ghost" title="More actions" disabled={!article}>
+            <Button size="icon" variant="ghost" title="More actions" disabled={!article} className="shrink-0">
               <MoreVertical className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>

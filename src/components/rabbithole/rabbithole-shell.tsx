@@ -1,10 +1,12 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Markdown } from "@/components/ui/markdown";
-import { ArrowLeft, ExternalLink, Library, Rabbit } from "lucide-react";
+import { ArrowLeft, ExternalLink, Library, Rabbit, Trash2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useConfirm } from "@/components/ui/app-dialogs";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { Rabbithole } from "@/components/reader/rabbithole";
 
@@ -33,34 +35,88 @@ export function RabbitholeShell({
 }) {
   const router = useRouter();
   const bodyRef = useRef<HTMLDivElement>(null);
+  const confirm = useConfirm();
+  const [, startTransition] = useTransition();
+  // Hidden optimistically so the row goes the moment you confirm, rather than
+  // lingering until the server round trip and refresh land. Restored on failure.
+  const [deleted, setDeleted] = useState<ReadonlySet<string>>(new Set());
+
+  async function deleteHole(hole: HoleSummary) {
+    const ok = await confirm({
+      title: `Delete this rabbithole?`,
+      body: `"${hole.title}" — ${hole.branchCount} branch${hole.branchCount === 1 ? "" : "es"} will be deleted. The document itself stays in your Directory.`,
+      confirmLabel: "Delete",
+      destructive: true,
+    });
+    if (!ok) return;
+
+    setDeleted((prev) => new Set(prev).add(hole.itemId));
+    startTransition(async () => {
+      try {
+        const res = await fetch(`/api/rabbithole/hole/${hole.itemId}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        toast.success("Rabbithole deleted");
+        // Leaving the hole open after deleting it would show an empty branch
+        // panel over a document that is no longer a hole.
+        if (root?.itemId === hole.itemId) router.push("/rabbithole");
+        else router.refresh();
+      } catch (err) {
+        setDeleted((prev) => {
+          const next = new Set(prev);
+          next.delete(hole.itemId);
+          return next;
+        });
+        toast.error(`Delete failed: ${err instanceof Error ? err.message : "error"}`);
+      }
+    });
+  }
+
+  const visibleHoles = holes.filter((h) => !deleted.has(h.itemId));
 
   const holeList = (
     <>
-      {holes.length > 0 && (
+      {visibleHoles.length > 0 && (
         <div>
           <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Your holes
           </div>
-          {holes.map((h) => (
-            <button
+          {/* A row is two controls, so it is a div wrapping them rather than a
+              button containing one — a nested button is invalid HTML and the
+              inner click never reliably wins. The delete control stays visible
+              on touch (no hover to reveal it) and is only faded until hover on
+              pointer devices. */}
+          {visibleHoles.map((h) => (
+            <div
               key={h.itemId}
-              onClick={() => router.push(`/rabbithole?item=${h.itemId}`)}
               className={cn(
-                "flex w-full flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-accent/50",
+                "group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/50",
                 root?.itemId === h.itemId && "bg-accent",
               )}
             >
-              <span className="truncate text-sm font-medium">{h.title}</span>
-              <span className="text-xs text-muted-foreground">
-                {h.branchCount} branch{h.branchCount === 1 ? "" : "es"} ·{" "}
-                {formatRelativeTime(h.lastAt)}
-              </span>
-            </button>
+              <button
+                onClick={() => router.push(`/rabbithole?item=${h.itemId}`)}
+                className="flex min-w-0 flex-1 flex-col gap-0.5 px-2 py-2 text-left"
+              >
+                <span className="truncate text-sm font-medium">{h.title}</span>
+                <span className="text-xs text-muted-foreground">
+                  {h.branchCount} branch{h.branchCount === 1 ? "" : "es"} ·{" "}
+                  {formatRelativeTime(h.lastAt)}
+                </span>
+              </button>
+              <button
+                onClick={() => void deleteHole(h)}
+                title={`Delete "${h.title}"`}
+                aria-label={`Delete rabbithole "${h.title}"`}
+                className="shrink-0 rounded p-1.5 text-muted-foreground opacity-100 hover:bg-destructive/10 hover:text-destructive sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           ))}
         </div>
       )}
       {recent.length > 0 && (
-        <div className={holes.length > 0 ? "mt-4" : ""}>
+        <div className={visibleHoles.length > 0 ? "mt-4" : ""}>
           <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Start a new hole
           </div>
@@ -81,7 +137,7 @@ export function RabbitholeShell({
           ))}
         </div>
       )}
-      {holes.length === 0 && recent.length === 0 && (
+      {visibleHoles.length === 0 && recent.length === 0 && (
         <p className="px-2 text-sm text-muted-foreground">
           Nothing in your Directory yet — save an article, upload a document, or write a note
           first.
