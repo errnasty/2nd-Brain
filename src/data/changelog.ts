@@ -27,6 +27,79 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-21-e",
+    date: "August 21, 2026",
+    title: "Write your answer, and have it checked",
+    tag: "feature",
+    summary:
+      "Open-ended quiz questions now have a box to write your answer in before you reveal the real one, and a Check my answer button that says whether it holds up and what it missed. You still decide the final grade — the check only suggests one.",
+    items: [
+      "Both are optional: skip the box and the quiz behaves exactly as before.",
+      "Quizzes and flashcards now read far more of each document, so questions stop clustering on the opening pages.",
+      "Flashcards are written by the stronger model, and a run that produces the same card twice now keeps one.",
+      "A quiz that comes up short says how many questions weren't usable, instead of just handing you fewer than you asked for.",
+      "Follow-up questions in Ask are understood more reliably, and answers are ranked against better sources.",
+    ],
+  },
+  {
+    id: "2026-08-21-d",
+    date: "August 21, 2026",
+    title: "Quizzes were sometimes marking the wrong answer correct",
+    tag: "fix",
+    summary:
+      "A quiz question could be graded against the wrong option, so a correct answer came back marked wrong. Questions where the answer was never actually stated are now left out rather than silently defaulting to the first option.",
+    items: [
+      "Flashcards now read the whole document instead of roughly the first two pages, so cards cover more than the introduction.",
+      "A card-making run that produced slightly too many cards used to return none at all. It now just keeps the ones you asked for.",
+      "Asking a question on a library that has never been indexed now waits for the one-off indexing to finish, and tells you it's happening, instead of quietly answering with nothing to go on.",
+    ],
+  },
+  {
+    id: "2026-08-21-c",
+    date: "August 21, 2026",
+    title: "Duplicate articles actually collapse now",
+    tag: "improvement",
+    summary:
+      "Hiding duplicates only ever caught headlines that matched character for character, which almost never happens. It now also recognises the same link shared by two feeds and the same headline wearing two different outlet names.",
+    items: [
+      "\"Quake hits Japan - Reuters\" and \"Quake hits Japan | NHK\" are one row, not two.",
+      "The same article carried by two feeds with different tracking links collapses together.",
+      "A headline that's another one plus a trailing clause is recognised as the same story.",
+      "Long source names no longer push the buttons off the top of the reader on a phone.",
+      "Rabbitholes can be deleted from the list — the document itself stays in your Directory.",
+    ],
+  },
+  {
+    id: "2026-08-21-b",
+    date: "August 21, 2026",
+    title: "Trending finally shows the day's actual news",
+    tag: "improvement",
+    summary:
+      "Trending was surfacing mundane articles over the stories that mattered. An article from a single source that happened to mention a widely-talked-about word could outrank a story three of your outlets had independently run. Coverage across your feeds now counts for far more than keyword coincidence.",
+    items: [
+      "A story several of your sources agree on now clearly beats a lone article using popular words.",
+      "Outside signals still help — but only to lift stories your own feeds have actually corroborated.",
+      "Scoring reads twice as much of your recent library, so a story no longer looks like a one-off just because its earlier coverage fell outside what was checked.",
+      "Every feed and every story now gets scored on each run, instead of the run stopping after a few seconds.",
+    ],
+  },
+  {
+    id: "2026-08-21-a",
+    date: "August 21, 2026",
+    title: "More detail everywhere, and bigger uploads",
+    tag: "improvement",
+    summary:
+      "A lot of the app was quietly holding back to fit a ten-second limit that no longer exists. The brief, quizzes and study plans were being cut short or written by a faster, weaker model to beat the clock.",
+    items: [
+      "The Daily Brief writes noticeably more in every section.",
+      "Quizzes and study plans now use the stronger model and the full length the desktop app always had — plans are detailed instead of deliberately brief.",
+      "Uploads go up to 20MB on the web, matching desktop, instead of stopping at 4.5MB.",
+      "Translating an article usually takes one pass now rather than five or six, so it finishes much sooner.",
+      "Feeds finish a full sync in a single run, so the tail of a long feed list is no longer perpetually stale.",
+      "Removed the pixel view and pixel character from Study.",
+    ],
+  },
+  {
     id: "2026-08-05-b",
     date: "August 5, 2026",
     title: "The Directory stops falling over",
