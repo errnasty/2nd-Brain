@@ -14,7 +14,10 @@ export const config = {
   // - api/cron: authed by CRON_SECRET bearer header, never by cookies; the
   //   session refresh is pure overhead and the !user redirect fights the 401
   //   the route itself returns.
+  // - api/health: platform liveness probe. It is called without cookies, so
+  //   the session check would answer a 307 to /login and the host would read
+  //   a healthy deploy as failed.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|api/cron|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|api/cron|api/health|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

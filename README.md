@@ -1,93 +1,189 @@
 # Second Brain
 
-A self-hosted RSS reader + document library + AI briefing engine, built on Next.js (App Router), Supabase (Postgres + `pgvector` + Auth), Drizzle ORM, Shadcn UI, and the Vercel AI SDK.
+A self-hosted reading, research, and study system. It pulls your RSS feeds and
+uploaded documents into one library, embeds everything for semantic search,
+writes you a daily brief, and turns what you read into tasks, flashcards, and
+spaced-repetition reviews.
 
-**Phases 1, 2, and 3 are done.** Phase 1: scaffold + Supabase magic-link SSR + Drizzle schema with `pgvector`. Phase 2: `rss-parser` ingestion + on-demand `@mozilla/readability` extraction + Vercel-Cron sync + three-column Inoreader-style reader with optimistic mark-as-read. Phase 3: drag-and-drop uploads for PDF / MD / TXT / ePub with a recursive ~1000-token chunker writing to `document_chunks`. Plus: **OPML import** from Inoreader, **Times New Roman** reader font (user-adjustable), **keyboard shortcuts** (`j`/`k`/`m`/`s`/`v`/`esc`), reading time, prev/next nav, and a font / size / theme picker. Phases 4–5 (Daily Brief + embeddings + auto-tagging, PWA polish) are next.
+Built on **Next.js 15** (App Router, React 19 + React Compiler), **Supabase**
+(Postgres + `pgvector` + Auth), **Drizzle ORM**, **Tailwind + shadcn/ui**, and
+the **Vercel AI SDK** with Anthropic / OpenRouter providers. Ships as a web app
+(installable PWA) and as an **Electron desktop app** with an embedded local
+database and two-way sync.
 
-**👉 Deploying for the first time? See [DEPLOY.md](DEPLOY.md) for the step-by-step walkthrough.**
+**👉 Deploying? [DEPLOY.md](DEPLOY.md) is the step-by-step walkthrough** —
+Supabase setup, then either [Netlify](DEPLOY.md#7-deploy-to-netlify) or
+[Railway](DEPLOY.md#7b-deploy-to-railway-alternative-to-netlify), plus GitHub
+Actions cron.
+
+**Desktop build:** [DESKTOP.md](DESKTOP.md).
+
+---
+
+## What it does
+
+**Read**
+- RSS/Atom ingestion with folder organisation, drag-and-drop, OPML import.
+- Three-column reader: feed nav, virtualised article list, reader pane.
+  Optimistic mark-as-read, star, unread/all/starred filters.
+- On-demand full-text extraction via `@mozilla/readability`, cached to the DB.
+- **Trending** — cross-feed corroboration scored against GDELT, Google News,
+  Google Trends, and the HN search API, so the list can rank by what's actually
+  being covered rather than by recency.
+- Reader translation through a real MT engine (Lingva / MyMemory), not an LLM.
+- Keyboard shortcuts throughout: `j`/`k` navigate, `m` mark, `s` star, `v` open
+  original, `esc` close.
+
+**Collect**
+- Drag-and-drop upload for PDF, ePub, DOCX/PPTX/XLSX, Markdown, and TXT.
+- Recursive ~1000-token chunker with overlap, written to `document_chunks`.
+- **Directory** — one unified library view over articles and documents, with
+  grouping, filtering, and tags.
+- Auto-tagging and smart folder routing via structured LLM output.
+
+**Think**
+- **Today** — a daily brief that ranks what matters, remembers which stories it
+  already told you about, and tracks reading progress and XP through the day.
+- **Ask** — chat over your library with threads and persistent memory, plus
+  document-scoped Q&A.
+- **Related Knowledge** — cosine-similarity sidebar across articles and docs.
+- **Map** — a graph view of how your library connects.
+- **Rabbithole** — guided depth-first exploration from any starting point.
+- **ThinkTank** — multi-angle exploration of a question.
+- **Weekly synthesis**, **gaps** analysis, and **connections** surfacing.
+
+**Study**
+- **Study hub** (`/study`) — Overview, Tasks, Review, and Calendar in one place.
+- Flashcards scheduled with **FSRS**.
+- Curriculum and study-plan generation from your own material.
+- Quizzes, and an XP / skills / levels layer over the whole app.
+
+**Elsewhere**
+- **MCP server** at `/api/mcp` — point Claude Desktop or mobile at your brain.
+- Export, offline reading via service worker, invite-only signup, and a daily
+  per-user AI token budget for multi-user self-hosting.
 
 ---
 
 ## Prerequisites
 
-- **Node.js ≥ 18.18** (current `node -v` on this machine reports 16.15.0 — upgrade before running anything). Node 20 LTS is recommended for Vercel parity.
-- A free Supabase project. Enable the `vector` extension in **Database → Extensions** (or apply the migration below).
-- API keys: `ANTHROPIC_API_KEY` for the Daily Brief, `OPENAI_API_KEY` for embeddings.
+- **Node.js 20 LTS** — pinned in `.nvmrc`, and what the hosts build with.
+  Minimum is 18.18 (Next 15).
+- A **Supabase** project with the `vector` extension enabled.
+- An **Anthropic** API key (or an OpenRouter key — see below).
+- An embeddings provider: **Voyage** (default), **OpenAI**, or **local**
+  (`@xenova/transformers`, offline, no key).
 
-> **Note on embeddings:** Anthropic does not ship an embeddings API. The app defaults to OpenAI `text-embedding-3-small` (1536 dims). Voyage AI is Anthropic's recommended embeddings partner — switch by setting `EMBEDDINGS_PROVIDER=voyage` in Phase 4.
+> Anthropic ships no embeddings API. The default is Voyage `voyage-3-large`
+> (1024 dims, matching the `pgvector` column). Switching providers requires
+> re-embedding the whole library — vectors from different models are not
+> comparable.
+
+> `OPENROUTER_API_KEY` redirects background AI work through OpenRouter. Web
+> search stays Anthropic-only.
 
 ## Quick start
 
-```bash
-# 1. Install deps (after upgrading Node ≥ 18.18)
+```powershell
+# 1. Install
 npm install
+copy .env.example .env.local     # then fill it in
 
-# 2. Copy env template, fill in Supabase + API keys
-cp .env.example .env.local
+# 2. Apply the schema (needs the Supabase CLI, and `vector` enabled first)
+supabase db push
 
-# 3. Enable pgvector + push the schema
-psql "$DATABASE_URL" -f drizzle/0000_enable_pgvector.sql
-npm run db:push
+# 3. Apply RLS + the auto-create-profile trigger
+#    Supabase SQL Editor -> paste supabase/policies.sql -> Run
 
-# 4. Apply RLS policies + the auth-signup trigger
-psql "$DATABASE_URL" -f supabase/policies.sql
-
-# 5. Run the dev server
+# 4. Run
 npm run dev
 ```
 
-## What's in this phase
+> ⚠️ **`npm run db:push` is not a deploy path.** `drizzle-kit push` generates a
+> schema from `drizzle/`, which exists solely to bundle the **desktop** PGlite
+> database. It omits every trigger in `supabase/migrations/` — sync support,
+> FSRS, tsvector search, gamification. A cloud DB built that way silently
+> breaks desktop sync. Use `supabase db push`.
+
+> **Re-run `supabase/policies.sql` after any change that adds a table.** It is
+> idempotent. Supabase exposes every `public` table over REST using the anon key
+> that ships in the browser bundle, so a table without RLS is world-readable.
+
+## Scripts
+
+| Command | Does |
+|---|---|
+| `npm run dev` | Dev server |
+| `npm run build` | Production build (`postbuild` stamps the service worker build id) |
+| `npm run start` | Serve the production build |
+| `npm run lint` | ESLint, zero-warnings gate |
+| `npm test` | Vitest unit tests (via `scripts/vitest.mjs`) |
+| `npm run test:e2e` | Playwright smoke suite |
+| `npm run desktop:dev` / `desktop:build` | Electron app |
+| `npm run db:studio` | Drizzle Studio |
+
+## Layout
 
 ```
 src/
   app/
-    (app)/              # Authenticated app routes (sidebar + main pane)
-      layout.tsx        # Server-side auth gate
-      page.tsx          # Inbox landing
-    auth/callback/      # OAuth/magic-link exchange
-    login/page.tsx      # Magic-link sign-in form
-    layout.tsx          # Root layout + ThemeProvider + Toaster
-    globals.css         # Tailwind + Shadcn tokens + .prose-reader
-  components/
-    shell/sidebar.tsx   # Left column nav
-    theme-provider.tsx
-    ui/                 # Shadcn primitives (button, card, input, label, scroll-area, separator)
+    (app)/            # Authenticated routes: today, feeds, directory, documents,
+                      # ask, map, rabbithole, thinktank, study, search, settings…
+    api/              # Route handlers: brief, ask, embeddings, cron, mcp, sync,
+                      # export, jobs, curriculum, weekly-synthesis, health…
+    auth/callback/    # Magic-link / OAuth exchange
+    login/ signup/    # Public auth pages
+  components/         # Feature-scoped UI + shadcn primitives in ui/
   lib/
-    db/
-      schema.ts         # Drizzle schema with pgvector columns
-      index.ts          # Drizzle client (postgres-js, single connection for serverless)
-    supabase/
-      client.ts         # Browser client
-      server.ts         # Server-Component client
-      middleware.ts     # Session refresh + auth redirect
-    utils.ts            # cn() + relative-time formatter
-  middleware.ts         # Wires updateSession() across the app
-drizzle/
-  0000_enable_pgvector.sql
+    ai/ ai-jobs/      # Providers, prompts, background job queue
+    db/               # Drizzle schema + client
+    embeddings/       # Provider abstraction (voyage | openai | local)
+    feeds/ rss/ readability/   # Ingestion + extraction
+    gamify/ srs/ study/ tasks/ # XP, FSRS, study plans
+    offline/ sync/    # Service worker + desktop two-way sync
+    supabase/         # Browser / server / middleware clients
+  middleware.ts       # Session refresh + auth gate
 supabase/
-  policies.sql          # RLS + auto-create-profile trigger
+  migrations/         # 0001–0033 — the real deploy schema
+  policies.sql        # RLS + auto-create-profile trigger
+drizzle/              # Desktop PGlite bundle source ONLY
+electron/             # Desktop shell, build, local schema bundling
+.github/workflows/    # ci, sync-feeds, trending, backfill-embeddings
 ```
 
-## Schema highlights
+## Hosting
 
-- **`profiles`** — extends `auth.users`, stores per-user `systemPrompt`, LLM config, encrypted API keys.
-- **`folders`** — supports nesting via `parent_id` and a reserved `is_inbox` flag for AI smart-routing fallback.
-- **`feeds` / `articles`** — articles carry `full_text` (Readability output), `read_status`, dedup index on `(feed_id, guid)`.
-- **`documents` / `document_chunks`** — chunks store `vector(1536)` embeddings with an HNSW cosine-ops index.
-- **`article_embeddings`** — separate table so "Related Knowledge" can search across both kinds with one vector index per kind.
-- **`tags` / `item_tags`** — polymorphic many-to-many (`item_kind` ∈ `article|document`). Includes `confidence` and `source` so AI-suggested tags can be distinguished from user-applied ones.
-- **RLS** — every owned table is locked to `auth.uid() = user_id`. A trigger on `auth.users` auto-creates the matching `profiles` row.
+`railway.json`, `netlify.toml`, and `vercel.json` all live in the repo; each
+host reads only its own file, so keeping all three costs nothing. Deploy to
+**one** of them — two hosts auto-deploying the same branch gives you two live
+URLs, and only one can be the Supabase `Site URL`.
 
-## Roadmap
+- **Railway** — long-lived Node server. No function timeout on the Readability
+  extractor or the brief stream, no small body cap on uploads. ~$5/month.
+- **Netlify** — serverless, generous free tier, ~6 MB upload cap and function
+  time limits.
 
-- **Phase 2 (done)** — `rss-parser` cron worker; `@mozilla/readability` full-text extractor; three-column reader with optimistic mark-as-read; OPML import; reader settings (font/size/theme) + keyboard shortcuts.
-- **Phase 3 (done)** — drag-drop upload zone; recursive chunker (1000 tokens / 200 overlap); PDF + ePub + Markdown + TXT parsers.
-- **Phase 4** — Daily Brief streaming via Vercel AI SDK + Anthropic prompt caching; embeddings provider abstraction; semantic "Related Knowledge" sidebar; structured-output auto-tagging + smart folder routing.
-- **Phase 5** — swipe gestures, collapsible sidebars, PWA service worker, Vercel deploy template.
+Cron is **GitHub Actions** either way (`sync-feeds` every 2h, `trending`
+hourly), authorised with a `CRON_SECRET` bearer token. That keeps it free and
+portable across hosts.
 
-## Why each choice
+`/api/health` is an unauthenticated liveness probe — it touches no database, and
+is excluded from the middleware matcher so it answers `200` rather than
+redirecting a cookieless prober to `/login`.
 
-- **Drizzle over Prisma** — first-class `pgvector` column type and edge-runtime friendliness; smaller bundle for serverless invocations.
-- **Postgres-js over node-pg** — single connection, no driver overhead, works in Vercel Functions and Edge.
-- **Supabase SSR pattern** — `middleware.ts` refreshes the session cookie on every request, so RSC reads always see a fresh user.
-- **HNSW over IVFFlat** — faster cold-start queries, no `ANALYZE` step required after initial seed.
+## Architecture notes
+
+- **Drizzle over Prisma** — first-class `pgvector` column type, smaller bundle.
+- **`postgres-js` over `node-pg`** — single connection, low overhead; use the
+  Supabase **transaction pooler** (6543) in production.
+- **Supabase SSR pattern** — `middleware.ts` refreshes the session cookie on
+  every request and forwards the verified user in a stripped-then-set header,
+  so server components don't pay a second auth round-trip.
+- **HNSW over IVFFlat** — faster cold queries, no `ANALYZE` seeding step.
+- **CSP is built in `next.config.ts`** from `NEXT_PUBLIC_SUPABASE_URL`, which is
+  why that variable must be present at **build** time, not just runtime.
+- **`output: "standalone"` is gated behind `DESKTOP_BUILD`** — only the Electron
+  build bundles its own server.
+- **Changelog is a shipping step.** User-facing changes prepend an entry to
+  `src/data/changelog.ts`; the newest `id` drives the in-app "What's New" panel.
+  See [CLAUDE.md](CLAUDE.md).

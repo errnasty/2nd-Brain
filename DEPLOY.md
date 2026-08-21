@@ -2,7 +2,7 @@
 
 End-to-end walkthrough to take this repo from zero to a working `https://your-app.netlify.app` running on Supabase. Assumes you've never deployed it before. Time budget: ~30–45 min.
 
-This guide uses **Netlify** for hosting and **GitHub Actions** for cron (free, host-agnostic). If you want to move to a different platform later (Cloudflare Pages, Render, Railway, your own VPS), the cron piece stays the same.
+This guide uses **Netlify** for hosting and **GitHub Actions** for cron (free, host-agnostic). **Railway** is a fully supported alternative — see [step 7b](#7b-deploy-to-railway-alternative-to-netlify); pick one host, not both. If you move somewhere else later (Cloudflare Pages, Render, your own VPS), the cron piece stays the same.
 
 ---
 
@@ -178,6 +178,126 @@ LLM keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) can stay blank for Phases 2 + 3
 - **300 build minutes / month** — ~30 deploys/day at 1 min each.
 
 This is much more generous than Vercel Hobby's cron-only restrictions.
+
+---
+
+## 7b. Deploy to Railway (alternative to Netlify)
+
+Railway runs the app as a **long-lived Node server** (`next start`) instead of
+slicing it into serverless functions. That difference is the whole reason to
+pick it: no 10-second function ceiling on the Readability extractor or the
+Daily Brief stream, and no ~6 MB request-body cap on document uploads (Server
+Actions are already configured for 20 MB in `next.config.ts`). The trade is
+that it is not free — Hobby is $5/month of usage credit, and an always-on
+service eats into that continuously.
+
+`railway.json` in the repo root already pins the builder, build command, start
+command, and healthcheck, so the dashboard needs almost no configuration.
+
+**Do this instead of step 7, not in addition to it.** Netlify and Railway both
+auto-deploying the same branch means two live URLs, and only one of them can be
+the `Site URL` Supabase redirects magic links to.
+
+### 1. Create the service
+
+1. https://railway.com → **New Project → Deploy from GitHub repo** → authorize
+   Railway on your GitHub account → pick this repo.
+2. Railway reads `railway.json`, detects Node via Nixpacks, and honours
+   `.nvmrc` (Node 20). The first build fails until env vars exist — expected,
+   fix it in the next step and redeploy.
+
+### 2. Environment variables
+
+**Service → Variables → Raw Editor** and paste. Note this is the *service*
+variable scope, not a shared project variable, unless you add more services.
+
+| Variable | Value |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase base URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
+| `DATABASE_URL` | The **pooled** Supabase URL (port 6543, Transaction mode) |
+| `CRON_SECRET` | `[guid]::NewGuid().ToString("N")` in PowerShell |
+| `NEXT_PUBLIC_APP_URL` | Your Railway domain (set after step 3) |
+| `ANTHROPIC_API_KEY` | For the Daily Brief, Ask, and the rest of the AI surface |
+| `EMBEDDINGS_PROVIDER` + its key | `voyage` + `VOYAGE_API_KEY`, or `openai` + `OPENAI_API_KEY` |
+
+> ⚠️ **`NEXT_PUBLIC_*` vars are baked in at build time, not read at runtime.**
+> Next.js inlines them into the client bundle, and `next.config.ts` also reads
+> `NEXT_PUBLIC_SUPABASE_URL` to build the `connect-src` CSP directive. If you
+> add or change one, you must **redeploy**, not just restart — otherwise the
+> browser gets the old value and Supabase auth calls are blocked by CSP.
+
+> Do **not** set `PORT` yourself. Railway injects it, and the start command in
+> `railway.json` passes it to `next start`. Do **not** set `APP_RUNTIME` either
+> — that flag is for the Electron desktop build and switches auth to trusting
+> the local session without verifying it.
+
+> Leave `EMBEDDINGS_PROVIDER=local` alone in the cloud. It pulls a
+> ~1.3 GB `@xenova/transformers` model into the container at runtime and will
+> blow the memory budget; it exists for offline/desktop use.
+
+Skip Railway's **Postgres** add-on. The schema depends on Supabase migrations,
+RLS, `pgvector`, and Supabase Auth — the database stays where it is.
+
+### 3. Get a domain
+
+**Service → Settings → Networking → Generate Domain**. You get
+`https://<service>.up.railway.app`. Then:
+
+1. Set `NEXT_PUBLIC_APP_URL` to that URL and redeploy (see the build-time note
+   above — a restart is not enough).
+2. **Supabase → Authentication → URL Configuration**: set **Site URL** to the
+   Railway URL and add `https://<service>.up.railway.app/auth/callback` to
+   **Redirect URLs**.
+3. Custom domain: same Networking panel → **Custom Domain** → add the CNAME it
+   prints at your registrar. TLS is automatic.
+
+### 4. Verify
+
+```powershell
+curl https://<service>.up.railway.app/api/health   # -> {"status":"ok","runtime":"cloud"}
+```
+
+That endpoint is also the healthcheck Railway itself polls, so a deploy that
+goes green has already proven the server boots and routes. Then sign in with a
+magic link and confirm you land on `/today`.
+
+### 5. Cron
+
+Unchanged — GitHub Actions (step 8) drives it. Set the `APP_URL` repo secret to
+the Railway domain and `CRON_SECRET` to the same value you put in Railway.
+Railway's own cron feature isn't used: it would need a second service, and
+GitHub Actions keeps cron portable across hosts.
+
+### CLI (optional)
+
+```powershell
+npm i -g @railway/cli
+railway login
+railway link          # attach this folder to the project/service
+railway logs          # tail the running server
+railway variables     # list env vars
+railway redeploy      # re-run the last build, no code change
+railway up            # deploy the working directory, bypassing GitHub
+```
+
+`railway up` deploys **local files, including uncommitted ones**. For normal
+work let the GitHub integration deploy on push; reach for `up` only when you
+need to test something you haven't committed.
+
+### Railway gotchas
+
+- **Build OOM / very slow builds** — the React Compiler plus `next build` is
+  memory-hungry. If the build gets killed, raise the plan's memory or set
+  `NODE_OPTIONS=--max-old-space-size=4096` as a service variable.
+- **Healthcheck fails but logs look fine** — something is answering a redirect
+  instead of 200. Check that `/api/health` is still in the middleware matcher
+  exclusion list in `src/middleware.ts`.
+- **App sleeps / cold starts** — Hobby services can scale to zero when idle.
+  The 2-hourly GitHub Actions cron effectively keeps it warm anyway.
+- **Costs creep up** — an always-on service bills for wall-clock time, not
+  requests. Watch **Project → Usage** for the first week.
 
 ---
 
