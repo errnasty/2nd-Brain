@@ -139,17 +139,21 @@ ${rules([
 }
 
 /**
- * Output ceilings per section kind. These are a LATENCY budget, not a style
- * preference: generation time scales with output length, and every section has
- * to finish inside the host's function window (~10s on Netlify). At a realistic
- * streaming rate these land in the mid single-digit seconds, which is why depth
- * levels buy more SECTIONS rather than longer ones — the brief gets several
- * times longer overall without any single request getting slower.
+ * Output ceilings per section kind. Still a latency budget rather than a style
+ * preference — generation time scales with output length — but a much less
+ * severe one than before. These were set so a section finished inside a ~10s
+ * serverless window; Railway allows a streaming response to run for 15 minutes,
+ * so the ceiling can now be set by how much a reader actually wants in one
+ * section instead of by how fast the host pulls the plug.
+ *
+ * Raised roughly 60%, which is what "the brief feels thin" was really about.
+ * Depth levels still buy more SECTIONS as well as longer ones: sections stream
+ * independently, so more of them means text on screen sooner.
  */
-const MAX_LEAD_TOKENS = 520;
-const MAX_TOPIC_TOKENS = 420;
-const MAX_SKIP_TOKENS = 320;
-const MAX_EXTERNAL_TOKENS = 300;
+const MAX_LEAD_TOKENS = 850;
+const MAX_TOPIC_TOKENS = 700;
+const MAX_SKIP_TOKENS = 480;
+const MAX_EXTERNAL_TOKENS = 500;
 
 export function sectionMaxTokens(section: PlannedSection, level: BriefLevel): number {
   const cfg = BRIEF_LEVEL_CONFIG[level];

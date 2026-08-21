@@ -4,10 +4,10 @@ import { aiAvailable } from "@/lib/ai/provider";
 import { runDeckGeneration } from "@/lib/thinktank/generate";
 
 export const runtime = "nodejs";
-// Each call now does ONE bounded pass of the build (see runDeckGeneration), so
-// it finishes well inside any host's limit. This export is kept honest at 60:
-// it is advisory on Vercel and ignored entirely on Netlify, which is exactly
-// why the work is stepped rather than relying on it.
+// Each call does ONE bounded pass of the build (see runDeckGeneration), so it
+// finishes well inside any host's limit. The export is advisory only — Railway
+// enforces its own edge timeout and ignores it — which is exactly why the work
+// is stepped rather than relying on it.
 export const maxDuration = 60;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

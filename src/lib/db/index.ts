@@ -6,7 +6,7 @@ import * as schema from "./schema";
 type Schema = typeof schema;
 
 // Desktop (Electron) runs an embedded local Postgres (PGlite) for instant,
-// offline reads/writes; the cloud (Netlify) keeps the Supabase postgres-js
+// offline reads/writes; the cloud (Railway) keeps the Supabase postgres-js
 // connection. Same Drizzle schema + query builder either way. PGlite is loaded
 // lazily so the cloud bundle never instantiates the WASM engine.
 const isDesktop = process.env.APP_RUNTIME === "desktop";
@@ -54,8 +54,14 @@ function build(): PostgresJsDatabase<Schema> {
     throw new Error("DATABASE_URL is not set");
   }
   // prepare: false is required by Supabase's transaction-mode pooler (6543).
-  // max: 3 keeps parallel queries fast without exhausting Supabase's limit.
-  const client = postgres(connectionString, { prepare: false, max: 3, idle_timeout: 20 });
+  //
+  // max: 10 because this is ONE long-lived server process, not a fleet of
+  // serverless instances that each opened their own pool — the old max of 3 was
+  // sized for a world where multiplying it by the number of warm functions was
+  // how you exhausted Supabase's connection limit. Here the opposite bites:
+  // pages that fan out (the Study hub fires ten queries through one
+  // Promise.allSettled) were queueing four deep against a pool of three.
+  const client = postgres(connectionString, { prepare: false, max: 10, idle_timeout: 20 });
   return pgDrizzle(client, { schema });
 }
 

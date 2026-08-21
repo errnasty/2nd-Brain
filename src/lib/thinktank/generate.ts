@@ -17,14 +17,15 @@ import { awardXp } from "@/lib/gamify/award";
  * ## Why it is stepped
  *
  * The previous version generated an entire deck in ONE call — web search plus
- * a large structured response, 30-60 seconds. That is precisely the shape this
- * app cannot run: it deploys to Netlify, where a function is killed at ~10s no
- * matter what the route's `maxDuration` says (that export is Vercel-only), the
- * same constraint that already reshaped feed sync, article simplify/translate
- * and the Daily Brief. The call never completed, so the deck sat on
+ * a large structured response, 30-60 seconds. On the old serverless host, which
+ * killed a function at ~10s, the call never completed: the deck sat on
  * "generating" forever, the stall detector re-kicked it, and every retry died
  * at the same ten seconds. That is the "stuck on Building…" bug, and no amount
  * of retrying could ever have fixed it.
+ *
+ * Railway would let the single call run, but stepping is kept: cards commit as
+ * they are written, so a deck shows progress instead of nothing, and an
+ * interrupted build resumes from what already landed rather than restarting.
  *
  * Generation is now plan-then-fill:
  *   1. one short call writes the outline (titles only) onto the deck;

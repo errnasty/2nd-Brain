@@ -140,9 +140,9 @@ export async function POST(req: Request) {
     if (!r.ok) return NextResponse.json({ error: r.error }, { status: 500 });
 
     // Flashcards are seeded by the CLIENT in a SEPARATE request after this one
-    // returns (see ask-shell). Doing it inline here would add another AI call to
-    // a request that's already near the serverless function's wall-clock cap
-    // (~10s on Netlify) — pushing it to a 504 *after* the note was saved.
+    // returns (see ask-shell). Keeping them out of this request means the plan
+    // is saved and on screen before card generation starts, so a slow or failed
+    // seeding pass can't delay — or appear to fail — work that already landed.
     return NextResponse.json({
       ok: true,
       itemId: r.itemId,

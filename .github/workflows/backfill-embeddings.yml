@@ -5,7 +5,7 @@ name: Backfill embeddings
 # "Refresh memory" clicks.
 #
 # Secrets (GitHub repo → Settings → Secrets and variables → Actions):
-#   APP_URL      = https://your-site.netlify.app
+#   APP_URL      = https://your-site.up.railway.app
 #   CRON_SECRET  = the same value set in your hosting platform's env vars
 
 on:

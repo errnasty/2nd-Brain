@@ -4,10 +4,12 @@
  * the DB-backed `checkRateLimit` can't be used there because `rate_limits`
  * FKs onto profiles.
  *
- * In-memory means per-instance: on serverless hosts each warm instance
- * counts separately and cold starts reset the window. That is acceptable
- * for its purpose (brute-force friction on the invite code), not a hard
- * quota. Entries are pruned lazily on access.
+ * In-memory means per-instance. On one long-lived Railway process that is a
+ * genuine window rather than the near-no-op it was on serverless, where each
+ * warm instance counted separately and every cold start reset the clock — but
+ * it still resets on deploy and does not span replicas, so treat it as
+ * brute-force friction on the invite code, not a hard quota. Entries are
+ * pruned lazily on access.
  */
 
 type Window = { count: number; resetAt: number };

@@ -1,14 +1,16 @@
 # Deploy & Setup Guide
 
-End-to-end walkthrough to take this repo from zero to a working `https://your-app.netlify.app` running on Supabase. Assumes you've never deployed it before. Time budget: ~30–45 min.
+End-to-end walkthrough to take this repo from zero to a working `https://your-app.up.railway.app` running on Supabase. Assumes you've never deployed it before. Time budget: ~30–45 min.
 
-This guide uses **Netlify** for hosting and **GitHub Actions** for cron (free, host-agnostic). **Railway** is a fully supported alternative — see [step 7b](#7b-deploy-to-railway-alternative-to-netlify); pick one host, not both. If you move somewhere else later (Cloudflare Pages, Render, your own VPS), the cron piece stays the same.
+This guide uses **Railway** for hosting and **GitHub Actions** for cron (free, host-agnostic).
+
+Railway runs the app as a long-lived Node server rather than as serverless functions, and the code now assumes that: request budgets, upload caps, model choices and batch sizes are all sized for a host that allows minutes per request rather than ~10 seconds. Deploying to a serverless host would still build, but several features would time out. If you move to another long-lived host (Render, Fly, a VPS), the cron piece stays the same.
 
 ---
 
 ## 0. Upgrade Node first (one-time)
 
-Your machine currently runs Node 16.15.0. Next.js 15 needs **Node 18.18+**, and Netlify's default runtime is **Node 20**, so match that locally.
+Next.js 15 needs **Node 18.18+**. The repo pins **Node 20** in `.nvmrc`, which is what Railway builds with — match that locally.
 
 **Option A — Node installer (simplest, Windows):**
 1. Go to https://nodejs.org/en/download — download the **20.x LTS** Windows installer.
@@ -95,17 +97,17 @@ Now apply RLS policies and the auto-create-profile trigger. Open Supabase **SQL 
 
 Also apply the search-index migration (trigram indexes that keep global search fast as your library grows): paste `supabase/migrations/0008_search_and_index_perf.sql` into the SQL Editor and run it.
 
-For production, you'll later switch `DATABASE_URL` (in Netlify env vars) to the **pooled** connection string — see step 7.
+For production, you'll later switch `DATABASE_URL` (in Railway's service variables) to the **pooled** connection string — see step 7.
 
 ---
 
 ## 4. Configure auth (magic link)
 
 Dashboard → **Authentication** → **URL Configuration**:
-- **Site URL**: `http://localhost:3000` (for dev) — change to your Netlify URL after deploy.
+- **Site URL**: `http://localhost:3000` (for dev) — change to your Railway URL after deploy.
 - **Redirect URLs** (add both):
   - `http://localhost:3000/auth/callback`
-  - `https://your-app.netlify.app/auth/callback` *(after deploy)*
+  - `https://your-app.up.railway.app/auth/callback` *(after deploy)*
 
 Dashboard → **Authentication → Providers → Email**:
 - Make sure **Enable Email provider** is on.
@@ -145,43 +147,7 @@ git push -u origin main
 
 ---
 
-## 7. Deploy to Netlify
-
-1. Go to https://app.netlify.com/ → **Add new site → Import an existing project** → connect GitHub → pick your repo.
-2. Netlify detects Next.js from `netlify.toml`. Defaults are fine.
-3. **Site configuration → Environment variables** — add:
-
-| Variable | Value |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Your Supabase base URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
-| `DATABASE_URL` | The **pooled** Supabase URL (port 6543, Transaction mode) |
-| `CRON_SECRET` | Generate one: in PowerShell, `[guid]::NewGuid().ToString("N")` |
-| `NEXT_PUBLIC_APP_URL` | `https://your-app.netlify.app` (set after first deploy) |
-
-LLM keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) can stay blank for Phases 2 + 3 — Phase 4 needs them.
-
-4. **Deploy site**. First build takes ~3 min.
-
-5. Back in **Supabase → Authentication → URL Configuration**:
-   - Update **Site URL** to your Netlify URL.
-   - Add `https://your-app.netlify.app/auth/callback` to **Redirect URLs**.
-
-6. (Optional) Custom domain: Netlify → **Domain settings** → **Add a domain you already own**. Free wildcard HTTPS via Let's Encrypt.
-
-### Netlify free tier limits (for context)
-
-- **100 GB bandwidth / month** — plenty for personal use.
-- **125k function invocations / month** — about 4k/day.
-- **100 hours total function runtime / month**.
-- **300 build minutes / month** — ~30 deploys/day at 1 min each.
-
-This is much more generous than Vercel Hobby's cron-only restrictions.
-
----
-
-## 7b. Deploy to Railway (alternative to Netlify)
+## 7. Deploy to Railway
 
 Railway runs the app as a **long-lived Node server** (`next start`) instead of
 slicing it into serverless functions. That difference is the whole reason to
@@ -193,10 +159,6 @@ service eats into that continuously.
 
 `railway.json` in the repo root already pins the builder, build command, start
 command, and healthcheck, so the dashboard needs almost no configuration.
-
-**Do this instead of step 7, not in addition to it.** Netlify and Railway both
-auto-deploying the same branch means two live URLs, and only one of them can be
-the `Site URL` Supabase redirects magic links to.
 
 ### 1. Create the service
 
@@ -228,10 +190,15 @@ variable scope, not a shared project variable, unless you add more services.
 > add or change one, you must **redeploy**, not just restart — otherwise the
 > browser gets the old value and Supabase auth calls are blocked by CSP.
 
-> Do **not** set `PORT` yourself. Railway injects it, and the start command in
-> `railway.json` passes it to `next start`. Do **not** set `APP_RUNTIME` either
-> — that flag is for the Electron desktop build and switches auth to trusting
-> the local session without verifying it.
+> `PORT` is injected by Railway and passed through to `next start` by the start
+> command in `railway.json` (which also binds `0.0.0.0`, as Railway requires).
+> You can leave it alone and let Railway auto-detect the port, **or** set
+> `PORT=8080` explicitly and use the same number as the domain's target port —
+> see step 3. A mismatch between the two is the usual cause of "Application
+> failed to respond".
+
+> Do **not** set `APP_RUNTIME`. That flag is for the Electron desktop build and
+> switches auth to trusting the local session without verifying it.
 
 > Leave `EMBEDDINGS_PROVIDER=local` alone in the cloud. It pulls a
 > ~1.3 GB `@xenova/transformers` model into the container at runtime and will
@@ -243,7 +210,16 @@ RLS, `pgvector`, and Supabase Auth — the database stays where it is.
 ### 3. Get a domain
 
 **Service → Settings → Networking → Generate Domain**. You get
-`https://<service>.up.railway.app`. Then:
+`https://<service>.up.railway.app`.
+
+If it asks which **port** your app listens on: the app listens on whatever
+Railway's injected `PORT` says, falling back to 3000. The reliable way to stop
+guessing is to set `PORT=8080` as a service variable and enter `8080` as the
+target port, so both ends are pinned to the same number. To read the port of a
+running deploy instead, check the logs — `next start` prints
+`- Local: http://localhost:<port>` on boot — or run `railway variables`.
+
+Then:
 
 1. Set `NEXT_PUBLIC_APP_URL` to that URL and redeploy (see the build-time note
    above — a restart is not enough).
@@ -309,7 +285,7 @@ need to test something you haven't committed.
 
 ## 8. Set up cron via GitHub Actions
 
-We use GitHub Actions for cron rather than Netlify Scheduled Functions because:
+We use GitHub Actions for cron rather than a second Railway service because:
 - It's free (well within the 2,000 free Actions minutes/month for public repos, more for private).
 - Portable — same workflow runs no matter where you host the app.
 - Easier to inspect / re-run via the GitHub UI.
@@ -319,8 +295,8 @@ The workflow lives at `.github/workflows/sync-feeds.yml` and runs every 2 hours.
 **Setup:**
 
 1. In GitHub → your repo → **Settings → Secrets and variables → Actions → New repository secret**:
-   - `APP_URL` = `https://your-app.netlify.app`
-   - `CRON_SECRET` = the same value you set in Netlify env vars
+   - `APP_URL` = `https://your-app.up.railway.app`
+   - `CRON_SECRET` = the same value you set in Railway's service variables
 2. Push at least one commit so the workflow file exists on the default branch.
 3. Go to **Actions** tab → **Sync RSS feeds** → **Run workflow** → pick your branch → **Run workflow**. This fires it once manually so you can verify it works.
 4. After the first successful manual run, GitHub will schedule the recurring run automatically.
@@ -394,7 +370,7 @@ Phase 5 adds a service worker for offline reading.
 **Documents**
 - Drag-and-drop upload at `/documents` for PDF, Markdown, TXT, ePub.
 - Recursive chunker (~1000 tokens, ~200 overlap) writes to `document_chunks` for Phase 4 embeddings.
-- 20MB local cap; **~6MB cap on Netlify functions** by default. For bigger files, switch to a direct Supabase Storage upload (planned for Phase 4).
+- 20MB cap everywhere. Railway imposes no request-body size limit of its own (only a 5-minute ceiling on how long the upload may take), so the web app allows the same 20MB the desktop app does.
 
 ## What's still stubbed
 
@@ -412,9 +388,9 @@ Phase 5 adds a service worker for offline reading.
 - **`database "postgre" does not exist`** → typo: should be `/postgres` (with an `s`) at the end of the DATABASE_URL.
 - **`Invalid path specified in request URL`** during magic-link sign-in → `NEXT_PUBLIC_SUPABASE_URL` has `/rest/v1/` appended. Remove it.
 - **Magic-link 401** after click → your `Site URL` / `Redirect URLs` in Supabase don't include the URL you clicked from. Add it.
-- **GitHub Actions cron returns 401** → `CRON_SECRET` mismatch between Netlify env vars and the GitHub Actions secret.
+- **GitHub Actions cron returns 401** → `CRON_SECRET` mismatch between Railway's service variables and the GitHub Actions secret.
 - **GitHub Actions cron doesn't fire on schedule** → GitHub's scheduled workflows only run if the repo has had a push in the last 60 days. Push a commit (or run it manually once a month) to keep it alive.
 - **Feed adds but no articles appear** → check `feeds.last_error` in Supabase (Table Editor) — common causes: blocked user agents, non-XML responses.
 - **Readability returns nothing for some sites** → some pages need JS to render; Readability needs static HTML. We fall back to the RSS excerpt.
-- **PDF upload "Internal Server Error" on Netlify** → file is too big for the function payload limit. Local dev allows up to 20MB.
+- **PDF upload fails over 20MB** → that is our own cap (`src/lib/upload-limits.ts`), enforced client-side so it fails with a clear message rather than a 413.
 - **`Server Action '<hash>' was not found on the server`** (desktop) → the bundled standalone server's Server Action manifest is stale relative to the client. **Fix: rebuild the desktop app** (`npm run desktop:build`) so the client and the bundled `.next/standalone` server come from one `next build`. A partial build or an electron-builder package from an older `.next/standalone` causes this; the build now fails loudly if the two manifests disagree.

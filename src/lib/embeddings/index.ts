@@ -115,9 +115,11 @@ function voyageEmbeddings(): EmbeddingsProvider {
 //    that was embedded with Voyage/OpenAI over to `local`, you must re-embed
 //    everything (clear + backfill) or search results will be garbage. For this
 //    reason `local` is a deliberate provider CHOICE, not a silent auto-fallback.
-//  - The model (~130MB quantized) downloads on first use and needs memory +
-//    time that typically exceed serverless function limits. Best for local dev
-//    or a long-lived self-hosted Node process.
+//  - The model (~130MB quantized) downloads on first use and is then held in
+//    process memory. That fits a long-lived Node process (desktop, or a
+//    Railway service with enough RAM) far better than it ever fitted a
+//    serverless function, but it is still a real memory cost on a small
+//    instance — hence a deliberate choice rather than a default.
 
 let localPipelinePromise: Promise<(text: string, opts: object) => Promise<{ data: Float32Array }>> | null =
   null;

@@ -19,17 +19,25 @@ export const runtime = "nodejs";
  *    answer; an LLM costs tokens, is slower by an order of magnitude, and can
  *    decide to summarise instead. See lib/i18n/machine-translate.
  *
- * 2. **One chunk per request.** This deploys to Netlify, where a synchronous
- *    function is killed at ~10s regardless of any `maxDuration` export (that
- *    directive is Vercel-only). Whole-article translation cannot fit in that
- *    budget, so the client walks the chunks and renders them as they land.
- *    Chunking is derived from the stored body, so chunk N is the same slice on
- *    every request without any server-side session state.
+ * 2. **One chunk per request.** Originally forced by a serverless host that
+ *    killed a synchronous function at ~10s; kept on purpose now that Railway
+ *    allows minutes, because walking chunks is what lets the reader render
+ *    translated text as it lands instead of staring at a spinner until the
+ *    whole article is done. Chunking is derived from the stored body, so chunk
+ *    N is the same slice on every request without any server-side session
+ *    state.
  */
 
-/** MT is ~20x faster per character than a model, so chunks can be far larger
- *  than the model path's — while still leaving headroom under the 10s cap. */
-const MT_CHUNK_CHARS = 8000;
+/**
+ * Characters of source per request.
+ *
+ * Was 8000 to stay under a ~10s function cap. MT is ~20x faster per character
+ * than a model, so that ceiling — not the engine — was the binding constraint,
+ * and a long article paid five or six round trips it never needed. At 40k most
+ * articles now translate in a single request while the chunk protocol still
+ * covers the genuinely long ones.
+ */
+const MT_CHUNK_CHARS = 40_000;
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

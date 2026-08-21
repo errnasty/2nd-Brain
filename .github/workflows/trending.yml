@@ -1,8 +1,8 @@
 name: Score trending stories
 
-# GitHub-Actions-backed cron — works on any host (Netlify, Vercel, your own VPS).
+# GitHub-Actions-backed cron — works on any host (Railway, your own VPS).
 # Uses the same two secrets as the feed sync workflow:
-#   APP_URL      = https://your-site.netlify.app
+#   APP_URL      = https://your-site.up.railway.app
 #   CRON_SECRET  = the same value you set in your hosting platform's env vars
 #
 # Runs hourly, more often than the 2-hourly feed sync, because trending is a

@@ -2,7 +2,7 @@
 
 The desktop app runs the whole app **locally** on an embedded Postgres (PGlite)
 so reads/writes are instant and work offline — like Obsidian. Supabase stays the
-**cloud** that devices sync through. The Netlify web app is unaffected.
+**cloud** that devices sync through. The hosted web app is unaffected.
 
 ```
 Electron window → local Next.js server → PGlite (local Postgres + pgvector)   ← instant

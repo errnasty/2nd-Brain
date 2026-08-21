@@ -104,16 +104,17 @@ export async function syncFeed(feedId: string, userId: string): Promise<SyncResu
 // each slot frees fast; 24 stays well within socket/memory limits.
 const SYNC_BATCH = 24;
 
-// Wall-clock budget per invocation. Netlify's sync function cap is 10s (it
-// IGNORES the route's maxDuration export — that's Vercel-only). We stop
-// starting new batches past this and return a partial 200; the next run picks
-// up where we left off because feeds are synced oldest-first.
-const SYNC_BUDGET_MS = 8000;
+// Wall-clock budget per invocation, held a minute under Railway's 5-minute
+// no-data request cutoff. We stop starting new batches past this and return a
+// partial 200; the next run picks up where we left off because feeds are synced
+// oldest-first. At the old 8-second serverless ceiling a large feed list needed
+// many cron passes to get through one lap, so the tail was always stale.
+const SYNC_BUDGET_MS = 240_000;
 
 /**
  * Run syncFeed across feeds in bounded-concurrency chunks via Promise.allSettled
  * (one slow/broken feed can't reject the batch). Time-boxed: bails out of the
- * loop once SYNC_BUDGET_MS elapses so the serverless function never times out.
+ * loop once SYNC_BUDGET_MS elapses so the request never hits the edge timeout.
  */
 async function runSyncBatched(feedList: { id: string; userId: string }[]): Promise<SyncResult[]> {
   const start = Date.now();

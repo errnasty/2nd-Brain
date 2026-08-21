@@ -23,9 +23,9 @@ export function UploadZone({ folderId }: { folderId?: string | null }) {
     const all = Array.from(files);
     if (all.length === 0) return;
 
-    // Reject oversized files up front. On the hosted web app the platform's
-    // serverless body cap is well below 20MB, so this is the REAL limit — without
-    // it the upload dies with an opaque 413 the action never sees.
+    // Reject oversized files up front, so an over-limit file fails with a
+    // sentence naming the file and the cap rather than a 413 from deep inside
+    // the Server Action machinery.
     const max = maxUploadBytes();
     const list = all.filter((f) => {
       if (f.size > max) {

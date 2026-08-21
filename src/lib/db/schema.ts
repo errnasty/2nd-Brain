@@ -389,8 +389,8 @@ export const externalStories = pgTable(
 );
 
 /**
- * Per-user cursor for the trending cron. The cron is time-boxed (Netlify kills
- * functions at ~10s — see `src/lib/rss/sync.ts`), so it processes users
+ * Per-user cursor for the trending cron. The cron is time-boxed against the
+ * host's request ceiling (see `src/lib/trending/run.ts`), so it processes users
  * oldest-run-first and stops when the budget runs out; the next run continues
  * from where it stopped. Exactly the resumption strategy feed sync uses.
  */
@@ -777,12 +777,11 @@ export const thinktankDecks = pgTable(
     // Depth the user requested — drives card count + per-card word ceiling.
     detail: text("detail").$type<"brief" | "standard" | "deep">().default("standard").notNull(),
     // ── Incremental build state ────────────────────────────────────────
-    // A deck used to be generated in ONE call of 30-60s. This deploys to
-    // Netlify, which kills a function at ~10s whatever `maxDuration` says, so
-    // that call could never finish: the deck sat on "generating" forever and
+    // A deck used to be generated in ONE call of 30-60s, which the old
+    // serverless host killed at ~10s: the deck sat on "generating" forever and
     // every retry died the same way. Generation is now a plan-then-fill loop —
-    // the outline is written once, then card bodies are generated in small
-    // batches across as many short requests as it takes.
+    // the outline is written once, then card bodies are generated in batches
+    // across several requests, so cards appear as they are written.
     //
     // `outline` is the plan; cards are inserted as their bodies land, so
     // `cards.length < outline.length` means the build is still filling in.
@@ -915,8 +914,8 @@ export const thinktankSaved = pgTable(
 // Transient bookkeeping for long AI work (curriculum notes, gap research)
 // that runs outside the request the user is waiting on: the client creates a
 // job (fast), kicks a run route whose response is allowed to sever, and polls
-// the job's status — so a serverless timeout can never surface as a false
-// error. NOT synced (like xp_events): jobs are per-device scratch state, and
+// the job's status — so a severed response can never surface as a false error,
+// whatever cuts it. NOT synced (like xp_events): jobs are per-device state, and
 // the durable output is the Directory note they produce.
 export type AiJobKind = "curriculum" | "gap_research";
 export type AiJobPayload = { topic: string; folderId?: string | null };
@@ -1200,11 +1199,6 @@ export type UserSettingsData = {
   // these lead the brief and get a section first. Shallow-merge caveat: always
   // send the whole array. Additive jsonb key — no migration needed.
   briefTopics?: string[];
-  // Render the Study hub's game layer as a pixel-art console rather than
-  // ordinary UI. Purely cosmetic: both skins show the same numbers from the
-  // same GameState, so nothing is reachable in one and not the other. Unset =
-  // off. Additive jsonb key — no migration needed.
-  pixelMode?: boolean;
 };
 
 export const userSettings = pgTable(

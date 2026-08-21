@@ -51,10 +51,11 @@ const parser: Parser<Record<string, never>, CustomItem> = new Parser({
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-// Per-attempt fetch timeout. Kept below the sync run budget (8s) so one slow
-// feed aborts on its own instead of blocking its batch or being killed by the
-// serverless wall-clock cap.
-const FETCH_TIMEOUT_MS = 6000;
+// Per-attempt fetch timeout. No longer squeezed under an 8-second run budget,
+// but still deliberately short: a feed that hasn't answered in 15 seconds is
+// not going to, and the point is to abort it rather than let it hold a
+// concurrency slot its batch-mates could be using.
+const FETCH_TIMEOUT_MS = 15_000;
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

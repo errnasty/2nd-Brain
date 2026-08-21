@@ -40,8 +40,9 @@ export type TextGeneration = {
  * On the success path this promise has already settled, so the wait is
  * theoretical. It exists for the failure path: awaiting usage after a severed
  * stream is the only way to bill tokens that were genuinely burned, but a
- * provider that never settles it would otherwise hold the response — and the
- * serverless function behind it — open until the platform kills it.
+ * provider that never settles it would otherwise hold the response open until
+ * the edge times it out — which on Railway means up to 15 minutes of a request
+ * doing nothing.
  */
 export const USAGE_SETTLE_MS = 2_000;
 

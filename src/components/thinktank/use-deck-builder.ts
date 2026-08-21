@@ -11,9 +11,10 @@ import { useRouter } from "next/navigation";
  * `src/lib/thinktank/generate.ts`). Something has to keep asking, and it has to
  * survive the two things that used to break it:
  *
- *   - a severed response. On Netlify a function is killed at ~10s, so a kick
- *     may never return at all. A rejected fetch is therefore NOT an error, it's
- *     a normal outcome: re-kick and let the committed progress speak.
+ *   - a severed response. A kick may never return at all — an edge timeout, a
+ *     deploy mid-flight, a dropped connection. A rejected fetch is therefore
+ *     NOT an error, it's a normal outcome: re-kick and let the committed
+ *     progress speak.
  *   - unmounting. The first cards turn the generating screen into the reader,
  *     which is a different component — so the reader drives the rest of the
  *     build with this same hook rather than the build silently stopping

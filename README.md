@@ -12,8 +12,7 @@ the **Vercel AI SDK** with Anthropic / OpenRouter providers. Ships as a web app
 database and two-way sync.
 
 **👉 Deploying? [DEPLOY.md](DEPLOY.md) is the step-by-step walkthrough** —
-Supabase setup, then either [Netlify](DEPLOY.md#7-deploy-to-netlify) or
-[Railway](DEPLOY.md#7b-deploy-to-railway-alternative-to-netlify), plus GitHub
+Supabase setup, then [Railway](DEPLOY.md#7-deploy-to-railway), plus GitHub
 Actions cron.
 
 **Desktop build:** [DESKTOP.md](DESKTOP.md).
@@ -153,19 +152,29 @@ electron/             # Desktop shell, build, local schema bundling
 
 ## Hosting
 
-`railway.json`, `netlify.toml`, and `vercel.json` all live in the repo; each
-host reads only its own file, so keeping all three costs nothing. Deploy to
-**one** of them — two hosts auto-deploying the same branch gives you two live
-URLs, and only one can be the Supabase `Site URL`.
+**Railway**, configured by `railway.json`. The app runs as a long-lived Node
+server (`next start`), and the code assumes that rather than merely tolerating
+it:
 
-- **Railway** — long-lived Node server. No function timeout on the Readability
-  extractor or the brief stream, no small body cap on uploads. ~$5/month.
-- **Netlify** — serverless, generous free tier, ~6 MB upload cap and function
-  time limits.
+- Cron passes work to a **4-minute** budget instead of ~8 seconds, so a large
+  feed list finishes a lap in one run and trending scores the whole library.
+- Uploads are **20 MB** on web as well as desktop — there is no serverless body
+  cap to duck under.
+- The Daily Brief, quizzes and study plans use the **stronger model** with full
+  output budgets; those were downgraded purely to fit a 10-second function.
+- The database pool is sized for **one process** (`max: 10`), not for a fleet of
+  functions each opening their own.
 
-Cron is **GitHub Actions** either way (`sync-feeds` every 2h, `trending`
-hourly), authorised with a `CRON_SECRET` bearer token. That keeps it free and
-portable across hosts.
+Work is still split into steps — brief sections, quiz batches, ThinkTank cards,
+translation chunks — but now for the reason that survives the host change:
+results stream in as they land, and one failed step doesn't cost the rest.
+
+A serverless host would still build this repo, but the timings above would not
+hold and several features would time out.
+
+Cron is **GitHub Actions** (`sync-feeds` every 2h, `trending` hourly),
+authorised with a `CRON_SECRET` bearer token — free, inspectable, and portable
+if the host ever changes.
 
 `/api/health` is an unauthenticated liveness probe — it touches no database, and
 is excluded from the middleware matcher so it answers `200` rather than

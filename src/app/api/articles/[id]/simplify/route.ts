@@ -13,14 +13,15 @@ export const runtime = "nodejs";
  * Rewrite one chunk of an article at a plainer reading level.
  *
  * Unlike translation there is no non-AI way to do this, so it stays a model
- * call — but only ONE per request. This deploys to Netlify, where a
- * synchronous function is killed at ~10s no matter what `maxDuration` says
- * (that export is Vercel-only), and the previous version looped over every
- * chunk of the article inside a single request. On anything longer than a few
- * paragraphs it could never finish, which is why it always failed.
+ * call — but only ONE per request. That began as a workaround for a serverless
+ * host that killed the function at ~10s while an earlier version looped over
+ * every chunk inside one request, so on anything longer than a few paragraphs
+ * it could never finish.
  *
- * The client now walks the chunks and renders each as it arrives, so a long
- * article fills in progressively instead of timing out with nothing to show.
+ * It stays one-per-request on Railway for a better reason: the client walks the
+ * chunks and renders each as it arrives, so a long article fills in
+ * progressively. Batching them back into a single call would trade visible
+ * progress for one long silent wait, which is worse even though it now fits.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;

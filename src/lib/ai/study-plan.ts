@@ -2,19 +2,19 @@ import { anthropic } from "@ai-sdk/anthropic";
 import type { LanguageModelV1 } from "ai";
 import { z } from "zod";
 import { aiAvailable } from "./provider";
-import { userFastModel, userSmartModel } from "./user-model";
+import { userSmartModel } from "./user-model";
 import { generateJson } from "./generate-json";
 
-// Cloud (Netlify) must finish inside the ~10s serverless limit → fast model,
-// bounded output. The desktop app runs the server locally with no such limit,
-// so it uses a stronger model + a bigger budget for a more detailed plan.
-// STUDY_PLAN_MODEL still force-overrides with a specific Anthropic model id.
-const isDesktop = process.env.APP_RUNTIME === "desktop";
-const MAX_OUTPUT_TOKENS = isDesktop ? 8000 : 3500;
+// The cloud used to be held to a fast model and a 3500-token budget so a plan
+// could finish inside a ~10s serverless limit, which bought a thinner plan to
+// satisfy a constraint Railway doesn't have. Both runtimes now get the stronger
+// model and the full budget (mirrors quiz.ts). STUDY_PLAN_MODEL still
+// force-overrides with a specific Anthropic model id.
+const MAX_OUTPUT_TOKENS = 8000;
 
 async function planModel(): Promise<LanguageModelV1> {
   if (process.env.STUDY_PLAN_MODEL) return anthropic(process.env.STUDY_PLAN_MODEL);
-  return isDesktop ? userSmartModel() : userFastModel();
+  return userSmartModel();
 }
 
 // One study session / task. `dayOffset` is days from the start date — the
@@ -68,9 +68,10 @@ export async function generateStudyPlan(input: {
     ? `Hard deadline: day ${input.totalDays} (the last day). Everything must finish by then, with review before it.`
     : `No hard deadline — plan across about ${input.totalDays} days.`;
 
-  const detailLine = isDesktop
-    ? `Be thorough and specific — break each topic into concrete sub-skills with detailed, actionable focuses. Use as many sessions as the plan genuinely needs (up to ~50).`
-    : `Be concise — aim for the FEWEST sessions that cover everything (roughly 2-4 sessions per topic; keep the total well under 50). This must generate quickly.`;
+  // One instruction for both runtimes. The cloud used to be told to be brief
+  // and "generate quickly" — a plan shaped by the old ~10s function cap rather
+  // than by what makes a good plan.
+  const detailLine = `Be thorough and specific — break each topic into concrete sub-skills with detailed, actionable focuses. Use as many sessions as the plan genuinely needs (up to ~50).`;
 
   const system = `You are an expert learning coach. Design a realistic, followable study plan that covers EVERY topic the user lists.
 

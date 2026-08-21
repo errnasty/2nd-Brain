@@ -284,20 +284,22 @@ export async function generateThinkTankDeck(
 
 // ── Incremental generation (plan, then fill) ───────────────────────────
 //
-// The single-call path above produces a whole deck in one 30-60s request. That
-// works on a host that allows long functions; it CANNOT work on Netlify, which
-// kills a function at ~10s regardless of `maxDuration` (that export is
-// Vercel-only — the same lesson `src/lib/rss/sync.ts` and the article simplify
-// route already learned). A deck built that way never finished, sat on
-// "generating" forever, and failed identically on every retry.
+// The single-call path above produces a whole deck in one 30-60s request. On
+// the old serverless host that was fatal — a function died at ~10s, so a deck
+// built that way never finished, sat on "generating" forever, and failed
+// identically on every retry.
 //
-// So generation is split into requests that each comfortably fit the budget:
-// one short call plans the outline, then card bodies are written a few at a
-// time. Total work is the same; per-request work is a fraction of it, and a
-// severed request costs only the batch it was in.
+// Railway would now allow the single call, but generation stays split: one
+// short call plans the outline, then card bodies are written a few at a time.
+// Total work is the same, cards appear as they are written instead of after a
+// minute of nothing, and a severed request costs only the batch it was in.
 
-/** Cards per body-filling call. Small enough that one batch is a few seconds. */
-export const CARD_BATCH_SIZE = 4;
+/**
+ * Cards per body-filling call. Raised from 4 now that a batch no longer has to
+ * fit in a few seconds — fewer round trips per deck, while still small enough
+ * that the deck visibly fills in rather than arriving all at once.
+ */
+export const CARD_BATCH_SIZE = 8;
 
 export type DeckOutline = {
   title: string;

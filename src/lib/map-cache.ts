@@ -2,9 +2,10 @@
 // whole graph (all items + tags + folders + links) per request — heaviest read
 // in the app. Cache the built JSON per user; bust on any directory write.
 //
-// Note: serverless instances each hold their own cache, so a write on one
-// instance won't bust another's. The short TTL bounds that staleness; the
-// explicit bust handles the common same-instance case immediately.
+// On Railway this is one long-lived process, so the cache and the writes that
+// bust it share memory and the explicit bust is authoritative. The TTL is kept
+// as the backstop for the cases it cannot see: a second replica, or a desktop
+// client whose sync wrote directly to the database.
 
 type Entry = { at: number; json: unknown };
 const cache = new Map<string, Entry>();

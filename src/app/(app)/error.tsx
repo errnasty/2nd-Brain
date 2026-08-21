@@ -24,10 +24,17 @@ import { RefreshCw } from "lucide-react";
  *
  * A reload is the actual fix: it fetches the current build's HTML and its
  * current chunk names. So a chunk error reloads once, automatically, and says
- * so. The once is enforced through sessionStorage — if the reload lands on a
- * page that still can't load its chunks (a genuinely broken deploy, or a
- * service worker serving a stale shell), looping would be worse than stopping
- * and showing the message.
+ * so. The "once" is enforced through a TIMESTAMP in sessionStorage: a second
+ * chunk error within RELOAD_GUARD_WINDOW_MS means the reload didn't help (a
+ * genuinely broken deploy, or a service worker serving a stale shell), and
+ * looping would be worse than stopping and showing the message.
+ *
+ * It must be a timestamp rather than a sticky flag. A flag could only be
+ * cleared from inside this boundary — which renders only when something has
+ * ALREADY failed — so a successful recovery left it set forever, and every
+ * later deploy skipped its automatic reload and made the user press the button
+ * by hand. Expiring the guard means each deploy gets its own free retry while
+ * a real loop still stops after one.
  */
 
 /** Errors that mean "the code isn't there", not "the code went wrong". */
@@ -45,7 +52,14 @@ function isMissingChunkError(error: Error): boolean {
   );
 }
 
-const RELOAD_GUARD_KEY = "app.chunkReload.v1";
+const RELOAD_GUARD_KEY = "app.chunkReload.v2";
+
+/**
+ * How long one automatic reload suppresses the next. Long enough to cover the
+ * reload itself failing the same way (which is immediate), short enough that
+ * the following deploy is treated as a fresh event rather than a repeat.
+ */
+const RELOAD_GUARD_WINDOW_MS = 15_000;
 
 export default function AppError({
   error,
@@ -62,8 +76,9 @@ export default function AppError({
     setStaleBuild(true);
     let alreadyTried = false;
     try {
-      alreadyTried = sessionStorage.getItem(RELOAD_GUARD_KEY) === "1";
-      sessionStorage.setItem(RELOAD_GUARD_KEY, "1");
+      const last = Number(sessionStorage.getItem(RELOAD_GUARD_KEY) ?? 0);
+      alreadyTried = Number.isFinite(last) && Date.now() - last < RELOAD_GUARD_WINDOW_MS;
+      sessionStorage.setItem(RELOAD_GUARD_KEY, String(Date.now()));
     } catch {
       // Private mode: no guard available. Treat it as "already tried" rather
       // than risk a reload loop we can't detect.
@@ -71,17 +86,6 @@ export default function AppError({
     }
     if (!alreadyTried) window.location.reload();
   }, [error]);
-
-  // A clean render after a recovered reload clears the guard, so the next
-  // deploy gets its own single retry instead of inheriting this one's.
-  useEffect(() => {
-    if (staleBuild) return;
-    try {
-      sessionStorage.removeItem(RELOAD_GUARD_KEY);
-    } catch {
-      // ignore
-    }
-  }, [staleBuild]);
 
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">

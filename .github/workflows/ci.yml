@@ -1,7 +1,7 @@
 name: CI
 
 # Type-check + tests on every push/PR. Catches the class of errors that
-# repeatedly broke the Netlify build (illegal route exports, client bundle
+# repeatedly broke the production build (illegal route exports, client bundle
 # pulling server-only modules, type drift) in ~30s before deploy.
 
 on:

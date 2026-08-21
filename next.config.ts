@@ -34,9 +34,19 @@ const csp = [
 ].join("; ");
 
 const nextConfig: NextConfig = {
+  // Version-skew protection. Next stamps this id on asset requests and Server
+  // Action calls, so when a tab left open across a deploy talks to the new
+  // server it gets a clean full reload instead of a missing chunk or a
+  // "Server Action was not found" error. Railway exposes RAILWAY_DEPLOYMENT_ID
+  // to both the build and the runtime of the same deploy, so the two agree.
+  // Absent locally and on the desktop build, where skew cannot happen.
+  ...(process.env.RAILWAY_DEPLOYMENT_ID
+    ? { deploymentId: process.env.RAILWAY_DEPLOYMENT_ID }
+    : {}),
   // `output: "standalone"` is only needed for the Electron desktop build, which
-  // bundles and runs the Next server locally. The Netlify build leaves this
-  // unset (its plugin handles output), so this is gated behind DESKTOP_BUILD.
+  // bundles and runs the Next server locally. The Railway build leaves this
+  // unset — it runs `next start` against a normal build — so it is gated
+  // behind DESKTOP_BUILD.
   ...(process.env.DESKTOP_BUILD ? { output: "standalone" as const } : {}),
   // Keep heavy native/WASM deps out of the bundler — loaded at runtime only
   // when EMBEDDINGS_PROVIDER=local actually selects them. PGlite (desktop local
