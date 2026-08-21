@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   CORROBORATION_SATURATION,
+  EXTERNAL_EVIDENCE_FLOOR,
+  EXTERNAL_EVIDENCE_SATURATION,
   MAX_STORY_AGE_HOURS,
   VELOCITY_CEILING,
   VELOCITY_FLOOR,
   corroborationScore,
+  evidenceConfidence,
   externalHeat,
   normalizeVolume,
   personalRelevance,
@@ -33,6 +36,24 @@ describe("corroborationScore", () => {
   it("scores nothing for zero sources", () => {
     expect(corroborationScore(0)).toBe(0);
     expect(corroborationScore(-3)).toBe(0);
+  });
+});
+
+describe("evidenceConfidence", () => {
+  it("gives nothing to a story with no sources at all", () => {
+    expect(evidenceConfidence(0)).toBe(0);
+  });
+
+  it("holds a singleton to the floor and reaches full trust at saturation", () => {
+    expect(evidenceConfidence(1)).toBeLessThan(0.5);
+    expect(evidenceConfidence(1)).toBeGreaterThanOrEqual(EXTERNAL_EVIDENCE_FLOOR);
+    expect(evidenceConfidence(EXTERNAL_EVIDENCE_SATURATION)).toBeCloseTo(1, 5);
+    expect(evidenceConfidence(50)).toBe(1);
+  });
+
+  it("rises monotonically with corroboration", () => {
+    expect(evidenceConfidence(1)).toBeLessThan(evidenceConfidence(2));
+    expect(evidenceConfidence(2)).toBeLessThan(evidenceConfidence(3));
   });
 });
 
@@ -108,6 +129,42 @@ describe("scoreCluster", () => {
       NOW,
     ).score;
     expect(hot).toBeGreaterThan(bare);
+  });
+
+  // The regression that made Trending feel mundane: one feed's throwaway post
+  // containing a hot keyword claimed the full external weight and beat a story
+  // three independent outlets had actually run. External heat is borrowed
+  // evidence and must not outrank the real thing.
+  it("keeps a keyword-matching singleton below a genuinely corroborated story", () => {
+    const keywordBait = scoreCluster(
+      { ...base, distinctFeeds: 1, externalVolume: 1, personalScore: 0.5 },
+      NOW,
+    ).score;
+    const realStory = scoreCluster(
+      { ...base, distinctFeeds: 3, externalVolume: 0.5 },
+      NOW,
+    ).score;
+    expect(realStory).toBeGreaterThan(keywordBait);
+  });
+
+  // External heat still has to *do* something once the evidence is there,
+  // otherwise gating it would just be deleting the signal.
+  it("still rewards external heat once a story is corroborated", () => {
+    const cold = scoreCluster({ ...base, distinctFeeds: 4 }, NOW).score;
+    const hot = scoreCluster({ ...base, distinctFeeds: 4, externalVolume: 1 }, NOW).score;
+    expect(hot).toBeGreaterThan(cold);
+  });
+
+  it("separates the day's big story from the day's filler by a wide margin", () => {
+    const big = scoreCluster(
+      { distinctFeeds: 5, firstSeen: hoursAgo(5), lastSeen: hoursAgo(1), externalVolume: 0.8 },
+      NOW,
+    ).score;
+    const filler = scoreCluster(
+      { distinctFeeds: 1, firstSeen: hoursAgo(5), lastSeen: hoursAgo(1), externalVolume: 0.3 },
+      NOW,
+    ).score;
+    expect(big).toBeGreaterThan(filler * 3);
   });
 
   it("boosts a story on a desk the user follows", () => {

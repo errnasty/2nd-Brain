@@ -3,10 +3,12 @@
  *
  * ## The budget
  *
- * Netlify kills a function at ~10s regardless of the route's `maxDuration`
- * export (that's Vercel-only — see `src/lib/rss/sync.ts`, which learned this
- * the hard way). So this run does as much as it can inside a wall-clock budget
- * and returns a partial success, and the next run continues where it stopped.
+ * Railway's edge closes a request that transfers no data for 5 minutes, so the
+ * run still works to a wall-clock budget and returns a partial success — but
+ * the budget is now minutes rather than the ~8 seconds the old serverless host
+ * allowed. That difference is not just throughput: a run that had to stop after
+ * a couple of users left most of the library unscored between passes, which is
+ * what made the ranking look arbitrary.
  *
  * Resumption is by `trending_runs.last_run_at`, oldest first, exactly like feed
  * sync resumes on oldest-fetched feeds. That ordering is self-correcting: any
@@ -22,22 +24,22 @@ import { computeTrendingForUser, decayStaleScores } from "./compute";
 import { refreshSignals, signalsAreStale } from "./signals";
 
 /**
- * Wall-clock budget. Below the platform's ~10s cap with room for the final
- * writes to land — a run that gets killed mid-write leaves scores and clusters
- * disagreeing, which is worse than doing fewer users.
+ * Wall-clock budget. Held a minute under Railway's 5-minute no-data cutoff so
+ * the final writes land inside the request — a run killed mid-write leaves
+ * scores and clusters disagreeing, which is worse than doing fewer users.
  */
-export const RUN_BUDGET_MS = 8000;
+export const RUN_BUDGET_MS = 240_000;
 
 /**
- * Budget reserved for the signal refresh when it's due. The four sources are
- * fetched in parallel with a 4s timeout each, so this is the realistic worst
- * case; keeping it separate means a slow signal fetch eats its own allowance
- * rather than every user's.
+ * Budget reserved for the signal refresh when it's due. The four public sources
+ * are fetched in parallel, so this is a generous worst case rather than a sum;
+ * keeping it separate means a slow signal fetch eats its own allowance rather
+ * than every user's.
  */
-export const SIGNAL_BUDGET_MS = 4500;
+export const SIGNAL_BUDGET_MS = 20_000;
 
 /** Users per run, whatever the clock says — a sanity ceiling. */
-export const MAX_USERS_PER_RUN = 50;
+export const MAX_USERS_PER_RUN = 200;
 
 export type TrendingRunSummary = {
   usersProcessed: number;

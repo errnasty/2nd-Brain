@@ -7,9 +7,8 @@
  * Three queries in, two writes out, and everything in between is arithmetic in
  * process. That's deliberate. The naive version asks pgvector for each
  * article's neighbours and the database for each cluster's members, which is
- * hundreds of round trips inside a function the platform kills at ~10s. Here
- * the round trips are constant and the per-article cost is CPU, which is the
- * resource we have plenty of.
+ * hundreds of round trips paid on every pass. Here the round trips are constant
+ * and the per-article cost is CPU, which is the resource we have plenty of.
  *
  * ## No model calls
  *
@@ -54,11 +53,20 @@ export const WINDOW_HOURS = 48;
 /**
  * Ceiling on articles per pass. The clustering is O(n²) and every row carries a
  * 1024-dimension embedding over the wire, so this is the knob that bounds both
- * the CPU and the bytes. 250 articles is roughly two days of a heavy feed list;
- * beyond that the tail is old enough that recency decay has flattened it to
- * nothing regardless.
+ * the CPU and the bytes.
+ *
+ * Raised from 250 because that cap was quietly costing accuracy, not just
+ * coverage. The window is read newest-first, so on a busy list 250 rows might
+ * only reach back twelve hours — and truncating a story's earlier tellings
+ * lowers its distinct-feed count, which is the single input the whole ranking
+ * leans on. A story would look like a singleton purely because the rest of it
+ * fell off the end of the query.
+ *
+ * 600 covers a genuinely heavy list across the full 48-hour window, at roughly
+ * 180k pair comparisons — around a second of CPU, which is nothing against a
+ * minutes-long budget on a persistent server and was impossible on a ~10s one.
  */
-export const MAX_ARTICLES = 250;
+export const MAX_ARTICLES = 600;
 
 /** User material sampled to build the interest centroid. */
 const INTEREST_SAMPLE = 200;

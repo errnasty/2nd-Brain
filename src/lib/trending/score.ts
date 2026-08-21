@@ -58,8 +58,34 @@ export const SCORE_WEIGHTS = {
  */
 export const CORROBORATION_EXPONENT = 1.5;
 
-/** Distinct-feed count at which corroboration is considered maxed out. */
-export const CORROBORATION_SATURATION = 8;
+/**
+ * Distinct-feed count at which corroboration is considered maxed out.
+ *
+ * Calibrated to a PERSONAL feed list, not a newsroom wire. Saturating at 8 was
+ * wrong in practice: a typical list carries 3–5 outlets on even the day's
+ * biggest story, so the backbone term never got past ~0.5 and the borrowed
+ * signals below decided the ranking instead. Five distinct outlets a reader
+ * chose themselves converging on one story IS that reader's top story.
+ */
+export const CORROBORATION_SATURATION = 5;
+
+/**
+ * Distinct feeds at which external heat is trusted at full strength, and the
+ * fraction of it a single-source story may claim.
+ *
+ * External heat is a BORROWED signal: it says the wider world is publishing
+ * about these words, not that this story is real news in this library. Left
+ * ungated it was the bug behind "trending shows me mundane articles" — one
+ * feed's throwaway post that happened to contain a hot term scored the full
+ * external weight (0.3) and beat a genuinely corroborated three-outlet story
+ * (~0.23), because nothing tied the borrowed signal to any evidence.
+ *
+ * So external heat now scales with how much corroboration stands behind it. It
+ * amplifies evidence rather than substituting for it, which is exactly the
+ * asymmetry the clustering threshold is already built around.
+ */
+export const EXTERNAL_EVIDENCE_SATURATION = 4;
+export const EXTERNAL_EVIDENCE_FLOOR = 0.2;
 
 /** Hours for a story's freshness to halve. */
 export const DECAY_HALF_LIFE_HOURS = 8;
@@ -82,8 +108,16 @@ export const VELOCITY_CEILING = 1.4;
 /** Bonus for a story that a followed desk claims (see `topics.ts`). */
 export const FOLLOWED_DESK_BONUS = 0.35;
 
-/** A story older than this is not "trending" whatever else it has going. */
-export const MAX_STORY_AGE_HOURS = 72;
+/**
+ * A story older than this is not "trending" whatever else it has going.
+ *
+ * Aligned with `WINDOW_HOURS` in `compute.ts`, which reads a 48-hour window.
+ * At 72 this was unreachable dead config: a cluster's `lastSeen` can never be
+ * older than the window it was built from, so the guard never fired and the
+ * number implied a policy the code did not have. It stays as an explicit floor
+ * for callers that score a cluster from somewhere other than the cron pass.
+ */
+export const MAX_STORY_AGE_HOURS = 48;
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -104,6 +138,21 @@ export function corroborationScore(distinctFeeds: number): number {
   const n = Math.max(0, distinctFeeds);
   if (n <= 1) return n === 1 ? unit(1 / CORROBORATION_SATURATION ** CORROBORATION_EXPONENT) : 0;
   return unit(n ** CORROBORATION_EXPONENT / CORROBORATION_SATURATION ** CORROBORATION_EXPONENT);
+}
+
+/**
+ * How much of the external-heat weight a story with this many distinct feeds
+ * is allowed to claim, in [EXTERNAL_EVIDENCE_FLOOR, 1].
+ *
+ * A singleton keeps a fifth of it — enough that a hot single-source story can
+ * still surface above cold ones, nowhere near enough to top a corroborated
+ * story on keywords alone.
+ */
+export function evidenceConfidence(distinctFeeds: number): number {
+  const n = Math.max(0, distinctFeeds);
+  if (n === 0) return 0;
+  const t = unit(n / EXTERNAL_EVIDENCE_SATURATION);
+  return EXTERNAL_EVIDENCE_FLOOR + t * (1 - EXTERNAL_EVIDENCE_FLOOR);
 }
 
 /**
@@ -169,9 +218,17 @@ export function scoreCluster(signals: ClusterSignals, now: Date = new Date()): S
   const velocity = velocityMultiplier(signals.distinctFeeds, spanHours);
   const decay = ageHours > MAX_STORY_AGE_HOURS ? 0 : recencyDecay(ageHours);
 
+  // External heat is gated on corroboration; personal relevance is not. The
+  // difference is whose evidence it is — the wider world's coverage is only
+  // meaningful once this library has independently seen the story, whereas
+  // "this is close to what you write about" is true of a single article on its
+  // own merits. Personal is also capped low enough (0.2) that it can only ever
+  // break ties, never lead the list.
   const blended =
     SCORE_WEIGHTS.corroboration * corroboration * velocity +
-    SCORE_WEIGHTS.external * unit(signals.externalVolume ?? 0) +
+    SCORE_WEIGHTS.external *
+      unit(signals.externalVolume ?? 0) *
+      evidenceConfidence(signals.distinctFeeds) +
     SCORE_WEIGHTS.personal * unit(signals.personalScore ?? 0);
 
   const followed = signals.onFollowedDesk ? 1 + FOLLOWED_DESK_BONUS : 1;
