@@ -43,17 +43,12 @@ function Sparkline({ data }: { data: number[] }) {
 export function StatsOverview({
   stats,
   game,
-  characterSeed,
-  initialPixel = false,
   canStartSession = false,
   sessionSummary,
   onStartSession,
 }: {
   stats: StudyStats;
   game: GameState | null;
-  /** Stable per-user seed for the character sigil (see character-sheet.tsx). */
-  characterSeed?: string;
-  initialPixel?: boolean;
   canStartSession?: boolean;
   sessionSummary?: SessionSummary;
   onStartSession?: () => void;
@@ -170,9 +165,9 @@ export function StatsOverview({
         </div>
       )}
 
-      {game && characterSeed && (
+      {game && (
         <div className="mt-6">
-          <CharacterSheet game={game} seed={characterSeed} initialPixel={initialPixel} />
+          <CharacterSheet game={game} />
         </div>
       )}
 
