@@ -85,6 +85,9 @@ type Source = {
   title: string;
   kind: "saved_article" | "uploaded_document" | "user_note";
   similarity: number;
+  /** Set when the item was reached by traversing links/tags/folders rather than
+   *  by matching the question — carries the relationship, e.g. 'linked from "X"'. */
+  via?: string;
 };
 
 type Usage = { promptTokens: number; completionTokens: number; totalTokens: number };
@@ -1451,7 +1454,11 @@ function GroundingMeter({ message }: { message: Message }) {
       </span>
     );
   }
-  const avgSim = sources.length ? sources.reduce((s, x) => s + x.similarity, 0) / sources.length : 0;
+  // Only directly-matched sources carry a cosine similarity. Averaging a
+  // traversal score in with them would report a grounding strength that no
+  // measurement backs.
+  const matched = sources.filter((s) => !s.via);
+  const avgSim = matched.length ? matched.reduce((s, x) => s + x.similarity, 0) / matched.length : 0;
   let filled: number;
   if (sources.length === 0) {
     filled = 2; // web-only
@@ -1783,9 +1790,18 @@ const MessageBubble = memo(function MessageBubble({
               icon={<KindIcon kind={s.kind} />}
               title={s.title}
               trailing={
-                <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
-                  {Math.round(s.similarity * 100)}%
-                </span>
+                s.via ? (
+                  <span
+                    className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-muted-foreground"
+                    title={`Related: ${s.via}`}
+                  >
+                    linked
+                  </span>
+                ) : (
+                  <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {Math.round(s.similarity * 100)}%
+                  </span>
+                )
               }
               onClick={() => onOpenSource(s.directoryItemId)}
             />

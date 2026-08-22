@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-22-a",
+    date: "August 22, 2026",
+    title: "Ask now follows the connections between your notes",
+    tag: "improvement",
+    summary:
+      "Ask used to judge every item on its own wording, so a note you had deliberately linked, tagged, or filed alongside a match could still be missed. It now follows those connections outward from what it finds and pulls in the strongly connected neighbours.",
+    items: [
+      "Sources reached this way are marked \"linked\" and say how they connect, instead of showing a match percentage they never earned.",
+      "A loose connection only counts when something else backs it up — a second kind of link, or a second matching item — so related material surfaces without dragging in everything that happens to share a busy tag.",
+    ],
+  },
+  {
     id: "2026-08-22",
     date: "August 22, 2026",
     title: "Scheduled feed updates are back on",
