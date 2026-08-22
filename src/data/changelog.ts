@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-22",
+    date: "August 22, 2026",
+    title: "Scheduled feed updates are back on",
+    tag: "fix",
+    summary:
+      "The automatic every-few-hours refresh had been failing since the move to the new host, so new articles and trending scores only appeared when you refreshed a feed by hand. It runs on schedule again.",
+  },
+  {
     id: "2026-08-21-e",
     date: "August 21, 2026",
     title: "Write your answer, and have it checked",

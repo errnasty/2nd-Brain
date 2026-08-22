@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { db } from "@/lib/db";
 import { profiles } from "@/lib/db/schema";
 import { backfillEmbeddings } from "@/lib/embeddings/backfill";
@@ -17,11 +18,8 @@ export const dynamic = "force-dynamic";
  * Driven by .github/workflows/backfill-embeddings.yml every 6 hours.
  */
 export async function GET(request: NextRequest) {
-  const auth = request.headers.get("authorization");
-  const expected = `Bearer ${process.env.CRON_SECRET ?? ""}`;
-  if (!process.env.CRON_SECRET || auth !== expected) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = checkCronAuth(request);
+  if (denied) return denied;
 
   const url = new URL(request.url);
   const perUserLimit = Math.min(Number(url.searchParams.get("limit") ?? 500), 2000);
