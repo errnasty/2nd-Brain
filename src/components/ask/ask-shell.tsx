@@ -1719,7 +1719,7 @@ const MessageBubble = memo(function MessageBubble({
         </div>
       )}
       {message.thinking && <ThinkingPanel text={message.thinking} answering={!!message.content} />}
-      <div className="prose-reader max-w-none text-[15px] leading-[1.7]">
+      <div className="prose-reader prose-answer max-w-none">
         {message.content ? (
           <CitedMarkdown
             citations={(message.sources ?? []).map((s) => ({

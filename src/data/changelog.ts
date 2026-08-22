@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-22-b",
+    date: "August 22, 2026",
+    title: "Reader settings open again, and Ask reads better on a phone",
+    tag: "fix",
+    summary:
+      "The T button in the article reader now opens its font, size, and theme panel — on a phone it was opening into a hidden strip and looked broken. Ask's answers also had the long-form reading size applied to them, which was far too large on a narrow screen; they now use a size meant for reading in a chat column.",
+  },
+  {
     id: "2026-08-22-a",
     date: "August 22, 2026",
     title: "Ask now follows the connections between your notes",

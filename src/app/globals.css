@@ -539,6 +539,63 @@
   @apply border border-border px-3 py-2;
 }
 
+/* ── Ask answers ────────────────────────────────────────────────────
+   Ask reuses .prose-reader for Markdown styling, but an answer is chat,
+   not long-form reading: it sits in a narrow column above a composer and
+   is skimmed, so the reader's 19px/1.85 is oversized — badly so on a
+   phone, where it left only a few words per line.
+
+   This has to be real CSS rather than a `text-[15px]` utility on the
+   element. .prose-reader is declared outside @layer and after
+   @tailwind utilities, so at equal specificity it wins on source order —
+   which is exactly why the utility that was already on the Ask answer
+   never took effect. Same reason the headings are re-declared in em
+   here: the reader's are fixed rem sizes and would not scale down with
+   the smaller base.
+   ─────────────────────────────────────────────────────────────────── */
+.prose-answer {
+  font-size: 15px;
+  line-height: 1.7;
+}
+.prose-answer h1 {
+  @apply mb-3 mt-6;
+  font-size: 1.45em;
+  line-height: 1.25;
+}
+.prose-answer h2 {
+  @apply mb-2 mt-5;
+  font-size: 1.25em;
+  line-height: 1.3;
+}
+.prose-answer h3 {
+  @apply mb-2 mt-4;
+  font-size: 1.1em;
+}
+.prose-answer p {
+  @apply my-3;
+}
+.prose-answer ul,
+.prose-answer ol {
+  @apply my-3 pl-5;
+}
+.prose-answer li {
+  @apply my-1;
+}
+.prose-answer blockquote {
+  @apply my-4 pl-4;
+  font-size: 1em;
+}
+.prose-answer pre {
+  @apply my-4;
+}
+
+@media (max-width: 640px) {
+  .prose-answer {
+    font-size: 14px;
+    line-height: 1.65;
+  }
+}
+
 /* ── Brief markdown overrides ───────────────────────────────────────
    The Daily Brief content streams as Markdown. Promote the H3 section
    markers ("### High-Priority") into editorial section dividers and
