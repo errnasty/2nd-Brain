@@ -26,6 +26,18 @@ jobs:
           # URL below into something that redirects, and a redirect is fatal
           # here for the reason in the next comment.
           APP_URL="$(printf '%s' "$APP_URL" | tr -d '[:space:]' | sed 's:/*$::')"
+          # Force https. A host copied out of a dashboard usually arrives with
+          # no scheme at all, and curl then defaults it to http:// — which the
+          # host answers with a 301 to https, and that scheme change is itself
+          # an origin change, so the Authorization header is dropped exactly as
+          # it would be for a different domain. Upgrade rather than fail: this
+          # is the single most common way the secret gets set, and there is no
+          # case where we would rather send a cron token over plaintext http.
+          case "$APP_URL" in
+            https://*) ;;
+            http://*)  APP_URL="https://${APP_URL#http://}" ;;
+            *)         APP_URL="https://$APP_URL" ;;
+          esac
           # Deliberately no -L. curl drops the Authorization header across any
           # origin change — a different host, or the same host over http vs
           # https — so following a redirect silently converts an authorised
