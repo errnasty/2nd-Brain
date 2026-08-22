@@ -22,10 +22,30 @@ jobs:
           if [ -z "$APP_URL" ] || [ -z "$CRON_SECRET" ]; then
             echo "Missing APP_URL or CRON_SECRET secret"; exit 1
           fi
-          response=$(curl -sSL -o /tmp/sync.json -w "%{http_code}" \
+          # Trim stray whitespace and trailing slashes. Either one turns the
+          # URL below into something that redirects, and a redirect is fatal
+          # here for the reason in the next comment.
+          APP_URL="$(printf '%s' "$APP_URL" | tr -d '[:space:]' | sed 's:/*$::')"
+          # Deliberately no -L. curl drops the Authorization header across any
+          # origin change — a different host, or the same host over http vs
+          # https — so following a redirect silently converts an authorised
+          # call into an anonymous one, and the server answers 401 as though
+          # the secret were wrong. Fail loudly and name the target instead.
+          response=$(curl -sS -o /tmp/sync.json -w "%{http_code} %{redirect_url}" \
             -H "Authorization: Bearer $CRON_SECRET" \
             --max-time 290 \
             "$APP_URL/api/cron/sync-feeds")
-          echo "HTTP $response"
+          code="${response%% *}"
+          redirect="${response#* }"
+          echo "HTTP $code"
+          case "$code" in
+            3*)
+              echo "APP_URL redirects to: ${redirect:-<unknown>}"
+              echo "Set the APP_URL secret to that final URL (scheme included)."
+              echo "curl strips the Authorization header across a redirect, so the"
+              echo "server receives no token and reports it as a secret mismatch."
+              exit 1
+              ;;
+          esac
           cat /tmp/sync.json
-          if [ "$response" != "200" ]; then exit 1; fi
+          if [ "$code" != "200" ]; then exit 1; fi

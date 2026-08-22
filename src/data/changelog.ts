@@ -49,10 +49,10 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     id: "2026-08-22",
     date: "August 22, 2026",
-    title: "Scheduled feed updates are back on",
+    title: "Chasing down the stalled feed refresh",
     tag: "fix",
     summary:
-      "The automatic every-few-hours refresh had been failing since the move to the new host, so new articles and trending scores only appeared when you refreshed a feed by hand. It runs on schedule again.",
+      "The automatic every-few-hours refresh has been failing since the move to the new host, so new articles and trending scores only appear when you refresh a feed by hand. The scheduled job now reports exactly why it was turned away instead of failing silently, which is what pinned down the cause.",
   },
   {
     id: "2026-08-21-e",
