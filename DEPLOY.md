@@ -388,7 +388,12 @@ Phase 5 adds a service worker for offline reading.
 - **`database "postgre" does not exist`** → typo: should be `/postgres` (with an `s`) at the end of the DATABASE_URL.
 - **`Invalid path specified in request URL`** during magic-link sign-in → `NEXT_PUBLIC_SUPABASE_URL` has `/rest/v1/` appended. Remove it.
 - **Magic-link 401** after click → your `Site URL` / `Redirect URLs` in Supabase don't include the URL you clicked from. Add it.
-- **GitHub Actions cron returns 401** → `CRON_SECRET` mismatch between Railway's service variables and the GitHub Actions secret.
+- **GitHub Actions cron returns 401** → `CRON_SECRET` mismatch between Railway's service variables and the GitHub Actions secret. The 401 body carries a `diagnostic` field that says which mismatch it is, without printing either value:
+  - `receivedToken: "missing"` → the request never carried the header. Check that `APP_URL` points at the Railway domain (a redirect to a *different* host makes curl drop `Authorization`).
+  - the two `chars` counts differ → the values really are different. Re-paste both.
+  - the counts are equal but it still 401s → the values differ invisibly, or **the running container predates the variable change**. Railway injects env vars at container start and stages variable edits until you press **Deploy**, so a secret you "already fixed" is not live until the service redeploys. Trigger a redeploy and re-run the workflow.
+
+  Stray leading/trailing whitespace on either side is tolerated (`src/lib/cron-auth.ts` trims both), so a value pasted with a trailing newline is no longer a mismatch.
 - **GitHub Actions cron doesn't fire on schedule** → GitHub's scheduled workflows only run if the repo has had a push in the last 60 days. Push a commit (or run it manually once a month) to keep it alive.
 - **Feed adds but no articles appear** → check `feeds.last_error` in Supabase (Table Editor) — common causes: blocked user agents, non-XML responses.
 - **Readability returns nothing for some sites** → some pages need JS to render; Readability needs static HTML. We fall back to the RSS excerpt.

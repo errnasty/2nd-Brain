@@ -14,6 +14,7 @@ import { getChatModel, DEFAULT_CHAT_MODEL, isThinkingCapable } from "@/lib/ai/mo
 import { openrouterClient, openrouterReasoningClient, openrouterKey } from "@/lib/ai/provider";
 import { rewriteQuery } from "@/lib/ai/retrieval/rewrite";
 import { rerankSources, unionByItem } from "@/lib/ai/retrieval/rerank";
+import { expandByGraph, describePath } from "@/lib/ai/retrieval/graph";
 import { memoryBlock } from "@/lib/ai/memory";
 import { streamWebAnswer } from "@/lib/ai/web-answer";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -55,6 +56,16 @@ const BACKFILL_TIMEOUT_MS = 60_000;
 const REWRITE_TIMEOUT_MS = 20_000;
 const RERANK_TIMEOUT_MS = 20_000;
 
+/**
+ * Context slots held back for items reached by walking the user's graph rather
+ * than by matching the query. Taken out of the same budget, never added to it:
+ * traversal has to earn its place against the direct hits, not inflate the
+ * prompt past them.
+ */
+const GRAPH_RESERVE = 3;
+const MAX_CONTEXT_ITEMS = 12;
+const GRAPH_TIMEOUT_MS = 6000;
+
 // Marker appended after the answer text carrying token usage as JSON. The
 // client splits on this and never renders it. NOT exported — Next.js route
 // modules only allow specific named exports.
@@ -74,7 +85,12 @@ You are given:
    in a specific file or folder, say so and prefer that.
 2. CONTEXT: <document> blocks containing the ACTUAL full text of the most
    relevant items. Read these to answer — they are the file contents, not
-   previews.
+   previews. A block may carry a "via" attribute, meaning it was NOT matched
+   against the question — it was reached by following the user's own links,
+   tags, or folders out from an item that was. Treat those as related material:
+   use them to connect ideas across the library, and when you lean on one, say
+   how it connects (e.g. "your note X, which links to this…"). Never present a
+   "via" document as if it directly answered the question.
 
 Answer the question USING the provided context.
 
@@ -343,7 +359,48 @@ export async function POST(req: Request) {
         const attached = Array.isArray(body.contextIds)
           ? body.contextIds.filter((id) => typeof id === "string").slice(0, 8)
           : [];
-        let orderedIds = Array.from(new Set([...attached, ...folderIds, ...relevantVectorIds])).slice(0, 12);
+        // ── 2b. Traverse the user's own graph out from what was found ──
+        // Vector search scores each item alone, so an item the user explicitly
+        // connected to three strong hits — but which never uses the question's
+        // words — is invisible to it. Walk directory_links / shared tags /
+        // shared folders out from the hits and let well-connected neighbours in.
+        //
+        // Unconditional on purpose: gating traversal behind "is this question
+        // graph-shaped?" would put retrieval quality back at the mercy of
+        // phrasing, which is the failure it exists to remove.
+        const directIds = Array.from(new Set([...attached, ...folderIds, ...relevantVectorIds]));
+        const graphSeeds = [
+          // Pinned items are the user asserting relevance outright — the
+          // strongest seed there is, and they may carry no vector score at all.
+          ...attached.map((id) => ({ directoryItemId: id, similarity: 0.8 })),
+          ...sources
+            .filter((s) => s.similarity >= RELEVANCE_FLOOR)
+            .slice(0, 8)
+            .map((s) => ({ directoryItemId: s.directoryItemId, similarity: s.similarity })),
+        ];
+        const neighbors = (
+          await withTimeout(
+            expandByGraph(userId, graphSeeds, { maxHops: 2, cap: GRAPH_RESERVE }),
+            GRAPH_TIMEOUT_MS,
+            "graph",
+          ).catch(() => [])
+        ).filter((n) => !directIds.includes(n.directoryItemId));
+
+        // Direct hits keep the budget minus whatever traversal actually earned,
+        // so a question with 12 strong matches still yields to a few neighbours,
+        // and one with none loses nothing.
+        let orderedIds = [
+          ...directIds.slice(0, MAX_CONTEXT_ITEMS - Math.min(GRAPH_RESERVE, neighbors.length)),
+          ...neighbors.map((n) => n.directoryItemId),
+        ].slice(0, MAX_CONTEXT_ITEMS);
+
+        // "Why is this here" for each traversed item, keyed by id. Titles come
+        // from the retrieved set, which is where every path starts.
+        const titleById = new Map(sources.map((s) => [s.directoryItemId, s.title]));
+        const viaById = new Map(
+          neighbors.map((n) => [n.directoryItemId, describePath(n.paths, (id) => titleById.get(id))]),
+        );
+        const graphScoreById = new Map(neighbors.map((n) => [n.directoryItemId, n.score]));
 
         // Don't go empty-handed: if nothing cleared the floor and there were no
         // structural matches, keep the top few vector hits so we can still answer.
@@ -368,17 +425,28 @@ export async function POST(req: Request) {
             : ordered
                 .map((c, i) => {
                   const docBody = c.content && c.content.length > 0 ? c.content : snippetById.get(c.directoryItemId) ?? "";
-                  return `<document id="${i + 1}" title="${esc(c.title)}" path="${esc(c.path)}" kind="${c.kind}">\n${docBody}\n</document>`;
+                  // Traversed items say so. Without it the model treats a
+                  // two-hop neighbour as a direct answer to the question.
+                  const via = viaById.get(c.directoryItemId);
+                  const viaAttr = via ? ` via="${esc(via)}"` : "";
+                  return `<document id="${i + 1}" title="${esc(c.title)}" path="${esc(c.path)}" kind="${c.kind}"${viaAttr}>\n${docBody}\n</document>`;
                 })
                 .join("\n\n");
 
         // Source map for client citations, aligned to the document ids above.
+        // `via` marks a source that arrived by traversal. The client shows the
+        // relationship in place of a match percentage, because a traversal score
+        // is not a cosine similarity and displaying it as one would be a lie.
         const sourceMap = ordered.map((c, i) => ({
           n: i + 1,
           directoryItemId: c.directoryItemId,
           title: c.title,
           kind: c.kind,
-          similarity: Math.round((simById.get(c.directoryItemId) ?? 0) * 100) / 100,
+          similarity:
+            Math.round(
+              (simById.get(c.directoryItemId) ?? graphScoreById.get(c.directoryItemId) ?? 0) * 100,
+            ) / 100,
+          ...(viaById.has(c.directoryItemId) ? { via: viaById.get(c.directoryItemId) } : {}),
         }));
 
         // ── 3. Build messages with history ─────────────────────────────

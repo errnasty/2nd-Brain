@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { checkCronAuth } from "@/lib/cron-auth";
 import { runTrending } from "@/lib/trending/run";
 
 export const runtime = "nodejs";
@@ -22,20 +23,8 @@ export const dynamic = "force-dynamic";
  *         the next run resumes from the oldest cursor).
  */
 export async function GET(request: NextRequest) {
-  const auth = request.headers.get("authorization");
-  const expected = `Bearer ${process.env.CRON_SECRET ?? ""}`;
-  if (!process.env.CRON_SECRET) {
-    return NextResponse.json(
-      { error: "CRON_SECRET is not set in the server environment." },
-      { status: 401 },
-    );
-  }
-  if (auth !== expected) {
-    return NextResponse.json(
-      { error: "Unauthorized — CRON_SECRET does not match the Authorization header." },
-      { status: 401 },
-    );
-  }
+  const denied = checkCronAuth(request);
+  if (denied) return denied;
 
   try {
     const summary = await runTrending();

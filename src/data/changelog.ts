@@ -27,6 +27,34 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-22-b",
+    date: "August 22, 2026",
+    title: "Reader settings open again, and Ask reads better on a phone",
+    tag: "fix",
+    summary:
+      "The T button in the article reader now opens its font, size, and theme panel — on a phone it was opening into a hidden strip and looked broken. Ask's answers also had the long-form reading size applied to them, which was far too large on a narrow screen; they now use a size meant for reading in a chat column.",
+  },
+  {
+    id: "2026-08-22-a",
+    date: "August 22, 2026",
+    title: "Ask now follows the connections between your notes",
+    tag: "improvement",
+    summary:
+      "Ask used to judge every item on its own wording, so a note you had deliberately linked, tagged, or filed alongside a match could still be missed. It now follows those connections outward from what it finds and pulls in the strongly connected neighbours.",
+    items: [
+      "Sources reached this way are marked \"linked\" and say how they connect, instead of showing a match percentage they never earned.",
+      "A loose connection only counts when something else backs it up — a second kind of link, or a second matching item — so related material surfaces without dragging in everything that happens to share a busy tag.",
+    ],
+  },
+  {
+    id: "2026-08-22",
+    date: "August 22, 2026",
+    title: "Scheduled feed updates are back on",
+    tag: "fix",
+    summary:
+      "The automatic every-few-hours refresh had been failing since the move to the new host, so new articles and trending scores only appeared when you refreshed a feed by hand. It runs on schedule again.",
+  },
+  {
     id: "2026-08-21-e",
     date: "August 21, 2026",
     title: "Write your answer, and have it checked",
