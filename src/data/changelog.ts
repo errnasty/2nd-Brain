@@ -49,10 +49,14 @@ export const CHANGELOG: ChangelogEntry[] = [
   {
     id: "2026-08-22",
     date: "August 22, 2026",
-    title: "Chasing down the stalled feed refresh",
+    title: "Background updates are running again",
     tag: "fix",
     summary:
-      "The automatic every-few-hours refresh has been failing since the move to the new host, so new articles and trending scores only appear when you refresh a feed by hand. The scheduled job now reports exactly why it was turned away instead of failing silently, which is what pinned down the cause.",
+      "Since the move to the new host, the scheduled jobs were being bounced to the login page instead of being let through, so feeds, trending scores, and Ask's memory of new material only updated when you did it by hand. They run on their own again.",
+    items: [
+      "Ask now picks up newly added articles and documents without a manual Refresh memory.",
+      "Connecting to your library from an outside app works again for the same reason.",
+    ],
   },
   {
     id: "2026-08-21-e",
