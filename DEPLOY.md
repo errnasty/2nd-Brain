@@ -179,10 +179,18 @@ variable scope, not a shared project variable, unless you add more services.
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
 | `DATABASE_URL` | The **pooled** Supabase URL (port 6543, Transaction mode) |
-| `CRON_SECRET` | `[guid]::NewGuid().ToString("N")` in PowerShell |
+| `CRON_SECRET` | `[guid]::NewGuid().ToString("N")` in PowerShell — **generate one; never paste the `.env.example` placeholder** (see below) |
 | `NEXT_PUBLIC_APP_URL` | Your Railway domain (set after step 3) |
 | `ANTHROPIC_API_KEY` | For the Daily Brief, Ask, and the rest of the AI surface |
 | `EMBEDDINGS_PROVIDER` + its key | `voyage` + `VOYAGE_API_KEY`, or `openai` + `OPENAI_API_KEY` |
+
+> ⚠️ **`CRON_SECRET` must be a value you generated.** `.env.example` ships the
+> literal string `generate-a-random-string` as a placeholder. It is committed to
+> this repository, so anyone who can read the repo can read it: if that value
+> reaches your deployment, the cron endpoints are effectively unauthenticated
+> and can be triggered by anyone, including the ones that spend AI credits
+> (trending and the embeddings backfill). Generate a real value and set the
+> identical string in Railway and in the GitHub Actions secret.
 
 > ⚠️ **`NEXT_PUBLIC_*` vars are baked in at build time, not read at runtime.**
 > Next.js inlines them into the client bundle, and `next.config.ts` also reads
@@ -389,7 +397,7 @@ Phase 5 adds a service worker for offline reading.
 - **`Invalid path specified in request URL`** during magic-link sign-in → `NEXT_PUBLIC_SUPABASE_URL` has `/rest/v1/` appended. Remove it.
 - **Magic-link 401** after click → your `Site URL` / `Redirect URLs` in Supabase don't include the URL you clicked from. Add it.
 - **GitHub Actions cron returns 401** → `CRON_SECRET` mismatch between Railway's service variables and the GitHub Actions secret. The 401 body carries a `diagnostic` field that says which mismatch it is, without printing either value:
-  - `receivedToken: "missing"` → the request never carried the header. Check that `APP_URL` points at the Railway domain (a redirect to a *different* host makes curl drop `Authorization`).
+  - `receivedToken: "missing"` → **the request never carried the header, so this is not a secret mismatch at all — stop re-pasting the values.** `APP_URL` points at a URL that redirects, and curl drops `Authorization` across *any* origin change: a different host, or the same host over `http` vs `https`. The workflows no longer pass `-L`, so this now fails with the redirect target printed; set `APP_URL` to that final URL, scheme included (e.g. `https://your-app.up.railway.app`, not `http://…` and not the old host).
   - the two `chars` counts differ → the values really are different. Re-paste both.
   - the counts are equal but it still 401s → the values differ invisibly, or **the running container predates the variable change**. Railway injects env vars at container start and stages variable edits until you press **Deploy**, so a secret you "already fixed" is not live until the service redeploys. Trigger a redeploy and re-run the workflow.
 
