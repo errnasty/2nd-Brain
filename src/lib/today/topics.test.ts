@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   BRIEF_TOPICS,
+  customDeskId,
+  normalizeCustomDesks,
+  resolveDesks,
   OTHER_TOPIC_ID,
   classifyArticle,
   groupByTopic,
@@ -123,5 +126,114 @@ describe("topic catalog", () => {
         expect(k).toMatch(/^[a-z0-9]+( [a-z0-9]+)*$/);
       }
     }
+  });
+});
+
+describe("custom desks", () => {
+  const singapore = [
+    { id: "custom:singapore", label: "Singapore", desk: "Singapore", keywords: ["singapore", "mas"] },
+  ];
+
+  it("claims an article the built-in desks would have taken", () => {
+    const desks = resolveDesks(singapore);
+    const a = { title: "Singapore tightens chip export rules aimed at Beijing" };
+    // Geopolitics scores higher on its own terms — the custom desk still wins,
+    // because that is the whole reason somebody adds one.
+    expect(classifyArticle(a)).toBe("geopolitics");
+    expect(classifyArticle(a, desks)).toBe("custom:singapore");
+  });
+
+  it("leaves articles it does not match exactly where they were", () => {
+    const desks = resolveDesks(singapore);
+    const a = { title: "NATO weighs new sanctions on Russia" };
+    expect(classifyArticle(a, desks)).toBe("geopolitics");
+  });
+
+  it("matches terms the reader typed with punctuation or capitals", () => {
+    const desks = resolveDesks([
+      { id: "custom:sea", label: "SEA", desk: "the region", keywords: ["South-East Asia"] },
+    ]);
+    expect(classifyArticle({ title: "South East Asia braces for a wet season" }, desks)).toBe(
+      "custom:sea",
+    );
+  });
+
+  it("keeps its own label and remit through the desk lookups", () => {
+    const desks = resolveDesks(singapore);
+    expect(topicLabel("custom:singapore", desks)).toBe("Singapore");
+    expect(topicLabel("custom:singapore")).toBe("custom:singapore");
+  });
+
+  it("has no effect at all when the reader has defined none", () => {
+    expect(resolveDesks()).toBe(BRIEF_TOPICS);
+    expect(resolveDesks([])).toBe(BRIEF_TOPICS);
+  });
+});
+
+describe("normalizeCustomDesks", () => {
+  it("drops anything that isn't a desk", () => {
+    expect(normalizeCustomDesks(null)).toEqual([]);
+    expect(normalizeCustomDesks("nope")).toEqual([]);
+    expect(normalizeCustomDesks([null, 3, { label: "" }])).toEqual([]);
+  });
+
+  it("falls back to the label when no term survives", () => {
+    const [desk] = normalizeCustomDesks([{ label: "Singapore", keywords: ["", 7] }]);
+    expect(desk.keywords).toEqual(["singapore"]);
+    expect(desk.id).toBe("custom:singapore");
+    expect(desk.desk).toContain("Singapore");
+  });
+
+  it("derives a namespaced id and keeps a supplied one", () => {
+    expect(customDeskId("Semiconductor supply")).toBe("custom:semiconductor-supply");
+    expect(customDeskId("!!!")).toBe("custom:desk");
+    const [desk] = normalizeCustomDesks([
+      { id: "custom:frozen", label: "Renamed since", keywords: ["x"] },
+    ]);
+    expect(desk.id).toBe("custom:frozen");
+  });
+
+  it("deduplicates ids and bounds the list", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ label: `Desk ${i}`, keywords: ["a"] }));
+    expect(normalizeCustomDesks(many).length).toBeLessThanOrEqual(8);
+    expect(
+      normalizeCustomDesks([
+        { label: "Singapore", keywords: ["a"] },
+        { label: "singapore", keywords: ["b"] },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("never keeps a duplicate term", () => {
+    const [desk] = normalizeCustomDesks([
+      { label: "Chips", keywords: ["TSMC", "tsmc", " tsmc "] },
+    ]);
+    expect(desk.keywords).toEqual(["tsmc"]);
+  });
+});
+
+describe("groupByTopic with clusters", () => {
+  const items = [
+    { title: "Fed holds rates steady as inflation cools" },
+    { title: "No change from the FOMC, say regulators reviewing the ruling" },
+    { title: "OpenAI ships a smaller open weights model" },
+  ];
+
+  it("splits two tellings of one story without cluster ids", () => {
+    const desks = groupByTopic(items).map((b) => b.topicId);
+    expect(new Set(desks).size).toBeGreaterThan(2);
+  });
+
+  it("keeps every telling of one story on a single desk", () => {
+    const buckets = groupByTopic(items, { clusterIds: ["fed", "fed", null] });
+    const withFirst = buckets.find((b) => b.refs.includes(1))!;
+    expect(withFirst.refs).toContain(2);
+  });
+
+  it("prefers a real desk to the catch-all when one telling found one", () => {
+    const pair = [{ title: "Untitled" }, { title: "OpenAI ships a smaller open weights model" }];
+    const buckets = groupByTopic(pair, { clusterIds: ["c", "c"] });
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].topicId).toBe("ai");
   });
 });

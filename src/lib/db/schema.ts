@@ -1199,6 +1199,13 @@ export type UserSettingsData = {
   // these lead the brief and get a section first. Shallow-merge caveat: always
   // send the whole array. Additive jsonb key — no migration needed.
   briefTopics?: string[];
+  // Desks the user defined themselves ("Singapore", "Semiconductors", …), each
+  // with the terms that claim an article for it. Ids are namespaced `custom:`
+  // so they can sit alongside built-in desk ids in `briefTopics` and in the
+  // brief-feedback rows. Validated on read by normalizeCustomDesks() — the
+  // settings write path is a generic shallow merge and cannot police shape.
+  // Shallow-merge caveat: always send the whole array. Additive jsonb key.
+  customDesks?: { id: string; label: string; desk: string; keywords: string[] }[];
 };
 
 export const userSettings = pgTable(

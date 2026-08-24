@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-24",
+    date: "August 24, 2026",
+    title: "Add your own desks, and a brief that stops repeating itself",
+    tag: "feature",
+    summary:
+      "You can now add desks of your own — Singapore, semiconductors, one company, whatever you actually follow — and each gets its own section written up under its own name. The brief also reads a much wider slice of your unread queue, and no longer covers the same story twice.",
+    items: [
+      "Add a desk from the Desks menu on Today: give it a name and the terms that belong to it. Your desks claim their articles ahead of the built-in ones, so a Singapore story is filed under Singapore rather than World Affairs.",
+      "Anything the lead covers is now left out of the desks below it, and the freed space goes to a story you would not otherwise have been told about.",
+      "The quick-clear list only offers what nothing else in the brief covered, so it stops handing back articles you have just read about.",
+      "Every telling of one story now lands on a single desk, instead of the same event being written up twice under two headings.",
+      "The brief now considers several hundred unread articles rather than at most 120, choosing the strongest stories from across all of them — and it says what it was built from at the end.",
+    ],
+  },
+  {
     id: "2026-08-22-b",
     date: "August 22, 2026",
     title: "Reader settings open again, and Ask reads better on a phone",

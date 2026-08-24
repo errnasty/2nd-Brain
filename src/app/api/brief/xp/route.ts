@@ -9,7 +9,9 @@ import {
   isBriefLevel,
   planBrief,
 } from "@/lib/today/brief-plan";
-import { fetchPlanRows, queueLimit, toPlanArticles } from "@/lib/today/brief-queue";
+import { fetchBriefQueue, queueLimit, scanLimit, toPlanArticles } from "@/lib/today/brief-queue";
+import { normalizeCustomDesks, resolveDesks } from "@/lib/today/topics";
+import { loadDeskWeights } from "@/lib/today/feedback-store";
 import {
   awardBriefComplete,
   awardBriefSection,
@@ -92,21 +94,34 @@ export async function POST(req: Request) {
   // to the same articles the reader actually saw.
   let level = DEFAULT_BRIEF_LEVEL;
   let priority: string[] = [];
+  let desks = resolveDesks();
   try {
     const settings = await getUserSettings(userId);
     if (isBriefLevel(settings.briefLevel)) level = settings.briefLevel;
     if (Array.isArray(settings.briefTopics)) {
       priority = settings.briefTopics.filter((t): t is string => typeof t === "string");
     }
+    desks = resolveDesks(normalizeCustomDesks(settings.customDesks));
   } catch {
     // Defaults are fine — this only affects which desks lead.
   }
   if (isBriefLevel(body.level)) level = body.level;
 
-  const { rows } = await fetchPlanRows(userId, queueLimit(BRIEF_LEVEL_CONFIG[level].articleLimit));
+  // Every input the queue's selection depends on has to be the same one the
+  // brief was generated under, or a section key would map onto a different set
+  // of articles than the reader actually saw and pay XP into the wrong skills.
+  const cfg = BRIEF_LEVEL_CONFIG[level];
+  const deskWeights = await loadDeskWeights(userId);
+  const { rows } = await fetchBriefQueue(userId, {
+    limit: queueLimit(cfg.articleLimit),
+    scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
+    priority,
+    deskWeights,
+    desks,
+  });
   if (rows.length === 0) return Response.json({ awarded: 0, skills: [] });
 
-  const plan = planBrief(toPlanArticles(rows), { level, priority });
+  const plan = planBrief(toPlanArticles(rows), { level, priority, deskWeights, desks });
   const idFor = (ref: number) => rows[ref - 1]?.id;
 
   /**

@@ -35,7 +35,7 @@
 import { and, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, storyClusters } from "@/lib/db/schema";
-import { classifyArticle } from "@/lib/today/topics";
+import { classifyArticle, resolveDesks, type CustomDesk } from "@/lib/today/topics";
 import { clusterArticles, cosine, representativeTitle, type ClusterableArticle } from "./cluster";
 import { isWithinTrendingDay, trendingDayStart } from "./day";
 import { externalHeat, personalRelevance, scoreCluster } from "./score";
@@ -215,10 +215,15 @@ export type TrendingPassResult = {
  */
 export async function computeTrendingForUser(
   userId: string,
-  opts: { followedTopics?: string[]; now?: Date } = {},
+  opts: { followedTopics?: string[]; customDesks?: CustomDesk[]; now?: Date } = {},
 ): Promise<TrendingPassResult> {
   const now = opts.now ?? new Date();
   const followed = new Set(opts.followedTopics ?? []);
+  // The reader's own desks count here too: a desk somebody added and follows
+  // should earn a cluster the followed-desk boost exactly as a built-in does,
+  // and the topic id stored on the cluster should be the one the brief will
+  // group it under.
+  const desks = resolveDesks(opts.customDesks);
 
   const [window, terms, interest] = await Promise.all([
     fetchWindow(userId, now),
@@ -242,11 +247,14 @@ export async function computeTrendingForUser(
     if (members.length === 0) return;
 
     const title = representativeTitle(members.map((m) => m.title));
-    const topicId = classifyArticle({
-      title,
-      excerpt: members[0].excerpt,
-      feedTitle: members[0].feedTitle,
-    });
+    const topicId = classifyArticle(
+      {
+        title,
+        excerpt: members[0].excerpt,
+        feedTitle: members[0].feedTitle,
+      },
+      desks,
+    );
 
     // External heat is measured on the cluster's best headline plus its lead,
     // not on every member: the members are tellings of the same story, so

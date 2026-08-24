@@ -17,7 +17,7 @@
 
 import type { BriefLevel, PlannedSection } from "./brief-plan";
 import { BRIEF_LEVEL_CONFIG } from "./brief-plan";
-import { topicById, topicLabel } from "./topics";
+import { topicById, topicLabel, type BriefTopic } from "./topics";
 
 const SHARED_RULES = [
   "Cite with the bracketed reference numbers exactly as supplied (e.g. [3]). Never invent a number.",
@@ -57,6 +57,20 @@ export type SectionContext = {
   readContext?: boolean;
   /** Stories this brief has covered before — see `story-memory.ts`. */
   continuing?: boolean;
+  /**
+   * An earlier section of THIS brief already wrote some of this desk's
+   * material up, and it has been removed from the list below.
+   *
+   * The rule exists because removal alone is not quite enough: a desk handed
+   * eight items where its biggest story is conspicuously missing will often
+   * reach for it anyway from memory of the day, or open with a state-of-play
+   * sentence about a story it can no longer cite. Saying plainly that the
+   * story is elsewhere in the brief turns that into what it should be — a
+   * clause of context, or nothing at all.
+   */
+  covered?: boolean;
+  /** The reader's desk list, so a custom desk resolves to its own label. */
+  desks?: BriefTopic[];
 };
 
 /** The system prompt for one section. */
@@ -90,7 +104,7 @@ ${rules([
   }
 
   if (section.kind === "topic") {
-    const topic = section.topicId ? topicById(section.topicId) : null;
+    const topic = section.topicId ? topicById(section.topicId, ctx.desks) : null;
     const remit = topic
       ? `This desk covers ${topic.desk}.`
       : "This desk covers whatever did not fit the other desks — treat it as a short catch-all.";
@@ -110,6 +124,8 @@ ${rules([
     "Stories marked as previously briefed are not new to me. Lead those bullets with the development, not the background.",
   ctx.readContext &&
     "Pieces I have already read today are listed for background only. Never cite them — they have no reference number — and don't spend a bullet retelling one.",
+  ctx.covered &&
+    "Stories the lead already covered have been removed from this desk's list. They are elsewhere in this brief, so do not write them up again or reach for them from memory — a single clause referring back is the most they are worth here.",
   "If an item was clearly misfiled onto this desk, leave it out rather than stretching the desk's remit.",
 ])}`;
   }
@@ -133,6 +149,8 @@ ${rules([
   "One bullet each: a shortened title, its bracketed reference number, and a reason of at most eight words.",
   hasStories(section) &&
     "References marked as the same story are duplicate coverage. Keep the fullest telling out of the list and put the rest in it, reason \"already covered by [n]\".",
+  ctx.covered &&
+    "Everything the rest of this brief wrote up has already been removed from this list, so never say an item is \"covered above\" — what is in front of you is only what nothing else touched.",
   "Be conservative — when in doubt, leave it out. A wrongly-skipped article costs me more than a wrongly-kept one.",
   'If nothing qualifies, reply with exactly this line and nothing else: "Nothing obviously skippable today."',
 ])}`;
@@ -260,11 +278,11 @@ export function sectionArticleBlock(
  * namespace. There is no body text to give — these are stories from outside the
  * user's subscriptions, and the app has deliberately not fetched them.
  */
-export function externalBlock(section: PlannedSection): string {
+export function externalBlock(section: PlannedSection, desks?: BriefTopic[]): string {
   return (section.externals ?? [])
     .map((e) => {
       const outlet = e.outlet ? ` (${e.outlet})` : "";
-      const desk = e.topicId ? ` · desk: ${topicLabel(e.topicId)}` : "";
+      const desk = e.topicId ? ` · desk: ${topicLabel(e.topicId, desks)}` : "";
       const spread = e.sourceCount > 1 ? ` · ${e.sourceCount} outlets` : "";
       return `[E${e.n}]${outlet} ${e.title}${desk}${spread}`;
     })
@@ -274,16 +292,23 @@ export function externalBlock(section: PlannedSection): string {
 /** One line of context above the article block: what window, how much queue. */
 export function sectionPreamble(
   section: PlannedSection,
-  opts: { windowLabel: string; totalCount: number; deskCount?: number },
+  opts: { windowLabel: string; totalCount: number; deskCount?: number; scannedCount?: number },
 ): string {
   if (section.kind === "external") {
     return `[Stories from the wider news world in the last day that your own feeds did not carry · ${section.externals?.length ?? 0} of them]`;
   }
+  // The scanned count is worth stating on the lead: "10 candidates from 110"
+  // reads as a shortlist of a small pile, where "10 candidates from 110, drawn
+  // from 640 scanned" tells the model what a candidate actually survived.
+  const pool =
+    opts.scannedCount && opts.scannedCount > opts.totalCount
+      ? `${opts.totalCount} articles selected from ${opts.scannedCount} unread`
+      : `${opts.totalCount} unread articles`;
   const scope =
     section.kind === "lead"
-      ? `${section.refs.length} candidates drawn from ${opts.totalCount} unread articles`
+      ? `${section.refs.length} candidates drawn from ${pool}`
       : section.kind === "topic"
         ? `${section.refs.length} of ${opts.deskCount ?? section.refs.length} items on this desk`
-        : `${section.refs.length} unread articles, titles only`;
+        : `${section.refs.length} articles no other section covered, titles only`;
   return `[Briefing window: ${opts.windowLabel} · ${scope} · ranked by how widely each story is being covered]`;
 }
