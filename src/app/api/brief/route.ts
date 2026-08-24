@@ -1,4 +1,3 @@
-import { createHash } from "crypto";
 import { streamText } from "ai";
 import { aiAvailable } from "@/lib/ai/provider";
 import { quietReasoningOptions, withReasoningHeadroom } from "@/lib/ai/models";
@@ -6,7 +5,7 @@ import { resolveUserSmartModel } from "@/lib/ai/user-model";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
-import { getMatchingBrief, loadStoryMemory, saveUserBrief } from "@/lib/brief-cache";
+import { loadStoryMemory } from "@/lib/brief-cache";
 import { getUserSettings } from "@/lib/settings/store";
 import {
   BRIEF_LEVEL_CONFIG,
@@ -32,6 +31,7 @@ import {
   sectionPreamble,
   sectionSystemPrompt,
   storyBlock,
+  normalizeBriefInstructions,
 } from "@/lib/today/brief-prompts";
 import {
   bodyCharLimit,
@@ -43,16 +43,14 @@ import {
   fetchReadContext,
   queueLimit,
   scanLimit,
-  stripHtml,
   toArticleInputs,
   toPlanArticles,
   unreadBriefIds,
 } from "@/lib/today/brief-queue";
-import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, briefStream } from "@/lib/today/brief-stream";
+import { EMPTY_SECTION_HEADER, briefStream } from "@/lib/today/brief-stream";
 import { loadDeskWeights } from "@/lib/today/feedback-store";
 import { loadExternalStories } from "@/lib/trending/signals";
 import { TITLE_SHINGLE_THRESHOLD, jaccard, titleShingles } from "@/lib/trending/cluster";
-import type { BriefSourceRef } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -76,7 +74,11 @@ export const maxDuration = 60;
  *   GET  /api/brief            → cheap fingerprint of the unread set (drift check)
  *   GET  /api/brief?plan=1     → the section plan + source map, no model involved
  *   POST /api/brief            → generate ONE section (streamed)
- *   POST /api/brief {systemPrompt} → legacy single-pass brief with a custom prompt
+ *
+ * There is no whole-brief mode. Customization used to replace the entire
+ * generation with the reader's own prompt, which meant opting out of the plan
+ * and everything built on it; it is now standing instructions layered into each
+ * section's prompt instead — see `brief-prompts.ts`.
  */
 
 // Raw full_text cap in SQL — ~6× the plain-text budget leaves HTML headroom.
@@ -97,6 +99,8 @@ type BriefPrefs = {
   customDesks: CustomDesk[];
   /** Those desks plus the built-ins — what every classifier here works from. */
   desks: BriefTopic[];
+  /** The reader's standing instructions, applied to every section. */
+  instructions: string;
 };
 
 /** The user's stored brief preferences, validated. */
@@ -109,10 +113,17 @@ async function briefPrefs(userId: string): Promise<BriefPrefs> {
       priority: Array.isArray(s.briefTopics) ? s.briefTopics.filter((t) => typeof t === "string") : [],
       customDesks,
       desks: resolveDesks(customDesks),
+      instructions: normalizeBriefInstructions(s.briefInstructions),
     };
   } catch {
     // A settings hiccup must not stop the brief — fall back to the defaults.
-    return { level: DEFAULT_BRIEF_LEVEL, priority: [], customDesks: [], desks: resolveDesks() };
+    return {
+      level: DEFAULT_BRIEF_LEVEL,
+      priority: [],
+      customDesks: [],
+      desks: resolveDesks(),
+      instructions: "",
+    };
   }
 }
 
@@ -220,6 +231,7 @@ export async function GET(req: Request) {
     level,
     priority,
     customDesks: prefs.customDesks,
+    instructions: prefs.instructions,
     coverage,
     sections: plan.sections,
     desks: deskRows,
@@ -289,9 +301,6 @@ type PostBody = {
   fingerprint?: string;
   /** The id-ORDER fingerprint — catches a trending re-rank of the same set. */
   order?: string;
-  /** Legacy single-pass mode: the user's own framing for the whole brief. */
-  systemPrompt?: string;
-  force?: boolean;
   /**
    * Refs an earlier section of this same brief already wrote up.
    *
@@ -348,12 +357,6 @@ export async function POST(req: Request) {
   } catch {
     // No body or invalid JSON — treat as a default sectioned request.
   }
-  const customPrompt =
-    typeof body.systemPrompt === "string" && body.systemPrompt.trim().length > 0
-      ? body.systemPrompt.trim()
-      : null;
-
-  if (customPrompt) return legacyBrief(user.id, customPrompt, body.force === true, req);
   return sectionBrief(user.id, body, req);
 }
 
@@ -451,6 +454,23 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     return new Response("No such brief section", { status: 404 });
   }
 
+  // Nothing left for this section to write about: everything on the desk was
+  // covered in the lead, or the whole queue was written up and the quick-clear
+  // list has no leftovers. Answered as an empty section rather than a model
+  // call about nothing — the client drops the block, so the reader sees a brief
+  // with one fewer heading instead of a heading over an apology.
+  if (section.kind !== "external" && section.refs.length === 0) {
+    return new Response("", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-brief-fingerprint": fingerprint,
+        "x-brief-order": order,
+        "x-brief-section": section.key,
+        [EMPTY_SECTION_HEADER]: "1",
+      },
+    });
+  }
+
   const deskCount = plan.desks.find((d) => d.topicId === section.topicId)?.count;
   const preamble = sectionPreamble(section, {
     windowLabel,
@@ -504,6 +524,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
         continuing: (section.continuing?.length ?? 0) > 0,
         covered: covered.length > 0,
         desks: prefs.desks,
+        instructions: prefs.instructions,
       }),
       messages: [
         {
@@ -538,125 +559,6 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
       "x-brief-fingerprint": fingerprint,
       "x-brief-order": order,
       "x-brief-section": section.key,
-    },
-  });
-}
-
-/**
- * The pre-sectioned path, kept for users who wrote their own brief prompt: one
- * call, their framing, the whole queue. It can't be split into sections (only
- * the author knows what shape they asked for), so it also keeps the server-side
- * whole-brief cache that makes a reload free.
- */
-const LEGACY_ARTICLE_LIMIT = 80;
-
-async function legacyBrief(
-  userId: string,
-  systemPrompt: string,
-  force: boolean,
-  req: Request,
-): Promise<Response> {
-  const prefs = await briefPrefs(userId);
-  const bodyChars = bodyCharLimit(BRIEF_LEVEL_CONFIG.standard.bodyChars);
-  // Its own, smaller cap. This path briefs the whole queue in ONE call with
-  // every body attached and no output ceiling, so the queue size is its prompt
-  // size — it cannot inherit the sectioned brief's larger pool, where a section
-  // only ever sees a dozen of them. It still goes through selection, so the 80
-  // it gets are 80 distinct stories rather than 80 rows including six copies of
-  // one wire report.
-  const { rows, windowLabel } = await fetchBriefQueue(userId, {
-    limit: queueLimit(LEGACY_ARTICLE_LIMIT),
-    scanLimit: scanLimit(BRIEF_LEVEL_CONFIG.standard.scanLimit, LEGACY_ARTICLE_LIMIT),
-    priority: prefs.priority,
-    desks: prefs.desks,
-  });
-  if (rows.length === 0) {
-    return new Response(
-      "No unread articles to brief on. Add some feeds and sync them, then come back.",
-      { headers: { "content-type": "text/plain; charset=utf-8" } },
-    );
-  }
-
-  const fingerprint = briefFingerprint(rows.map((r) => r.id));
-  const sourceMap = briefSourceMap(rows);
-  const promptHash = createHash("sha1").update(systemPrompt).digest("base64");
-
-  if (!force) {
-    const hit = await getMatchingBrief(userId, fingerprint, promptHash);
-    if (hit) {
-      const cached =
-        `${hit.content}` +
-        `\n${BRIEFSOURCES_SENTINEL}${JSON.stringify(hit.sourceMap)}` +
-        `\n${USAGE_SENTINEL}${JSON.stringify(hit.usage)}`;
-      return new Response(cached, {
-        headers: {
-          "content-type": "text/plain; charset=utf-8",
-          "x-brief-fingerprint": fingerprint,
-          "x-brief-cache": "hit",
-        },
-      });
-    }
-  }
-
-  // The custom-prompt path briefs on the whole queue in one call, so unlike a
-  // section it genuinely does need every body.
-  const bodies = await fetchBodies(
-    userId,
-    rows.map((r) => r.id),
-    bodyChars * RAW_FULLTEXT_MULTIPLIER,
-  );
-  const articleBlock = rows
-    .map((r, i) => {
-      const raw = bodies.get(r.id) ?? r.excerpt ?? "";
-      const text = raw ? stripHtml(raw) : "";
-      const trimmed = text.length > bodyChars ? `${text.slice(0, bodyChars)}…` : text;
-      return `[${i + 1}] (${r.feedTitle}) ${r.title}\n${trimmed}`.trim();
-    })
-    .join("\n\n");
-
-  const resolved = await resolveUserSmartModel();
-  const result = streamText({
-    model: resolved.model,
-    system: systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `Articles to brief on:\n\n[Briefing window: ${windowLabel}, ${rows.length} unread articles]\n\n${articleBlock}`,
-            ...cacheControlFor(resolved),
-          },
-          { type: "text", text: "Write the daily brief now." },
-        ],
-      },
-    ],
-    temperature: 0.4,
-    abortSignal: req.signal,
-    // No output cap on this path, so reasoning can't starve the answer — but a
-    // whole brief of visible thinking still isn't what was asked for.
-    providerOptions: quietReasoningOptions(resolved.provider, resolved.id),
-  });
-
-  const stream = briefStream(result, {
-    recordUsage: (tokens) => void recordAiUsage(userId, tokens),
-    signal: req.signal,
-    sourceMap,
-    onDone: (content, usage) => {
-      if (!content.trim()) return;
-      void saveUserBrief(userId, {
-        fingerprint,
-        promptHash,
-        content,
-        sourceMap: sourceMap as BriefSourceRef[],
-        usage,
-      });
-    },
-  });
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "x-brief-fingerprint": fingerprint,
     },
   });
 }

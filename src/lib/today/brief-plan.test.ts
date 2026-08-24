@@ -17,8 +17,10 @@ import {
 } from "./brief-plan";
 import { OTHER_TOPIC_ID, resolveDesks } from "./topics";
 import {
+  MAX_BRIEF_INSTRUCTIONS,
   MAX_SECTION_TOKENS,
   continuityBlock,
+  normalizeBriefInstructions,
   externalBlock,
   readContextBlock,
   sectionArticleBlock,
@@ -237,13 +239,20 @@ describe("dedup across sections", () => {
     expect(after.filter((r) => !before.includes(r))).toHaveLength(3);
   });
 
-  it("drops a desk section entirely when the lead covered all of it", () => {
+  it("keeps an emptied desk in the plan, with no refs", () => {
+    // The client planned WITHOUT `covered` — the lead had not been written yet
+    // — so it already holds a block for this desk and will ask for it by key.
+    // Dropping the section here would turn "nothing left to say" into a section
+    // that fails to load; the route answers the empty ref list instead.
     const items: PlanArticle[] = [
       { title: "NATO weighs fresh sanctions on Russia", clusterId: "c1" },
       { title: "OpenAI ships a smaller open weights model", clusterId: "c2" },
     ];
-    const plan = planBrief(items, { level: "deep", covered: [1] });
-    expect(plan.sections.find((x) => x.topicId === "geopolitics")).toBeUndefined();
+    const uncovered = planBrief(items, { level: "deep" });
+    const covered = planBrief(items, { level: "deep", covered: [1] });
+    // Same shape either way — that is the invariant the client depends on.
+    expect(covered.sections.map((x) => x.key)).toEqual(uncovered.sections.map((x) => x.key));
+    expect(covered.sections.find((x) => x.topicId === "geopolitics")?.refs).toEqual([]);
   });
 
   it("never offers the quick-clear list something the brief wrote up", () => {
@@ -305,7 +314,67 @@ describe("custom desks in the plan", () => {
   });
 });
 
+describe("standing instructions", () => {
+  const plan = planBrief(queue(), { level: "deep" });
+  const lead = findSection(plan, "lead")!;
+  const desk = plan.sections.find((s) => s.kind === "topic")!;
+  const skip = findSection(plan, "skip")!;
+  const instructions = "Write in British English.\nSkip anything about crypto.";
+
+  it("reaches every section, not just the lead", () => {
+    for (const section of [lead, desk, skip]) {
+      const prompt = sectionSystemPrompt(section, "deep", { instructions });
+      expect(prompt).toContain("Write in British English.");
+      expect(prompt).toContain("Skip anything about crypto.");
+    }
+  });
+
+  it("is absent entirely when the reader has written none", () => {
+    expect(sectionSystemPrompt(lead, "deep")).not.toContain("Standing instructions");
+    expect(sectionSystemPrompt(lead, "deep", { instructions: "" })).not.toContain(
+      "Standing instructions",
+    );
+  });
+
+  it("leaves the section's own rules intact and above it", () => {
+    const plain = sectionSystemPrompt(desk, "deep");
+    const withInstructions = sectionSystemPrompt(desk, "deep", { instructions });
+    // Layered, not an override: the whole base prompt is still there, and the
+    // instructions are appended after it.
+    expect(withInstructions.startsWith(plain)).toBe(true);
+  });
+
+  it("says plainly that it cannot break the citation contract", () => {
+    const prompt = sectionSystemPrompt(desk, "deep", { instructions });
+    expect(prompt).toContain("do not override the rules above");
+    expect(prompt.indexOf("Never invent a number")).toBeLessThan(
+      prompt.indexOf("Standing instructions"),
+    );
+  });
+});
+
+describe("normalizeBriefInstructions", () => {
+  it("drops anything that is not text", () => {
+    expect(normalizeBriefInstructions(null)).toBe("");
+    expect(normalizeBriefInstructions(42)).toBe("");
+    expect(normalizeBriefInstructions("   ")).toBe("");
+  });
+
+  it("trims and bounds", () => {
+    expect(normalizeBriefInstructions("  be blunt  ")).toBe("be blunt");
+    expect(normalizeBriefInstructions("x".repeat(9000))).toHaveLength(MAX_BRIEF_INSTRUCTIONS);
+  });
+});
+
 describe("briefSettingsKey", () => {
+  it("changes when the instructions are rewritten", () => {
+    const base = briefSettingsKey("deep", [], []);
+    expect(briefSettingsKey("deep", [], [], "be blunt")).not.toBe(base);
+    expect(briefSettingsKey("deep", [], [], "be blunt")).not.toBe(
+      briefSettingsKey("deep", [], [], "be verbose"),
+    );
+  });
+
   it("changes when a custom desk is added or retuned", () => {
     const base = briefSettingsKey("deep", []);
     const withDesk = briefSettingsKey("deep", [], [

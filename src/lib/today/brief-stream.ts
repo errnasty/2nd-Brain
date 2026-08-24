@@ -18,6 +18,21 @@ import type { BriefSourceRef } from "@/lib/db/schema";
 export const BRIEFSOURCES_SENTINEL = "<<<SB_BRIEFSOURCES:";
 export const USAGE_SENTINEL = "<<<SB_USAGE:";
 
+/**
+ * Response header marking a section with nothing left to write about — every
+ * article on that desk was covered further up the brief.
+ *
+ * A header rather than a status code, because this is a normal and successful
+ * outcome of a deduplicated brief rather than an error: the client drops the
+ * block, and the reader gets a brief with one fewer heading instead of a
+ * heading over an apology.
+ *
+ * It lives here, beside the sentinels, for the same reason they do — a Next.js
+ * route module can only export its handlers, so anything both sides of the wire
+ * need to agree on has to be defined outside the route.
+ */
+export const EMPTY_SECTION_HEADER = "x-brief-empty";
+
 export type BriefUsage = { promptTokens: number; completionTokens: number; totalTokens: number };
 
 /**

@@ -19,6 +19,45 @@ import type { BriefLevel, PlannedSection } from "./brief-plan";
 import { BRIEF_LEVEL_CONFIG } from "./brief-plan";
 import { topicById, topicLabel, type BriefTopic } from "./topics";
 
+/**
+ * Standing instructions: the reader's own steer, applied to every section.
+ *
+ * ## What this replaced
+ *
+ * Customization used to be a whole-brief system prompt that took over the
+ * generation completely — one call, the reader's format, the entire queue. It
+ * was the right shape when the brief WAS one call. It stopped being right the
+ * moment the brief became a planned set of sections, because everything added
+ * since lives in that plan: desks, depth, story clustering, continuity markers,
+ * the dedup pass, per-section streaming, retry, feedback and XP. A reader who
+ * customized their brief silently opted out of all of it, and the gap only ever
+ * widened. It also lived in localStorage, so it never followed them to a second
+ * device.
+ *
+ * So customization now LAYERS instead of overriding. The instructions go into
+ * every section's system prompt, and everything the brief knows how to do keeps
+ * happening around them. "Write in British English", "always give me the
+ * second-order effect", "skip anything about crypto", "I already follow the
+ * Fed closely — assume that" all work, and they work in the lead, on each desk
+ * and in the quick-clear list at once.
+ *
+ * They are placed AFTER the rules and explicitly subordinated to them. This is
+ * the reader steering their own brief, not an untrusted input — but the
+ * citation contract is what makes every `[n]` in the output resolve against the
+ * client's source map, and an instruction that quietly broke it would produce a
+ * brief full of dead references rather than a differently-written one.
+ */
+export const MAX_BRIEF_INSTRUCTIONS = 2000;
+
+/** Validate whatever is in the settings blob. Never throws; "" means unset. */
+export function normalizeBriefInstructions(v: unknown): string {
+  return typeof v === "string" ? v.trim().slice(0, MAX_BRIEF_INSTRUCTIONS) : "";
+}
+
+function instructionsBlock(text: string): string {
+  return `\n\nStanding instructions from me, the reader. Apply them to this section:\n\n${text}\n\nThey govern emphasis, voice, and what to leave out. They do not override the rules above: every bracketed number must still be one you were given, and nothing may be stated that the supplied text does not support. Where an instruction cannot be followed without breaking one of those, follow the rule and drop the instruction silently.`;
+}
+
 const SHARED_RULES = [
   "Cite with the bracketed reference numbers exactly as supplied (e.g. [3]). Never invent a number.",
   "Never state a fact, figure or quote that is not in the supplied text. If the text is thin, say less.",
@@ -71,6 +110,8 @@ export type SectionContext = {
   covered?: boolean;
   /** The reader's desk list, so a custom desk resolves to its own label. */
   desks?: BriefTopic[];
+  /** The reader's standing instructions — see `instructionsBlock`. */
+  instructions?: string;
 };
 
 /** The system prompt for one section. */
@@ -79,6 +120,10 @@ export function sectionSystemPrompt(
   level: BriefLevel,
   ctx: SectionContext = {},
 ): string {
+  return basePrompt(section, level, ctx) + (ctx.instructions ? instructionsBlock(ctx.instructions) : "");
+}
+
+function basePrompt(section: PlannedSection, level: BriefLevel, ctx: SectionContext): string {
   const cfg = BRIEF_LEVEL_CONFIG[level];
 
   if (section.kind === "lead") {

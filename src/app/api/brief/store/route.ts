@@ -9,6 +9,7 @@ import {
 } from "@/lib/today/brief-plan";
 import { briefSettingsHash } from "@/lib/today/brief-queue";
 import { normalizeCustomDesks, type CustomDesk } from "@/lib/today/topics";
+import { normalizeBriefInstructions } from "@/lib/today/brief-prompts";
 import type { BriefSourceRef, BriefUsage } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
@@ -82,11 +83,13 @@ export async function POST(req: Request) {
   // halves of the key can't drift apart.
   let priority: string[] = [];
   let customDesks: CustomDesk[] = [];
+  let instructions = "";
   let level: BriefLevel = isBriefLevel(body.level) ? body.level : DEFAULT_BRIEF_LEVEL;
   try {
     const s = await getUserSettings(auth.user.id);
     priority = Array.isArray(s.briefTopics) ? s.briefTopics.filter((t) => typeof t === "string") : [];
     customDesks = normalizeCustomDesks(s.customDesks);
+    instructions = normalizeBriefInstructions(s.briefInstructions);
     if (!isBriefLevel(body.level) && isBriefLevel(s.briefLevel)) level = s.briefLevel;
   } catch {
     // Settings unavailable — store under the defaults rather than not at all.
@@ -94,7 +97,7 @@ export async function POST(req: Request) {
 
   await saveUserBrief(auth.user.id, {
     fingerprint,
-    promptHash: briefSettingsHash(briefSettingsKey(level, priority, customDesks)),
+    promptHash: briefSettingsHash(briefSettingsKey(level, priority, customDesks, instructions)),
     content,
     sourceMap: validSources(body.sources),
     usage: body.usage ?? null,

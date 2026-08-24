@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-24-a",
+    date: "August 24, 2026",
+    title: "Tell the brief how you want to be written to",
+    tag: "improvement",
+    summary:
+      "Customizing the brief used to mean replacing it: your prompt, one pass, and none of the desks, depth, clustering or repeat-removal the brief has learned since. Now you write standing instructions instead — voice, emphasis, what to leave out — and they apply to every part of the brief while everything else keeps working.",
+    items: [
+      'Open Instructions on Today and write one per line: "Write in British English", "always give me the second-order effect", "skip anything that is a product launch". There are one-tap examples to start from.',
+      "They apply to the lead, every desk and the quick-clear list at once — and they change how the brief is written, never which stories it covers or where a citation points.",
+      "Instructions are saved to your account rather than the browser, so they follow you to your phone. The old custom prompt never did.",
+      "If you had written a custom prompt, it is waiting for you in the Instructions panel — nothing was thrown away — with the option to reuse it or discard it.",
+    ],
+  },
+  {
     id: "2026-08-24",
     date: "August 24, 2026",
     title: "Add your own desks, and a brief that stops repeating itself",

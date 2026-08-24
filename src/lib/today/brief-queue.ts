@@ -76,11 +76,14 @@ export function briefOrderFingerprint(ids: string[]): string {
 }
 
 /**
- * Hash of the settings a sectioned brief was generated under (level + followed
- * desks), stored in the `promptHash` column the single-pass brief uses for the
- * hash of its custom prompt. The prefix keeps the two distinguishable: a stored
- * brief only gets compared against current settings when it was a sectioned one
- * in the first place.
+ * Hash of the settings a sectioned brief was generated under — depth, followed
+ * desks, the reader's own desks, their standing instructions.
+ *
+ * Stored in the `promptHash` column, which is named for what it used to hold:
+ * the hash of a whole-brief custom prompt, back when customization replaced the
+ * generation rather than layering into it. The prefix survives that history so
+ * a brief stored under the old scheme is never mistaken for one written under
+ * the current settings.
  */
 const SECTIONED_HASH_PREFIX = "sectioned:";
 

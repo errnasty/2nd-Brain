@@ -667,7 +667,15 @@ export function planBrief(
     // the slot. Dedup and coverage turn out to be the same edit.
     const available = covered.size > 0 ? b.refs.filter((r) => !covered.has(r)) : b.refs;
     const refs = deskRefs(items, available, cfg.maxTopicRefs);
-    if (refs.length === 0) continue;
+    // A desk the lead emptied keeps its section, with no refs.
+    //
+    // Dropping it here instead is tempting and wrong: the plan the client
+    // renders is built WITHOUT `covered` (the lead has not been written yet),
+    // so the client already holds a block for this desk and will ask for it by
+    // key. A planner that then denies the key turns a desk with nothing left to
+    // say into a section that fails to load. Keeping it means the two plans
+    // always have the same shape, and "nothing left" is answered in the
+    // protocol — see the empty-section short-circuit in the route.
     for (const r of refs) writtenUp.add(r);
     sections.push({
       key: `topic:${b.topicId}`,
@@ -742,6 +750,7 @@ export function briefSettingsKey(
   level: BriefLevel,
   priority: string[],
   customDesks: CustomDesk[] = [],
+  instructions: string = "",
 ): string {
   // Custom desks change the shape of the brief as directly as the depth level
   // does — a new desk is a new section — so editing one has to invalidate a
@@ -751,6 +760,11 @@ export function briefSettingsKey(
     .map((d) => `${d.id}:${d.keywords.join("|")}`)
     .sort()
     .join(";");
-  return `sectioned/v1/${level}/${[...priority].join(",")}${custom ? `/${custom}` : ""}`;
+  // Standing instructions are part of the brief's identity for the same reason:
+  // rewriting them changes every section, so a brief written under the old ones
+  // is no longer the brief the reader is asking for.
+  return `sectioned/v1/${level}/${[...priority].join(",")}${custom ? `/${custom}` : ""}${
+    instructions ? `/${instructions}` : ""
+  }`;
 }
 

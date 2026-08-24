@@ -49,7 +49,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
-import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
+import { USAGE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
+import { EMPTY_SECTION_HEADER } from "@/lib/today/brief-stream";
+import { MAX_BRIEF_INSTRUCTIONS } from "@/lib/today/brief-prompts";
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
 import { recordBriefFeedbackAction } from "@/app/(app)/today/actions";
@@ -110,7 +112,6 @@ type BriefEntry = {
   sections?: StoredSection[];
 };
 
-const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
 const BRIEF_CACHE_KEY = "brief.cache.v2";
 const BRIEF_HISTORY_KEY = "brief.history.v1";
 const SYNTHESIS_CACHE_KEY = "brief.weeklySynthesis.v1";
@@ -146,26 +147,28 @@ function greetingFor(d: Date): string {
   return "Good evening";
 }
 
-const DEFAULT_PROMPT_PLACEHOLDER = `You are my personal Second Brain curator. I already receive a highly detailed daily news summary via email, so your goal here is NOT to summarize everything. Your goal is rapid triage and discovery.
+/**
+ * The legacy whole-brief prompt, kept only so a reader who wrote one can see it
+ * and decide what to keep. It is never sent anywhere — see the migration notice
+ * in the instructions panel, and `brief-prompts.ts` for why customization is
+ * now standing instructions rather than an override.
+ */
+const LEGACY_PROMPT_KEY = "brief.systemPrompt.v1";
 
-Review the provided JSON list of my unread articles and newly uploaded documents from the last 24 hours. Generate a short, punchy dashboard using the following strict format:
+const INSTRUCTIONS_PLACEHOLDER = `Write in British English.
+Assume I already follow the Fed closely — skip the background.
+For anything on AI, tell me what it means for people building with it, not for investors.
+Skip crypto price moves entirely.`;
 
-### High-Priority (Read Now)
-Identify the 1-3 most substantial, unique, or high-signal pieces.
-* Provide the title, followed by its bracketed reference number (e.g. [3]) so I can jump to the source.
-* Write a 1-sentence hook explaining exactly *why* it's worth my time.
-* List its primary tag.
-
-### Thematic Clusters (For Batch Reading)
-Group the remaining worthwhile articles into broad themes (e.g., "4 items on AI Tools", "2 items on Macroeconomics").
-* Do not summarize the individual articles.
-* Just list the theme, the article count, and a 1-sentence summary of the overarching trend across those articles.
-
-### Quick Clear (Low Signal / Skip)
-Identify any articles that appear to be clickbait, standard PR announcements, highly repetitive news, or low-value fluff.
-* List their titles so I can confidently mark them as read or delete them without opening them.
-
-Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
+/** One-tap examples. Appended to whatever is in the box, one per line. */
+const INSTRUCTION_EXAMPLES = [
+  "Be blunt. No hedging.",
+  "Always give me the second-order effect.",
+  "Name the specific number or quote, never 'significant growth'.",
+  "Write in British English.",
+  "Skip anything that is a product launch.",
+  "If a story is speculation, say so in the first clause.",
+];
 
 // ── Sectioned generation ────────────────────────────────────────────────
 // The brief is planned server-side with no model involved, then generated one
@@ -204,8 +207,14 @@ type Desk = {
   omittedArticles?: number;
 };
 
-/** One section's outcome: whether to re-plan, and the prose it produced. */
-type SectionResult = { status: "ok" | "replan"; text: string };
+/**
+ * One section's outcome: what to do next, and the prose it produced.
+ *
+ * "empty" is a success, not a failure: the section had nothing left to write
+ * because everything on its desk was covered further up the brief. Its block
+ * comes off the page rather than sitting there as an empty heading.
+ */
+type SectionResult = { status: "ok" | "replan" | "empty"; text: string };
 
 /** The desk editor's form state. `id` is null while adding a new desk. */
 type DeskDraft = { id: string | null; label: string; keywords: string; remit: string };
@@ -342,12 +351,14 @@ export function DailyBrief({
   level: initialLevel,
   followedTopics: initialTopics,
   customDesks: initialCustomDesks,
+  instructions: initialInstructions,
 }: {
   name?: string;
   initialBrief?: InitialBrief | null;
   level?: BriefLevel;
   followedTopics?: string[];
   customDesks?: CustomDesk[];
+  instructions?: string;
 }) {
   const router = useRouter();
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -369,8 +380,12 @@ export function DailyBrief({
   const [note, setNote] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [customPrompt, setCustomPrompt] = useState("");
-  const [savedPrompt, setSavedPrompt] = useState("");
+  /** The instructions box's contents, saved or not. */
+  const [draftInstructions, setDraftInstructions] = useState(initialInstructions ?? "");
+  const [instructions, setInstructions] = useState(initialInstructions ?? "");
+  /** A whole-brief prompt from before customization was layered instructions.
+   *  Shown once so nothing the reader wrote is lost, then dismissable. */
+  const [legacyPrompt, setLegacyPrompt] = useState("");
   const [level, setLevel] = useState<BriefLevel>(initialLevel ?? DEFAULT_BRIEF_LEVEL);
   const [followed, setFollowed] = useState<string[]>(initialTopics ?? []);
   const [customDesks, setCustomDesks] = useState<CustomDesk[]>(initialCustomDesks ?? []);
@@ -383,11 +398,6 @@ export function DailyBrief({
   // the cache-load effect — sees it immediately instead of the batched, still-
   // false `hydratedFromCache` state, which made the brief re-stream every load.
   const cacheHydratedRef = useRef(false);
-  // Latest saved prompt, readable synchronously. The auto-stream effect captures
-  // `generate` from the first render (savedPrompt still ""), so without this the
-  // first brief of the day would generate sectioned, ignoring a user's saved
-  // custom prompt.
-  const savedPromptRef = useRef("");
   // Set during mount hydration when the stored brief is from a prior day (or was
   // generated under different settings), so the auto-stream effect refreshes it
   // in the background instead of leaving yesterday's brief up.
@@ -408,17 +418,20 @@ export function DailyBrief({
   const generatedAtRef = useRef<Date | null>(null);
   const levelRef = useRef<BriefLevel>(initialLevel ?? DEFAULT_BRIEF_LEVEL);
 
-  // Load saved prompt + brief on mount. Priority: the server-stored brief
-  // (authoritative, cross-device) → localStorage cache → fresh generation.
+  // Load the stored brief on mount. Priority: the server copy (authoritative,
+  // cross-device) → localStorage cache → fresh generation.
   const [hydratedFromCache, setHydratedFromCache] = useState(false);
   useEffect(() => {
     if (hasMounted.current) return;
     hasMounted.current = true;
     try {
-      const saved = localStorage.getItem(PROMPT_STORAGE_KEY) ?? "";
-      savedPromptRef.current = saved; // sync — before the auto-stream effect runs
-      setSavedPrompt(saved);
-      setCustomPrompt(saved);
+      // A whole-brief prompt written under the old customization. It is not
+      // applied — as a format spec for a document that no longer exists in one
+      // piece it would fight every section prompt — but it is not thrown away
+      // either: it is offered back so the reader can keep the parts that still
+      // mean something.
+      const legacy = localStorage.getItem(LEGACY_PROMPT_KEY) ?? "";
+      if (legacy.trim()) setLegacyPrompt(legacy.trim());
     } catch {
       // ignore
     }
@@ -510,6 +523,11 @@ export function DailyBrief({
     setBlocks((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)));
   }, []);
 
+  /** Take a section off the page entirely. */
+  const dropBlock = useCallback((key: string) => {
+    setBlocks((prev) => prev.filter((b) => b.key !== key));
+  }, []);
+
   /**
    * Generate one section. Each call is a short, self-contained request: a
    * bounded slice of the queue in, a capped number of tokens out. Returns
@@ -541,6 +559,12 @@ export function DailyBrief({
           cache: "no-store",
         });
         if (res.status === 409) return { status: "replan", text: "" };
+        // Nothing left on this desk — the lead covered all of it. Drop the
+        // block: a heading with nothing under it reads as a failed section.
+        if (res.headers.get(EMPTY_SECTION_HEADER)) {
+          if (run === runRef.current) dropBlock(section.key);
+          return { status: "empty", text: "" };
+        }
         if (!res.ok || !res.body) {
           const text = await res.text().catch(() => "");
           if (run === runRef.current) {
@@ -612,7 +636,7 @@ export function DailyBrief({
         return { status: "ok", text: "" };
       }
     },
-    [patchBlock],
+    [dropBlock, patchBlock],
   );
 
   /**
@@ -698,6 +722,25 @@ export function DailyBrief({
           await generateSectioned({ ...opts, replanned: true });
           return;
         }
+
+        // Anything still pending was never attempted — the run bailed out of the
+        // loop early (a second queue change, after the one re-plan we allow).
+        // A block left pending renders as a skeleton forever, which is the one
+        // outcome with no way forward, so give it the retry every other failure
+        // already gets.
+        if (run === runRef.current) {
+          setBlocks((prev) =>
+            prev.map((b) =>
+              b.status === "pending"
+                ? {
+                    ...b,
+                    status: "error" as BlockStatus,
+                    error: "Your queue changed while the brief was being written. Retry this section, or regenerate.",
+                  }
+                : b,
+            ),
+          );
+        }
       } catch (err) {
         // A background refresh failing must not blow away the brief already on
         // screen — just drop the refreshing state.
@@ -712,128 +755,14 @@ export function DailyBrief({
     [streamSection],
   );
 
-  /**
-   * The single-pass path, used when the user has saved their own brief prompt:
-   * their framing, one call, the whole queue. Kept because only the author of a
-   * custom prompt knows what shape they asked for — it can't be split into
-   * sections on their behalf.
-   */
-  const streamLegacy = useCallback(
-    async (promptOverride?: string, force = false, background = false) => {
-      const run = runRef.current + 1;
-      runRef.current = run;
-      setLoading(true);
-      setError(null);
-      setNote(null);
-      if (!background) setBlocks([]);
-      setRefreshing(background);
-      setNewArticles(false);
-      setReadIds(new Set());
-      setSavedIds(new Set());
-      producedRef.current = true;
-      generatedAtRef.current = null;
-      planRef.current = null;
-      setDesks([]);
-      try {
-        const systemPrompt = (promptOverride ?? savedPromptRef.current).trim();
-        const res = await fetch("/api/brief", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ systemPrompt, force }),
-          cache: "no-store",
-        });
-        if (!res.ok || !res.body) {
-          setError((await res.text().catch(() => "")) || `HTTP ${res.status}`);
-          return;
-        }
-        const briefFingerprint = res.headers.get("x-brief-fingerprint");
-        if (briefFingerprint) setFingerprint(briefFingerprint);
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let acc = "";
-        let frameQueued = false;
-        const flush = () => {
-          frameQueued = false;
-          if (run !== runRef.current) return;
-          setBlocks([
-            {
-              key: "custom",
-              kind: "stored",
-              label: "",
-              refs: [],
-              text: displayText(acc),
-              status: "streaming",
-            },
-          ]);
-        };
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          acc += decoder.decode(value, { stream: true });
-          if (!frameQueued) {
-            frameQueued = true;
-            requestAnimationFrame(flush);
-          }
-        }
-        flush();
-        if (run !== runRef.current) return;
-
-        const bIdx = acc.indexOf(BRIEFSOURCES_SENTINEL);
-        const uIdx = acc.indexOf(USAGE_SENTINEL);
-        if (bIdx >= 0) {
-          const end = uIdx > bIdx ? uIdx : acc.length;
-          try {
-            setSources(
-              JSON.parse(acc.slice(bIdx + BRIEFSOURCES_SENTINEL.length, end)) as BriefSource[],
-            );
-          } catch {
-            // ignore malformed sources
-          }
-        }
-        if (uIdx >= 0) {
-          try {
-            const parsed = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
-            usageRef.current = parsed;
-            setUsage(parsed);
-          } catch {
-            // ignore malformed usage
-          }
-        }
-        setBlocks([
-          {
-            key: "custom",
-            kind: "stored",
-            label: "",
-            refs: [],
-            text: displayText(acc),
-            status: "done",
-          },
-        ]);
-      } catch (err) {
-        if (!background) setError(err instanceof Error ? err.message : "Failed to load brief");
-      } finally {
-        if (run === runRef.current) {
-          setLoading(false);
-          setRefreshing(false);
-        }
-      }
-    },
-    [],
-  );
-
   /** Generate the brief the way this user has configured it. */
   const generate = useCallback(
-    (opts: { levelOverride?: BriefLevel; background?: boolean; force?: boolean } = {}) => {
-      if (savedPromptRef.current.trim()) {
-        return streamLegacy(undefined, opts.force ?? false, opts.background ?? false);
-      }
-      return generateSectioned({
+    (opts: { levelOverride?: BriefLevel; background?: boolean } = {}) =>
+      generateSectioned({
         levelOverride: opts.levelOverride,
         background: opts.background,
-      });
-    },
-    [generateSectioned, streamLegacy],
+      }),
+    [generateSectioned],
   );
 
   // Auto-generate on mount only when nothing was hydrated. When a stored brief
@@ -1174,26 +1103,49 @@ export function DailyBrief({
     [customDesks, followed, generate],
   );
 
-  function savePrompt() {
+  /**
+   * Save the standing instructions and rewrite the brief under them.
+   *
+   * Server-side, unlike the whole-brief prompt this replaced: instructions are
+   * a statement about how you want to be briefed, not a property of the browser
+   * you happened to write them in.
+   */
+  const saveInstructions = useCallback(() => {
+    const trimmed = draftInstructions.trim().slice(0, MAX_BRIEF_INSTRUCTIONS);
+    setInstructions(trimmed);
+    setDraftInstructions(trimmed);
+    setSettingsOpen(false);
     try {
-      const trimmed = customPrompt.trim();
-      localStorage.setItem(PROMPT_STORAGE_KEY, trimmed);
-      localStorage.removeItem(BRIEF_CACHE_KEY); // prompt changed; old brief is stale
-      savedPromptRef.current = trimmed;
-      setSavedPrompt(trimmed);
-      setSettingsOpen(false);
-      toast.success(trimmed ? "Custom prompt saved" : "Reset to the sectioned brief");
-      // Regenerate with the new framing (force — bypass the server cache).
-      if (trimmed) void streamLegacy(trimmed, true);
-      else void generateSectioned();
+      // The brief on screen was written under the old instructions.
+      localStorage.removeItem(BRIEF_CACHE_KEY);
     } catch {
-      toast.error("Couldn't save prompt");
+      // ignore
     }
-  }
+    void updateUserSettingsAction({ briefInstructions: trimmed }).catch(() => {
+      toast.error("Couldn't save your instructions");
+    });
+    toast.success(trimmed ? "Instructions saved" : "Instructions cleared");
+    void generate();
+  }, [draftInstructions, generate]);
 
-  function resetPrompt() {
-    setCustomPrompt("");
-  }
+  /** Append an example to whatever is already in the box. */
+  const addExample = useCallback((line: string) => {
+    setDraftInstructions((prev: string) => {
+      const body = prev.trimEnd();
+      if (body.split("\n").some((l: string) => l.trim() === line)) return prev;
+      return (body ? `${body}\n${line}` : line).slice(0, MAX_BRIEF_INSTRUCTIONS);
+    });
+  }, []);
+
+  /** Stop offering the pre-sectioned prompt back. */
+  const dismissLegacyPrompt = useCallback(() => {
+    setLegacyPrompt("");
+    try {
+      localStorage.removeItem(LEGACY_PROMPT_KEY);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Load an archived brief into view (read-only snapshot; Regenerate still
   // fetches fresh). Doesn't touch the live cache or history.
@@ -1389,17 +1341,23 @@ export function DailyBrief({
                   {newArticles ? "new articles — regenerate" : "stale — regenerate"}
                 </span>
               )}
-              {savedPrompt ? (
-                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
-                  custom prompt
-                </span>
-              ) : (
-                <span
-                  className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
-                  title={`${BRIEF_LEVEL_CONFIG[level].label} — ${BRIEF_LEVEL_CONFIG[level].blurb}`}
+              <span
+                className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
+                title={`${BRIEF_LEVEL_CONFIG[level].label} — ${BRIEF_LEVEL_CONFIG[level].blurb}`}
+              >
+                ≈{briefMinutes} min read
+              </span>
+              {/* Instructions are a modifier on the brief, not a mode instead of
+                  it — so this sits alongside the depth badge rather than
+                  replacing it, and every other control stays available. */}
+              {instructions && (
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="rounded bg-brand/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-brand"
+                  title={instructions}
                 >
-                  ≈{briefMinutes} min read
-                </span>
+                  your instructions
+                </button>
               )}
             </>
           ) : null}
@@ -1446,163 +1404,157 @@ export function DailyBrief({
           )}
 
           {/* Desks the brief leads with. Server-stored, so it holds per person
-              rather than per browser. Hidden while a custom prompt is in force:
-              that path is a single pass with the user's own framing, so neither
-              desks nor depth apply to it. */}
-          {!savedPrompt && (
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="ghost" title="Choose the desks you follow">
-                    <Compass className="mr-1.5 h-3.5 w-3.5" />
-                    Desks
-                    {followed.length > 0 && (
-                      <span className="ml-1.5 rounded bg-brand/15 px-1 text-[10px] text-brand">
-                        {followed.length}
-                      </span>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="max-h-[70vh] w-80 overflow-y-auto">
-                  <DropdownMenuLabel>Desks you follow</DropdownMenuLabel>
-                  <p className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground">
-                    Followed desks lead the brief and are written up first.
-                  </p>
-                  <DropdownMenuSeparator />
-                  {/* The reader's own desks come first — they are the ones this
-                      brief is actually shaped around, and the built-in list is
-                      long enough to bury them underneath it. */}
-                  {customDesks.length > 0 && (
-                    <>
-                      <DropdownMenuLabel className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-                        Your desks
-                      </DropdownMenuLabel>
-                      {customDesks.map((d) => {
-                        const count = desks.find((x) => x.topicId === d.id)?.count ?? 0;
-                        return (
-                          <DropdownMenuCheckboxItem
-                            key={d.id}
-                            checked={followed.includes(d.id)}
-                            onCheckedChange={() => toggleDesk(d.id)}
-                            onSelect={(e) => e.preventDefault()}
-                          >
-                            <span className="flex-1 truncate">{d.label}</span>
-                            {count > 0 && (
-                              <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
-                                {count}
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              className="ml-2 rounded p-0.5 text-muted-foreground hover:text-foreground"
-                              title={`Edit the ${d.label} desk`}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setDeskDraft({
-                                  id: d.id,
-                                  label: d.label,
-                                  keywords: d.keywords.join(", "),
-                                  remit: d.desk,
-                                });
-                              }}
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
-                          </DropdownMenuCheckboxItem>
-                        );
-                      })}
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
-                  <DropdownMenuItem
-                    onSelect={(e) => {
-                      e.preventDefault();
-                      setDeskDraft({ id: null, label: "", keywords: "", remit: "" });
-                    }}
-                    disabled={customDesks.length >= MAX_CUSTOM_DESKS}
-                  >
-                    <Plus className="mr-2 h-3.5 w-3.5" />
-                    {customDesks.length >= MAX_CUSTOM_DESKS
-                      ? `${MAX_CUSTOM_DESKS} desks is the limit`
-                      : "Add your own desk…"}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
+              rather than per browser. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" title="Choose the desks you follow">
+                <Compass className="mr-1.5 h-3.5 w-3.5" />
+                Desks
+                {followed.length > 0 && (
+                  <span className="ml-1.5 rounded bg-brand/15 px-1 text-[10px] text-brand">
+                    {followed.length}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-[70vh] w-80 overflow-y-auto">
+              <DropdownMenuLabel>Desks you follow</DropdownMenuLabel>
+              <p className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+                Followed desks lead the brief and are written up first.
+              </p>
+              <DropdownMenuSeparator />
+              {/* The reader's own desks come first — they are the ones this
+                  brief is actually shaped around, and the built-in list is
+                  long enough to bury them underneath it. */}
+              {customDesks.length > 0 && (
+                <>
                   <DropdownMenuLabel className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
-                    Built-in desks
+                    Your desks
                   </DropdownMenuLabel>
-                  {BRIEF_TOPICS.map((t) => {
-                    const count = desks.find((d) => d.topicId === t.id)?.count ?? 0;
+                  {customDesks.map((d) => {
+                    const count = desks.find((x) => x.topicId === d.id)?.count ?? 0;
                     return (
                       <DropdownMenuCheckboxItem
-                        key={t.id}
-                        checked={followed.includes(t.id)}
-                        onCheckedChange={() => toggleDesk(t.id)}
+                        key={d.id}
+                        checked={followed.includes(d.id)}
+                        onCheckedChange={() => toggleDesk(d.id)}
                         onSelect={(e) => e.preventDefault()}
                       >
-                        <span className="flex-1">{t.label}</span>
+                        <span className="flex-1 truncate">{d.label}</span>
                         {count > 0 && (
                           <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
                             {count}
                           </span>
                         )}
+                        <button
+                          type="button"
+                          className="ml-2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                          title={`Edit the ${d.label} desk`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDeskDraft({
+                              id: d.id,
+                              label: d.label,
+                              keywords: d.keywords.join(", "),
+                              remit: d.desk,
+                            });
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
                       </DropdownMenuCheckboxItem>
                     );
                   })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              {/* How long you have. Each step is more SECTIONS, never one
-                  longer call — that's what keeps every request inside the
-                  host's function budget — but "more sections" is the
-                  implementation, and minutes are the question. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="ghost" title="How long the brief should take to read">
-                    <Layers className="mr-1.5 h-3.5 w-3.5" />≈{briefMinutes} min
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel>Reading time</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  {BRIEF_LEVELS.map((l) => (
-                    <DropdownMenuItem
-                      key={l}
-                      onClick={() => changeLevel(l)}
-                      className="flex flex-col items-start gap-0.5"
-                    >
-                      <span className="flex w-full items-center justify-between gap-2">
-                        <span className="font-medium">
-                          ≈{estimateBriefMinutes(l)} min
-                          <span className="ml-1.5 font-normal text-muted-foreground">
-                            {BRIEF_LEVEL_CONFIG[l].label}
-                          </span>
-                        </span>
-                        {l === level && <Check className="h-3.5 w-3.5" />}
+                </>
+              )}
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setDeskDraft({ id: null, label: "", keywords: "", remit: "" });
+                }}
+                disabled={customDesks.length >= MAX_CUSTOM_DESKS}
+              >
+                <Plus className="mr-2 h-3.5 w-3.5" />
+                {customDesks.length >= MAX_CUSTOM_DESKS
+                  ? `${MAX_CUSTOM_DESKS} desks is the limit`
+                  : "Add your own desk…"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                Built-in desks
+              </DropdownMenuLabel>
+              {BRIEF_TOPICS.map((t) => {
+                const count = desks.find((d) => d.topicId === t.id)?.count ?? 0;
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={t.id}
+                    checked={followed.includes(t.id)}
+                    onCheckedChange={() => toggleDesk(t.id)}
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    <span className="flex-1">{t.label}</span>
+                    {count > 0 && (
+                      <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
+                        {count}
                       </span>
-                      <span className="text-[11px] leading-snug text-muted-foreground">
-                        {BRIEF_LEVEL_CONFIG[l].blurb}
+                    )}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* How long you have. Each step is more SECTIONS, never one
+              longer call — that's what keeps every request inside the
+              host's function budget — but "more sections" is the
+              implementation, and minutes are the question. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" title="How long the brief should take to read">
+                <Layers className="mr-1.5 h-3.5 w-3.5" />≈{briefMinutes} min
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>Reading time</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {BRIEF_LEVELS.map((l) => (
+                <DropdownMenuItem
+                  key={l}
+                  onClick={() => changeLevel(l)}
+                  className="flex flex-col items-start gap-0.5"
+                >
+                  <span className="flex w-full items-center justify-between gap-2">
+                    <span className="font-medium">
+                      ≈{estimateBriefMinutes(l)} min
+                      <span className="ml-1.5 font-normal text-muted-foreground">
+                        {BRIEF_LEVEL_CONFIG[l].label}
                       </span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          )}
+                    </span>
+                    {l === level && <Check className="h-3.5 w-3.5" />}
+                  </span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">
+                    {BRIEF_LEVEL_CONFIG[l].blurb}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <Button
             size="sm"
             variant="ghost"
             onClick={() => setSettingsOpen((v) => !v)}
-            title="Customize the brief prompt"
+            title="Standing instructions for how the brief is written"
           >
             <Settings className="mr-1.5 h-3.5 w-3.5" />
-            Prompt
+            Instructions
           </Button>
           <Button
             size="sm"
             variant="brand"
-            onClick={() => generate({ force: true })}
+            onClick={() => generate()}
             disabled={loading}
           >
             {loading ? (
@@ -1646,7 +1598,7 @@ export function DailyBrief({
       {settingsOpen && (
         <div className="not-prose mb-7 rounded-lg border border-border bg-card p-4">
           <div className="mb-2 flex items-center justify-between">
-            <div className="text-sm font-medium">Custom brief prompt</div>
+            <div className="text-sm font-medium">Standing instructions</div>
             <button
               onClick={() => setSettingsOpen(false)}
               className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -1654,25 +1606,97 @@ export function DailyBrief({
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-          <p className="mb-3 text-xs text-muted-foreground">
-            Leave this empty for the sectioned brief (a lead, a write-up per desk, a quick-clear
-            list). Fill it in and the brief becomes a single pass with your framing instead —
-            your prompt, the whole queue, one section.
+          <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+            How you want to be briefed — voice, emphasis, what to leave out. These apply to every
+            part of the brief: the lead, each desk and the quick-clear list. One instruction per
+            line. They shape the writing; they never change which stories are covered (that&apos;s
+            Desks and reading time) and can&apos;t alter a citation.
           </p>
-          <Textarea
-            value={customPrompt}
-            onChange={(e) => setCustomPrompt(e.target.value)}
-            placeholder={DEFAULT_PROMPT_PLACEHOLDER}
-            className="min-h-[140px] text-sm"
-          />
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={resetPrompt}>
-              Reset to default
-            </Button>
-            <Button size="sm" variant="brand" onClick={savePrompt}>
-              Save &amp; regenerate
-            </Button>
+
+          {/* One-tap starters — a blank box with a placeholder is a much worse
+              prompt for "what could I even write here" than six real examples. */}
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {INSTRUCTION_EXAMPLES.map((e) => (
+              <button
+                key={e}
+                onClick={() => addExample(e)}
+                className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-brand/40 hover:text-foreground"
+                title="Add to your instructions"
+              >
+                + {e}
+              </button>
+            ))}
           </div>
+
+          <Textarea
+            value={draftInstructions}
+            onChange={(e) => setDraftInstructions(e.target.value.slice(0, MAX_BRIEF_INSTRUCTIONS))}
+            placeholder={INSTRUCTIONS_PLACEHOLDER}
+            className="min-h-[120px] text-sm"
+          />
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              {draftInstructions.length}/{MAX_BRIEF_INSTRUCTIONS}
+            </span>
+            <span className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDraftInstructions("")}>
+                Clear
+              </Button>
+              <Button
+                size="sm"
+                variant="brand"
+                onClick={saveInstructions}
+                disabled={draftInstructions.trim() === instructions.trim()}
+              >
+                Save &amp; rewrite
+              </Button>
+            </span>
+          </div>
+
+          {/* The pre-sectioned prompt, offered back rather than silently
+              dropped. It is a format spec for a document that no longer exists
+              in one piece, so applying it wholesale would fight every section
+              prompt — but the reader's intent inside it is usually still good. */}
+          {legacyPrompt && (
+            <div className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+              <p className="text-xs font-medium">Your old brief prompt is no longer used</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                The brief used to be one pass in whatever shape you asked for. It is now written
+                desk by desk — which is what lets it cluster stories, drop repeats and stream as
+                it goes — so customization is these instructions instead. Here is what you had
+                written, in case you want to keep any of it:
+              </p>
+              <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded bg-background/60 p-2 text-[11px] leading-snug text-muted-foreground">
+                {legacyPrompt}
+              </pre>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-[11px]"
+                  onClick={() => {
+                    setDraftInstructions((prev: string) =>
+                      (prev.trim() ? `${prev.trimEnd()}\n${legacyPrompt}` : legacyPrompt).slice(
+                        0,
+                        MAX_BRIEF_INSTRUCTIONS,
+                      ),
+                    );
+                    dismissLegacyPrompt();
+                  }}
+                >
+                  Copy into the box
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-[11px]"
+                  onClick={dismissLegacyPrompt}
+                >
+                  Discard it
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

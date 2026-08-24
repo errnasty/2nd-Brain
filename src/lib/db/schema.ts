@@ -1206,6 +1206,12 @@ export type UserSettingsData = {
   // settings write path is a generic shallow merge and cannot police shape.
   // Shallow-merge caveat: always send the whole array. Additive jsonb key.
   customDesks?: { id: string; label: string; desk: string; keywords: string[] }[];
+  // Standing instructions applied to every section of the brief — voice,
+  // emphasis, what to leave out. Replaces the old whole-brief `systemPrompt`
+  // override, which lived in localStorage (so it never followed the reader to
+  // another device) and bypassed the sectioned brief entirely. Server-side, so
+  // it syncs. Additive jsonb key — no migration needed.
+  briefInstructions?: string;
 };
 
 export const userSettings = pgTable(
