@@ -31,6 +31,7 @@ import {
   sectionPreamble,
   sectionSystemPrompt,
   storyBlock,
+  threadBlock,
   normalizeBriefInstructions,
 } from "@/lib/today/brief-prompts";
 import {
@@ -38,6 +39,7 @@ import {
   briefFingerprint,
   briefOrderFingerprint,
   briefSourceMap,
+  briefWhyMap,
   fetchBodies,
   fetchBriefQueue,
   fetchReadContext,
@@ -49,6 +51,14 @@ import {
 } from "@/lib/today/brief-queue";
 import { EMPTY_SECTION_HEADER, briefStream } from "@/lib/today/brief-stream";
 import { loadDeskWeights } from "@/lib/today/feedback-store";
+import { loadEngagedTitles, loadFeedTrust } from "@/lib/today/reading-signals";
+import { followMatcher, normalizeFollowedStories, type FollowedStory } from "@/lib/today/story-follow";
+import {
+  isRuledOut,
+  normalizeMisfiles,
+  suggestDesks,
+  type MisfiledStory,
+} from "@/lib/today/desk-suggest";
 import { loadExternalStories } from "@/lib/trending/signals";
 import { TITLE_SHINGLE_THRESHOLD, jaccard, titleShingles } from "@/lib/trending/cluster";
 
@@ -101,6 +111,10 @@ type BriefPrefs = {
   desks: BriefTopic[];
   /** The reader's standing instructions, applied to every section. */
   instructions: string;
+  /** Stories the reader asked to stay on. */
+  followedStories: FollowedStory[];
+  /** Desks the reader has ruled out, story by story. */
+  misfiles: MisfiledStory[];
 };
 
 /** The user's stored brief preferences, validated. */
@@ -114,6 +128,8 @@ async function briefPrefs(userId: string): Promise<BriefPrefs> {
       customDesks,
       desks: resolveDesks(customDesks),
       instructions: normalizeBriefInstructions(s.briefInstructions),
+      followedStories: normalizeFollowedStories(s.followedStories),
+      misfiles: normalizeMisfiles(s.briefMisfiles),
     };
   } catch {
     // A settings hiccup must not stop the brief — fall back to the defaults.
@@ -123,8 +139,33 @@ async function briefPrefs(userId: string): Promise<BriefPrefs> {
       customDesks: [],
       desks: resolveDesks(),
       instructions: "",
+      followedStories: [],
+      misfiles: [],
     };
   }
+}
+
+/**
+ * Everything selection is scored by, beyond the queue itself.
+ *
+ * Assembled in one place because every caller that has to agree about `[n]` —
+ * the plan, each section, the XP mapping, the drift check — must pass exactly
+ * the same set. A signal loaded by one and forgotten by another would select a
+ * different queue and shift every citation in the brief.
+ */
+async function selectionSignals(userId: string, prefs: BriefPrefs) {
+  const [deskWeights, feedTrust] = await Promise.all([
+    loadDeskWeights(userId),
+    loadFeedTrust(userId),
+  ]);
+  return {
+    priority: prefs.priority,
+    desks: prefs.desks,
+    deskWeights,
+    feedTrust,
+    isFollowed: followMatcher(prefs.followedStories),
+    ruledOut: (title: string, deskId: string) => isRuledOut(title, deskId, prefs.misfiles),
+  };
 }
 
 /**
@@ -161,43 +202,43 @@ export async function GET(req: Request) {
     // Selection decides WHICH articles are the queue, so the drift check has to
     // run the same selection or it would compare two different sets and nudge
     // forever. It stops short of the excerpt fetch — ids are all it looks at.
-    const weights = await loadDeskWeights(userId);
     const ids = await unreadBriefIds(userId, {
       limit: queueLimit(cfg.articleLimit),
       scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
-      priority,
-      deskWeights: weights,
-      desks: prefs.desks,
+      ...(await selectionSignals(userId, prefs)),
     });
     return Response.json({ fingerprint: briefFingerprint(ids), count: ids.length });
   }
 
-  // Weights first, and in parallel with everything that doesn't depend on them:
-  // selection is scored partly by desk verdicts, so the queue cannot be fetched
-  // until they are in hand.
-  const [weights, externals, memory] = await Promise.all([
-    loadDeskWeights(userId),
+  // Signals first, and in parallel with everything that doesn't depend on them:
+  // selection is scored by desk verdicts and feed trust, so the queue cannot be
+  // fetched until they are in hand.
+  const [signals, externals, memory, engagedTitles] = await Promise.all([
+    selectionSignals(userId, prefs),
     // Fail-soft and independent: no trending run yet, or all four public
     // signals down, simply means no "outside your feeds" section today.
     cfg.externalPicks > 0
       ? loadExternalStories(EXTERNAL_CANDIDATE_POOL).catch(() => [])
       : Promise.resolve([]),
     loadStoryMemory(userId),
+    loadEngagedTitles(userId),
   ]);
-  const { rows, windowLabel, coverage, omitted, scanTitles } = await fetchBriefQueue(userId, {
-    limit: queueLimit(cfg.articleLimit),
-    scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
-    priority,
-    deskWeights: weights,
-    desks: prefs.desks,
-  });
+  const { rows, windowLabel, coverage, omitted, scanTitles, threads } = await fetchBriefQueue(
+    userId,
+    {
+      limit: queueLimit(cfg.articleLimit),
+      scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
+      ...signals,
+    },
+  );
   const plan = planBrief(toPlanArticles(rows), {
     level,
     priority,
     externals: pickExternals(externals, scanTitles, priority),
     memory,
-    deskWeights: weights,
+    deskWeights: signals.deskWeights,
     desks: prefs.desks,
+    threads,
   });
   const ids = rows.map((r) => r.id);
   // Stories the queue did not reach, by desk, so the Today tab can say what was
@@ -223,6 +264,16 @@ export async function GET(req: Request) {
       omittedArticles: o.articles,
     });
   }
+  // Which desk claimed each ref, from the plan's own buckets — the same answer
+  // the desk sections were built from, not a second guess at it.
+  const deskByRef = new Map<number, { id: string; label: string }>();
+  for (const section of plan.sections) {
+    if (section.kind !== "topic" || !section.topicId) continue;
+    for (const ref of section.refs) {
+      deskByRef.set(ref, { id: section.topicId, label: section.label });
+    }
+  }
+
   return Response.json({
     fingerprint: briefFingerprint(ids),
     order: briefOrderFingerprint(ids),
@@ -236,6 +287,18 @@ export async function GET(req: Request) {
     sections: plan.sections,
     desks: deskRows,
     sources: briefSourceMap(rows),
+    why: briefWhyMap(rows, {
+      deskOf: (ref) => deskByRef.get(ref) ?? null,
+      isFollowed: signals.isFollowed,
+    }),
+    followedStories: prefs.followedStories,
+    // Offered inside the Desks menu, where the reader already goes to think
+    // about desks — never as a notification.
+    deskSuggestions: suggestDesks({
+      engagedTitles,
+      misfiles: prefs.misfiles,
+      desks: prefs.desks,
+    }),
   });
 }
 
@@ -389,21 +452,22 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
   // Re-planned here rather than trusted from the client, so the continuity
   // markers and desk ordering this section is generated under are the same ones
   // the plan endpoint computed — same memory row, same verdicts, same queue.
-  // Weights come first because selection itself depends on them: a different
+  // Signals come first because selection itself depends on them: a different
   // weight would select a different queue and shift every `[n]`.
-  const [weights, memory] = await Promise.all([loadDeskWeights(userId), loadStoryMemory(userId)]);
+  const [signals, memory] = await Promise.all([
+    selectionSignals(userId, prefs),
+    loadStoryMemory(userId),
+  ]);
 
   // Plan against the LIGHT rows — no bodies. The queue runs to well over a
   // hundred articles while a section cites at most a dozen, so fetching every
   // body to use ten of them would ship close to a megabyte out of Postgres on a
   // request that also has to run a model call. Bodies come after the section is
   // known, for its refs only.
-  const { rows, windowLabel, coverage, scanTitles } = await fetchBriefQueue(userId, {
+  const { rows, windowLabel, coverage, scanTitles, threads } = await fetchBriefQueue(userId, {
     limit: queueLimit(cfg.articleLimit),
     scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
-    priority: prefs.priority,
-    deskWeights: weights,
-    desks: prefs.desks,
+    ...signals,
   });
   if (rows.length === 0) {
     return new Response(
@@ -445,8 +509,9 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     priority: prefs.priority,
     externals,
     memory,
-    deskWeights: weights,
+    deskWeights: signals.deskWeights,
     desks: prefs.desks,
+    threads,
     covered,
   });
   const section = body.section ? findSection(plan, body.section) : plan.sections[0];
@@ -501,6 +566,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
           );
     inputBlock = [
       sectionArticleBlock(section, toArticleInputs(rows, section.refs, bodies), level),
+      threadBlock(section),
       storyBlock(section),
       continuityBlock(section),
       readContextBlock(readContext),

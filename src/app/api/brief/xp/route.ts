@@ -12,6 +12,9 @@ import {
 import { fetchBriefQueue, queueLimit, scanLimit, toPlanArticles } from "@/lib/today/brief-queue";
 import { normalizeCustomDesks, resolveDesks } from "@/lib/today/topics";
 import { loadDeskWeights } from "@/lib/today/feedback-store";
+import { loadFeedTrust } from "@/lib/today/reading-signals";
+import { followMatcher, normalizeFollowedStories } from "@/lib/today/story-follow";
+import { isRuledOut, normalizeMisfiles } from "@/lib/today/desk-suggest";
 import {
   awardBriefComplete,
   awardBriefSection,
@@ -95,6 +98,8 @@ export async function POST(req: Request) {
   let level = DEFAULT_BRIEF_LEVEL;
   let priority: string[] = [];
   let desks = resolveDesks();
+  let isFollowed = followMatcher([]);
+  let ruledOut = (_title: string, _deskId: string) => false;
   try {
     const settings = await getUserSettings(userId);
     if (isBriefLevel(settings.briefLevel)) level = settings.briefLevel;
@@ -102,6 +107,9 @@ export async function POST(req: Request) {
       priority = settings.briefTopics.filter((t): t is string => typeof t === "string");
     }
     desks = resolveDesks(normalizeCustomDesks(settings.customDesks));
+    isFollowed = followMatcher(normalizeFollowedStories(settings.followedStories));
+    const misfiles = normalizeMisfiles(settings.briefMisfiles);
+    ruledOut = (title: string, deskId: string) => isRuledOut(title, deskId, misfiles);
   } catch {
     // Defaults are fine — this only affects which desks lead.
   }
@@ -111,17 +119,23 @@ export async function POST(req: Request) {
   // brief was generated under, or a section key would map onto a different set
   // of articles than the reader actually saw and pay XP into the wrong skills.
   const cfg = BRIEF_LEVEL_CONFIG[level];
-  const deskWeights = await loadDeskWeights(userId);
-  const { rows } = await fetchBriefQueue(userId, {
+  const [deskWeights, feedTrust] = await Promise.all([
+    loadDeskWeights(userId),
+    loadFeedTrust(userId),
+  ]);
+  const { rows, threads } = await fetchBriefQueue(userId, {
     limit: queueLimit(cfg.articleLimit),
     scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
     priority,
     deskWeights,
+    feedTrust,
+    isFollowed,
+    ruledOut,
     desks,
   });
   if (rows.length === 0) return Response.json({ awarded: 0, skills: [] });
 
-  const plan = planBrief(toPlanArticles(rows), { level, priority, deskWeights, desks });
+  const plan = planBrief(toPlanArticles(rows), { level, priority, deskWeights, desks, threads });
   const idFor = (ref: number) => rows[ref - 1]?.id;
 
   /**

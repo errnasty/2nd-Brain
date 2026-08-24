@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-24-b",
+    date: "August 24, 2026",
+    title: "Tap any number in the brief",
+    tag: "feature",
+    summary:
+      "The bracketed numbers in your brief now open a small card: why that story is in front of you, a button to keep the brief on it until it stops running, and a way to say it was filed under the wrong desk. That is the only new thing to learn — everything else in this update either happens on its own or turns up where you were already looking.",
+    items: [
+      "Why it's here: which desk claimed the story, how many of your feeds carried it, and where it ranked today. No waiting — the brief already knew all of it.",
+      "Keep me on this: follows one story rather than a whole desk, so it stays in your brief even on a quiet day. It lets go by itself once the story stops running, so there is no list to tidy up.",
+      "Wrong desk: that desk stops claiming the story straight away. And when a few corrections turn out to be about the same subject, the Desks menu offers to give it a desk of its own — as it does when you keep saving articles about something no desk covers.",
+      "New in the brief: a short Threads section when several stories on different desks turn out to be circling the same thing — the connection a desk-by-desk brief can't otherwise make. It says so plainly when there isn't one.",
+      "Quietly, in the background: feeds you actually read now count for more when the brief works out which stories matter, and each section is checked against its own sources after it lands. You'll only hear about that check if something doesn't hold up.",
+    ],
+  },
+  {
     id: "2026-08-24-a",
     date: "August 24, 2026",
     title: "Tell the brief how you want to be written to",

@@ -47,6 +47,7 @@ import {
   BRIEF_TOPICS,
   OTHER_TOPIC_ID,
   groupByTopic,
+  topicLabel,
   type BriefTopic,
   type ClassifiableArticle,
   type CustomDesk,
@@ -100,6 +101,8 @@ export type LevelConfig = {
   includeSkip: boolean;
   /** Big stories from outside the user's feeds. 0 = section omitted. */
   externalPicks: number;
+  /** Cross-desk threads to draw out. 0 = section omitted. */
+  threadPicks: number;
 };
 
 /**
@@ -127,6 +130,9 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     includeOther: false,
     includeSkip: true,
     externalPicks: 0,
+    // Concise is the lead and a clear-out. A thread needs several stories on
+    // several desks, and at this depth there are no desks.
+    threadPicks: 0,
   },
   standard: {
     label: "Standard",
@@ -147,6 +153,7 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     includeOther: false,
     includeSkip: true,
     externalPicks: 3,
+    threadPicks: 2,
   },
   deep: {
     label: "Deep",
@@ -170,6 +177,7 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     includeOther: true,
     includeSkip: true,
     externalPicks: 5,
+    threadPicks: 3,
   },
 };
 
@@ -249,7 +257,7 @@ export function estimateBriefMinutes(level: BriefLevel, shape: BriefShape = {}):
   return Math.max(1, Math.round(estimateBriefWords(level, shape) / BRIEF_READING_WPM));
 }
 
-export type SectionKind = "lead" | "topic" | "skip" | "external";
+export type SectionKind = "lead" | "topic" | "skip" | "external" | "threads";
 
 /**
  * Refs that are the same real-world story, told by different outlets.
@@ -299,6 +307,17 @@ export type PlannedSection = {
   continuing?: ContinuingRef[];
   /** External stories, for the "you're missing" section only. */
   externals?: ExternalRef[];
+  /** Cross-desk threads, for the "threads" section only. */
+  threads?: PlannedThread[];
+};
+
+/** One thread the brief is asked to explain, as the section receives it. */
+export type PlannedThread = {
+  /** The shared vocabulary. What the thread is "about", before anyone writes it. */
+  terms: string[];
+  refs: number[];
+  /** Names of the desks it crosses — the reason this is worth a section. */
+  deskLabels: string[];
 };
 
 export type BriefPlan = {
@@ -341,6 +360,7 @@ export type ExternalCandidate = {
 const LEAD_SECTION_LABEL = "The lead";
 const SKIP_SECTION_LABEL = "Quick clear";
 const EXTERNAL_SECTION_LABEL = "Outside your feeds";
+const THREADS_SECTION_LABEL = "Threads";
 
 /**
  * Group a set of refs by the story cluster they belong to, keeping only groups
@@ -595,6 +615,8 @@ export function planBrief(
     desks?: BriefTopic[];
     /** Refs an earlier section already wrote up. See `coveredRefs`. */
     covered?: number[];
+    /** Cross-desk threads found during retrieval — see `brief-retrieval.ts`. */
+    threads?: { terms: string[]; refs: number[]; deskIds: string[] }[];
     now?: Date;
   } = {},
 ): BriefPlan {
@@ -685,6 +707,31 @@ export function planBrief(
       refs,
       stories: storyGroupsFor(items, refs),
       continuing: continuingRefs(items, refs, memory, now),
+    });
+  }
+
+  // Threads go BEFORE the quick-clear list and after the desks, because that is
+  // where they make sense: they are about material the reader has just read,
+  // and they are the last thing in the brief that is actually reading.
+  const threads = (opts.threads ?? [])
+    .filter((t) => t.refs.length >= 2)
+    .slice(0, cfg.threadPicks);
+  if (cfg.threadPicks > 0 && threads.length > 0) {
+    sections.push({
+      key: "threads",
+      kind: "threads",
+      label: THREADS_SECTION_LABEL,
+      // Deliberately NOT filtered by `covered`, and deliberately not added to
+      // `writtenUp`. Every ref here has been covered already — that is the
+      // precondition, not a bug. The section's job is the line between them,
+      // which is the one thing a desk-by-desk brief can never say, and it is
+      // told in its prompt not to retell the stories themselves.
+      refs: [...new Set(threads.flatMap((t) => t.refs))].sort((a, b) => a - b),
+      threads: threads.map((t) => ({
+        terms: t.terms,
+        refs: t.refs,
+        deskLabels: t.deskIds.map((id) => topicLabel(id, desks)),
+      })),
     });
   }
 

@@ -56,6 +56,7 @@
 
 import { titleWords, representativeTitle } from "@/lib/trending/cluster";
 import { BRIEF_TOPICS, OTHER_TOPIC_ID, classifyArticle, type BriefTopic } from "./topics";
+import { trustedFeedCount } from "./feed-trust";
 
 /** One row of the wide scan: everything selection needs, nothing it doesn't. */
 export type ScanArticle = {
@@ -102,6 +103,12 @@ export type QueueSelection = {
   };
   /** Stories the budget did not reach, by desk. */
   omitted: { topicId: string; stories: number; articles: number }[];
+  /**
+   * Cross-desk threads among the SELECTED stories — see `findThreads`. Refs are
+   * 1-based positions in `selected`, one per story, so the brief can cite them
+   * with the same `[n]` numbers as everything else.
+   */
+  threads: { terms: string[]; refs: number[]; deskIds: string[] }[];
 };
 
 // ── Tunables ────────────────────────────────────────────────────────────
@@ -135,6 +142,8 @@ const W_FOLLOWED_DESK = 1.2;
 const W_FEEDBACK = 0.6;
 const W_GRAPH = 1;
 const W_SUBSTANCE = 0.4;
+/** Weighted above every inferred signal — see the note at its use site. */
+const W_FOLLOWED_STORY = 6;
 
 /** Distinct feeds at which corroboration is maxed — matches the trending pass. */
 const CORROBORATION_SATURATION = 5;
@@ -171,6 +180,9 @@ const MIN_TERM_LENGTH = 3;
  */
 const MAX_SHARED_STORIES = 8;
 
+/** Terms named per thread. Three is enough to say what it is about. */
+const MAX_THREAD_TERMS = 3;
+
 // ── Stage 2a: the scan, as stories ──────────────────────────────────────
 
 /**
@@ -179,7 +191,12 @@ const MAX_SHARED_STORIES = 8;
  * each become their own single-telling story, so selection behaves identically
  * whether or not clustering has happened yet — it just has less to merge.
  */
-export function toStories(rows: ScanArticle[], desks: BriefTopic[] = BRIEF_TOPICS): ScannedStory[] {
+export function toStories(
+  rows: ScanArticle[],
+  desks: BriefTopic[] = BRIEF_TOPICS,
+  /** Desks the reader has ruled out for a given headline — see `desk-suggest.ts`. */
+  ruledOut?: (title: string, deskId: string) => boolean,
+): ScannedStory[] {
   const byKey = new Map<string, ScanArticle[]>();
   const order = new Map<string, number>();
   rows.forEach((r, i) => {
@@ -198,7 +215,12 @@ export function toStories(rows: ScanArticle[], desks: BriefTopic[] = BRIEF_TOPIC
     // Classified off the story's representative headline plus the lead
     // member's feed, so every telling lands on one desk by construction — the
     // same guarantee `groupByTopic`'s cluster vote provides downstream.
-    const deskId = classifyArticle({ title, feedTitle: members[0].feedTitle }, desks);
+    // A desk the reader has said this story does not belong on is simply not
+    // available to it. The correction takes effect on the next brief rather
+    // than waiting to be confirmed by anything — a "wrong desk" tap that
+    // changes nothing for a week reads as a button that does not work.
+    const available = ruledOut ? desks.filter((d) => !ruledOut(title, d.id)) : desks;
+    const deskId = classifyArticle({ title, feedTitle: members[0].feedTitle }, available);
     stories.push({
       key,
       members,
@@ -251,6 +273,107 @@ export function connectedness(stories: ScannedStory[]): number[] {
   return max > 0 ? raw.map((v) => v / max) : raw.map(() => 0);
 }
 
+/**
+ * A thread: several stories, on more than one desk, circling the same thing.
+ *
+ * `connectedness` reduces the story graph to one number per story and throws
+ * the edges away. The edges are the part a desk-by-desk brief structurally
+ * cannot say: each desk sees only its own material, so five pieces about
+ * tariffs spread across Markets, Policy and World Affairs get written up three
+ * times as three unrelated developments, and the thing they have in common —
+ * usually the actual story — is never stated by anyone.
+ *
+ * The cross-desk requirement is the whole definition. A term shared by four
+ * stories on ONE desk is that desk's subject and its section already covers it;
+ * the same term reaching across two desks is a connection nobody was in a
+ * position to notice.
+ */
+export type StoryThread = {
+  /** The shared terms, most distinctive first. What the thread is "about". */
+  terms: string[];
+  /** Indices into the story list the thread was found in. */
+  stories: number[];
+  /** Desks it spans. Always two or more. */
+  deskIds: string[];
+  /** Ranking weight: how much distinctive language, over how many stories. */
+  weight: number;
+};
+
+/** Stories a term must appear in before it can be a thread rather than a coincidence. */
+const MIN_THREAD_STORIES = 3;
+/** Desks a thread must span. Two is the point; one is just a desk. */
+const MIN_THREAD_DESKS = 2;
+/**
+ * A term in more than this share of the pool is house vocabulary, not a thread.
+ * Guards against a reader whose feeds are all one subject finding a "thread"
+ * called "ai" every single morning.
+ */
+const MAX_THREAD_SHARE = 0.5;
+
+/**
+ * Threads among a set of stories, strongest first.
+ *
+ * Terms covering the same set of stories are merged — "tariff", "tariffs" and
+ * "semiconductor" over the same four stories are one thread with three names,
+ * not three threads — and a story is used by at most one thread, so two threads
+ * can never be the same observation twice.
+ */
+export function findThreads(stories: ScannedStory[], limit = 3): StoryThread[] {
+  const n = stories.length;
+  if (n < MIN_THREAD_STORIES) return [];
+
+  const byTerm = new Map<string, number[]>();
+  stories.forEach((s, i) => {
+    for (const t of new Set(titleWords(s.title))) {
+      if (t.length < MIN_TERM_LENGTH) continue;
+      const list = byTerm.get(t);
+      if (list) list.push(i);
+      else byTerm.set(t, [i]);
+    }
+  });
+
+  // Group terms by the exact set of stories they cover, so synonyms and
+  // inflections of one subject collapse into a single thread.
+  const bySignature = new Map<string, { terms: string[]; stories: number[] }>();
+  for (const [term, idxs] of byTerm) {
+    if (idxs.length < MIN_THREAD_STORIES || idxs.length > Math.max(MIN_THREAD_STORIES, n * MAX_THREAD_SHARE)) {
+      continue;
+    }
+    const desks = new Set(idxs.map((i) => stories[i].deskId));
+    if (desks.size < MIN_THREAD_DESKS) continue;
+    const signature = idxs.join(",");
+    const existing = bySignature.get(signature);
+    if (existing) existing.terms.push(term);
+    else bySignature.set(signature, { terms: [term], stories: idxs });
+  }
+
+  const candidates: StoryThread[] = [...bySignature.values()].map((g) => {
+    const deskIds = [...new Set(g.stories.map((i) => stories[i].deskId))];
+    const idf = Math.log(1 + n / g.stories.length);
+    return {
+      // Longer terms first: "semiconductor" names a thread better than "eu".
+      terms: [...g.terms].sort((a, b) => b.length - a.length || a.localeCompare(b)),
+      stories: [...g.stories].sort((a, b) => a - b),
+      deskIds,
+      weight: g.stories.length * idf * g.terms.length * deskIds.length,
+    };
+  });
+
+  candidates.sort((a, b) =>
+    b.weight !== a.weight ? b.weight - a.weight : a.stories[0] - b.stories[0],
+  );
+
+  const used = new Set<number>();
+  const out: StoryThread[] = [];
+  for (const c of candidates) {
+    if (out.length >= limit) break;
+    if (c.stories.some((i) => used.has(i))) continue;
+    for (const i of c.stories) used.add(i);
+    out.push(c);
+  }
+  return out;
+}
+
 /** Whether any telling has real text behind it, rather than a three-line stub. */
 function hasSubstance(members: ScanArticle[]): boolean {
   return members.some((m) => m.hasFullText || (m.wordCount ?? 0) >= 800);
@@ -281,17 +404,27 @@ export function rankStories(
   opts: {
     priority?: string[];
     deskWeights?: Record<string, number>;
+    /** Per-feed multipliers — see `feed-trust.ts`. Absent feeds count as 1. */
+    feedTrust?: Record<string, number>;
+    /** Stories the reader asked to stay on — see `story-follow.ts`. */
+    isFollowed?: (title: string) => boolean;
     now?: Date;
   } = {},
 ): ScannedStory[] {
   const at = scoringClock(opts.now ?? new Date());
-  const followed = new Set(opts.priority ?? []);
+  const followedDesks = new Set(opts.priority ?? []);
   const weights = opts.deskWeights ?? {};
+  const trust = opts.feedTrust ?? {};
   const graph = connectedness(stories);
 
   stories.forEach((s, i) => {
+    // Feeds counted by what they have earned rather than equally: three
+    // outlets the reader actually reads agreeing on something outweighs four
+    // they never open. With no history every feed is worth 1 and this is the
+    // plain distinct-feed count it replaced.
     const corroboration =
-      Math.min(s.distinctFeeds, CORROBORATION_SATURATION) / CORROBORATION_SATURATION;
+      Math.min(trustedFeedCount(s.members.map((m) => m.feedId), trust), CORROBORATION_SATURATION) /
+      CORROBORATION_SATURATION;
     const ageHours = Math.max(0, (at - latestAt(s.members, at)) / HOUR_MS);
     const recency = 0.5 ** (ageHours / RECENCY_HALF_LIFE_HOURS);
     const trend = s.members.reduce((m, a) => Math.max(m, a.trendScore ?? 0), 0);
@@ -300,10 +433,14 @@ export function rankStories(
       trend * W_TREND +
       corroboration * W_CORROBORATION +
       recency * W_RECENCY +
-      (followed.has(s.deskId) ? W_FOLLOWED_DESK : 0) +
+      (followedDesks.has(s.deskId) ? W_FOLLOWED_DESK : 0) +
       (weights[s.deskId] ?? 0) * W_FEEDBACK +
       graph[i] * W_GRAPH +
-      (hasSubstance(s.members) ? W_SUBSTANCE : 0);
+      (hasSubstance(s.members) ? W_SUBSTANCE : 0) +
+      // A story the reader explicitly asked to stay on outranks everything
+      // else here. This is the only signal in the file that is a request
+      // rather than an inference, and it should behave like one.
+      (opts.isFollowed?.(s.title) ? W_FOLLOWED_STORY : 0);
   });
 
   // Scan position is the tie-break, so two stories that score identically keep
@@ -356,6 +493,9 @@ export function selectBriefQueue(
     limit: number;
     priority?: string[];
     deskWeights?: Record<string, number>;
+    feedTrust?: Record<string, number>;
+    isFollowed?: (title: string) => boolean;
+    ruledOut?: (title: string, deskId: string) => boolean;
     desks?: BriefTopic[];
     perStory?: number;
     now?: Date;
@@ -363,7 +503,7 @@ export function selectBriefQueue(
 ): QueueSelection {
   const limit = Math.max(0, opts.limit);
   const perStory = Math.max(1, opts.perStory ?? MAX_TELLINGS_PER_STORY);
-  const stories = toStories(rows, opts.desks);
+  const stories = toStories(rows, opts.desks, opts.ruledOut);
   const ranked = rankStories(stories, opts);
 
   const deskCap = Math.max(MIN_DESK_SLOTS, Math.ceil(limit * MAX_DESK_SHARE));
@@ -389,14 +529,27 @@ export function selectBriefQueue(
 
   const selected: ScanArticle[] = [];
   const storyFeeds = new Map<string, number>();
+  const selectedStories: ScannedStory[] = [];
+  /** First `[n]` each story occupies — the ref a thread cites it by. */
+  const firstRef: number[] = [];
   for (const s of ranked) {
     const members = taken.get(s.key);
     if (!members) continue;
+    selectedStories.push(s);
+    firstRef.push(selected.length + 1);
     for (const m of members) {
       selected.push(m);
       storyFeeds.set(m.id, s.distinctFeeds);
     }
   }
+
+  // Threads are found over what was SELECTED, not over the whole scan: a
+  // connection the brief cannot cite is a connection it cannot make.
+  const threads = findThreads(selectedStories).map((t) => ({
+    terms: t.terms.slice(0, MAX_THREAD_TERMS),
+    refs: t.stories.map((i) => firstRef[i]).sort((a, b) => a - b),
+    deskIds: t.deskIds,
+  }));
 
   const omittedByDesk = new Map<string, { stories: number; articles: number }>();
   for (const s of ranked) {
@@ -410,6 +563,7 @@ export function selectBriefQueue(
   return {
     selected,
     storyFeeds,
+    threads,
     coverage: {
       scanned: rows.length,
       stories: stories.length,

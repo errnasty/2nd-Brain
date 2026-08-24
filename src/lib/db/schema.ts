@@ -1212,6 +1212,15 @@ export type UserSettingsData = {
   // another device) and bypassed the sectioned brief entirely. Server-side, so
   // it syncs. Additive jsonb key — no migration needed.
   briefInstructions?: string;
+  // Stories the reader asked to keep following (src/lib/today/story-follow.ts).
+  // Bounded and self-expiring, so this never becomes a second desk list nobody
+  // remembers creating. Shallow-merge caveat: always send the whole array.
+  followedStories?: { title: string; followedAt: string; lastSeenAt: string }[];
+  // Bullets the reader marked as filed under the wrong desk
+  // (src/lib/today/desk-suggest.ts). Two jobs: the rejected desk stops claiming
+  // that story, and a run of corrections about the same subject becomes the
+  // suggestion to create a desk for it. Shallow-merge caveat: whole array.
+  briefMisfiles?: { title: string; deskId: string; at: string }[];
 };
 
 export const userSettings = pgTable(

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_TELLINGS_PER_STORY,
   connectedness,
+  findThreads,
   rankStories,
   selectBriefQueue,
   toStories,
@@ -272,5 +273,140 @@ describe("selectBriefQueue", () => {
     const out = selectBriefQueue([], { limit: 10, now: NOW });
     expect(out.selected).toEqual([]);
     expect(out.coverage.stories).toBe(0);
+  });
+});
+
+describe("findThreads", () => {
+  /** Tariff stories spread across three desks — the shape a desk-by-desk brief
+   *  structurally cannot see. */
+  function crossDesk(): ScanArticle[] {
+    return [
+      article({ id: "m1", title: "Tariffs push semiconductor earnings lower", clusterId: "m1" }),
+      article({ id: "p1", title: "Brussels opens a tariffs inquiry into semiconductor imports", clusterId: "p1" }),
+      article({ id: "g1", title: "Beijing answers semiconductor tariffs with export controls", clusterId: "g1" }),
+      article({ id: "x1", title: "A sourdough recipe worth keeping", clusterId: "x1" }),
+      article({ id: "x2", title: "Museum reopens after a long refit", clusterId: "x2" }),
+    ];
+  }
+
+  it("finds a subject running across more than one desk", () => {
+    const [thread] = findThreads(toStories(crossDesk()));
+    expect(thread).toBeDefined();
+    expect(thread.terms).toContain("semiconductor");
+    expect(thread.stories).toHaveLength(3);
+    expect(thread.deskIds.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("ignores a subject confined to one desk — that desk's section covers it", () => {
+    const oneDesk = Array.from({ length: 5 }, (_, i) =>
+      article({ id: `ai${i}`, title: `OpenAI ships another inference model ${i}`, clusterId: `c${i}` }),
+    );
+    expect(findThreads(toStories(oneDesk))).toEqual([]);
+  });
+
+  it("needs more than a coincidence between two stories", () => {
+    const pair = [
+      article({ id: "a", title: "Tariffs push semiconductor earnings lower", clusterId: "a" }),
+      article({ id: "b", title: "Beijing answers semiconductor tariffs", clusterId: "b" }),
+    ];
+    expect(findThreads(toStories(pair))).toEqual([]);
+  });
+
+  it("never calls a term a thread when it is most of the pool", () => {
+    // A reader whose feeds are all one subject must not be told "tariffs" is a
+    // thread every single morning.
+    const rows = Array.from({ length: 6 }, (_, i) =>
+      article({
+        id: `t${i}`,
+        // Alternates between two desks, so only the share guard can stop it.
+        title:
+          i % 2 === 0
+            ? `Tariffs move semiconductor earnings ${i}`
+            : `Brussels tariffs inquiry on semiconductor imports ${i}`,
+        clusterId: `c${i}`,
+      }),
+    );
+    for (const t of findThreads(toStories(rows))) {
+      expect(t.stories.length).toBeLessThanOrEqual(rows.length * 0.5);
+    }
+  });
+
+  it("uses each story in at most one thread", () => {
+    const threads = findThreads(toStories(crossDesk()), 3);
+    const used = threads.flatMap((t) => t.stories);
+    expect(new Set(used).size).toBe(used.length);
+  });
+
+  it("says nothing about a pool too small to have threads", () => {
+    expect(findThreads([])).toEqual([]);
+    expect(findThreads(toStories([article({ id: "a", title: "Alpha" })]))).toEqual([]);
+  });
+});
+
+describe("threads in the selection", () => {
+  it("cites threads with the same [n] numbers as everything else", () => {
+    const rows = [
+      article({ id: "m1", title: "Tariffs push semiconductor earnings lower", clusterId: "m1" }),
+      article({ id: "p1", title: "Brussels opens a tariffs inquiry into semiconductor imports", clusterId: "p1" }),
+      article({ id: "g1", title: "Beijing answers semiconductor tariffs with export controls", clusterId: "g1" }),
+      article({ id: "x1", title: "A sourdough recipe worth keeping", clusterId: "x1" }),
+      article({ id: "x2", title: "Museum reopens after a long refit", clusterId: "x2" }),
+    ];
+    const out = selectBriefQueue(rows, { limit: 20, now: NOW });
+    expect(out.threads).toHaveLength(1);
+    for (const ref of out.threads[0].refs) {
+      expect(ref).toBeGreaterThanOrEqual(1);
+      expect(ref).toBeLessThanOrEqual(out.selected.length);
+    }
+  });
+
+  it("only finds threads among stories the brief can actually cite", () => {
+    const rows = [
+      article({ id: "m1", title: "Tariffs push semiconductor earnings lower", clusterId: "m1", trendScore: 0.9 }),
+      article({ id: "p1", title: "Brussels opens a tariffs inquiry into semiconductor imports", clusterId: "p1" }),
+      article({ id: "g1", title: "Beijing answers semiconductor tariffs with export controls", clusterId: "g1" }),
+    ];
+    // Only one story fits, so there is no thread left to draw.
+    expect(selectBriefQueue(rows, { limit: 1, now: NOW }).threads).toEqual([]);
+  });
+});
+
+describe("feed trust in ranking", () => {
+  it("lifts a story carried by feeds the reader actually reads", () => {
+    const rows = [
+      article({ id: "a1", title: "Alpha development lands today", feedId: "keen1", clusterId: "a" }),
+      article({ id: "a2", title: "Alpha development lands today", feedId: "keen2", clusterId: "a" }),
+      article({ id: "b1", title: "Beta development lands today", feedId: "dull1", clusterId: "b" }),
+      article({ id: "b2", title: "Beta development lands today", feedId: "dull2", clusterId: "b" }),
+    ];
+    const trust = { keen1: 1.35, keen2: 1.35, dull1: 0.75, dull2: 0.75 };
+    const ranked = rankStories(toStories(rows), { feedTrust: trust, now: NOW });
+    expect(ranked[0].key).toBe("a");
+  });
+
+  it("changes nothing for a reader the app knows nothing about", () => {
+    const rows = scan();
+    const withTrust = rankStories(toStories(rows), { feedTrust: {}, now: NOW });
+    const without = rankStories(toStories(rows), { now: NOW });
+    expect(withTrust.map((s) => s.key)).toEqual(without.map((s) => s.key));
+  });
+});
+
+describe("a followed story in ranking", () => {
+  it("keeps it in the queue on the day nothing happened to it", () => {
+    const rows = [
+      article({ id: "hot", title: "Everyone is covering this today", trendScore: 0.95 }),
+      article({
+        id: "quiet",
+        title: "Nexperia seizure grinds on with no movement",
+        trendScore: 0,
+        publishDate: new Date(NOW.getTime() - 40 * 60 * 60 * 1000),
+      }),
+    ];
+    const isFollowed = (t: string) => t.includes("Nexperia");
+    expect(rankStories(toStories(rows), { isFollowed, now: NOW })[0].members[0].id).toBe("quiet");
+    // …and it is only ever a request, never an inference: without the follow the
+    // hot story leads, as it should.
+    expect(rankStories(toStories(rows), { now: NOW })[0].members[0].id).toBe("hot");
   });
 });

@@ -54,7 +54,11 @@ import { EMPTY_SECTION_HEADER } from "@/lib/today/brief-stream";
 import { MAX_BRIEF_INSTRUCTIONS } from "@/lib/today/brief-prompts";
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
-import { recordBriefFeedbackAction } from "@/app/(app)/today/actions";
+import {
+  followStoryAction,
+  recordBriefFeedbackAction,
+  reportMisfileAction,
+} from "@/app/(app)/today/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
 import { fetchRecallCardsAction, gradeCardAction, type RecallCard } from "@/app/(app)/review/actions";
 import { updateUserSettingsAction } from "@/lib/settings/actions";
@@ -179,12 +183,14 @@ const INSTRUCTION_EXAMPLES = [
 
 type PlanSection = {
   key: string;
-  kind: "lead" | "topic" | "skip" | "external";
+  kind: "lead" | "topic" | "skip" | "external" | "threads";
   topicId?: string;
   label: string;
   refs: number[];
   /** Groups of refs that are one story told by several outlets. */
   stories?: { refs: number[]; sourceCount: number }[];
+  /** Cross-desk threads, for the "threads" section only. */
+  threads?: { terms: string[]; refs: number[]; deskLabels: string[] }[];
   /** Stories from outside the user's feeds, cited as [E1], [E2], … */
   externals?: {
     n: number;
@@ -219,6 +225,40 @@ type SectionResult = { status: "ok" | "replan" | "empty"; text: string };
 /** The desk editor's form state. `id` is null while adding a new desk. */
 type DeskDraft = { id: string | null; label: string; keywords: string; remit: string };
 
+/**
+ * Why one cited article is in the brief.
+ *
+ * Every field was already computed to BUILD the brief and then thrown away at
+ * the point the reader might want it. No model call, no extra request — it
+ * arrives with the plan.
+ */
+type SourceWhy = {
+  n: number;
+  desk: string | null;
+  deskId: string | null;
+  outlets: number;
+  rank: number;
+  scored: boolean;
+  followed: boolean;
+};
+
+/** A desk the reader has not thought to create, and the evidence for it. */
+type DeskSuggestion = {
+  id: string;
+  label: string;
+  keywords: string[];
+  reason: string;
+};
+
+/** What the reader asked to stay on. */
+type FollowedStory = { title: string; followedAt: string; lastSeenAt: string };
+
+/** What a section's sources did not turn out to support. */
+type SectionCheck = {
+  unsupported: { ref: number; claim: string }[];
+  outOfScope: number[];
+};
+
 /** What the scan saw against what the brief was built from. */
 type Coverage = {
   scanned: number;
@@ -236,10 +276,14 @@ type BriefPlanResponse = {
   level: BriefLevel;
   priority: string[];
   customDesks?: CustomDesk[];
+  instructions?: string;
   coverage?: Coverage;
   sections: PlanSection[];
   desks: Desk[];
   sources: BriefSource[];
+  why?: SourceWhy[];
+  followedStories?: FollowedStory[];
+  deskSuggestions?: DeskSuggestion[];
 };
 
 /**
@@ -392,6 +436,16 @@ export function DailyBrief({
   /** The desk being added or edited, or null when the editor is closed. */
   const [deskDraft, setDeskDraft] = useState<DeskDraft | null>(null);
   const [coverage, setCoverage] = useState<Coverage | null>(null);
+  /** Why each cited article is here, keyed by `[n]`. Arrives with the plan. */
+  const [why, setWhy] = useState<Map<number, SourceWhy>>(new Map());
+  const [followedStories, setFollowedStories] = useState<FollowedStory[]>([]);
+  const [deskSuggestions, setDeskSuggestions] = useState<DeskSuggestion[]>([]);
+  /** Suggestions dismissed this session — never nagged twice in one sitting. */
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<string[]>([]);
+  /** Verification results per section key. Absent = clean, or not checked. */
+  const [checks, setChecks] = useState<Map<string, SectionCheck>>(new Map());
+  /** The citation the reader tapped, if any. */
+  const [inspecting, setInspecting] = useState<{ n: number; rect: DOMRect } | null>(null);
   const hasMounted = useRef(false);
   // Set synchronously when we hydrate a same-day brief from cache. A ref (not
   // state) so the auto-stream effect below — which runs in the SAME commit as
@@ -529,6 +583,35 @@ export function DailyBrief({
   }, []);
 
   /**
+   * Check a finished section against the articles it was written from.
+   *
+   * Everything here is best-effort by design. A clean section — which is the
+   * overwhelming majority — leaves no trace, which is what keeps this from
+   * being a feature anybody has to know about.
+   */
+  const verifySection = useCallback(
+    async (key: string, level: BriefLevel, text: string, run: number) => {
+      try {
+        const res = await fetch("/api/brief/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section: key, level, text }),
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as SectionCheck;
+        const found =
+          (data.unsupported?.length ?? 0) > 0 || (data.outOfScope?.length ?? 0) > 0;
+        if (!found || run !== runRef.current) return;
+        setChecks((prev) => new Map(prev).set(key, data));
+      } catch {
+        // Never surfaced: the brief is already readable without this.
+      }
+    },
+    [],
+  );
+
+  /**
    * Generate one section. Each call is a short, self-contained request: a
    * bounded slice of the queue in, a capped number of tokens out. Returns
    * "replan" when the unread set moved under us, so the caller can re-plan
@@ -612,6 +695,13 @@ export function DailyBrief({
           }
         }
         const finished = displayText(acc).trim();
+        // Check the section against its sources once it is on screen. Deliberately
+        // not awaited and deliberately not blocking: the brief reads at exactly
+        // the speed it did before this existed, and a verifier that fails says
+        // nothing rather than contradicting a section already rendered.
+        if (finished && (section.kind === "lead" || section.kind === "topic")) {
+          void verifySection(section.key, plan.level, finished, run);
+        }
         if (run === runRef.current) {
           const body = finished;
           patchBlock(section.key, {
@@ -636,7 +726,7 @@ export function DailyBrief({
         return { status: "ok", text: "" };
       }
     },
-    [dropBlock, patchBlock],
+    [dropBlock, patchBlock, verifySection],
   );
 
   /**
@@ -677,6 +767,10 @@ export function DailyBrief({
         setSources(plan.sources ?? []);
         setDesks(plan.desks ?? []);
         setCoverage(plan.coverage ?? null);
+        setWhy(new Map((plan.why ?? []).map((w) => [w.n, w])));
+        setFollowedStories(plan.followedStories ?? []);
+        setDeskSuggestions(plan.deskSuggestions ?? []);
+        setChecks(new Map());
         // The server validated the stored desks on its way past; adopting what
         // it used keeps the picker showing the desks the brief was actually
         // built from rather than an unvalidated copy of the settings blob.
@@ -1086,6 +1180,26 @@ export function DailyBrief({
     [customDesks, followed, generate],
   );
 
+  /**
+   * Accept a suggested desk.
+   *
+   * Routed through the same `saveDesk` a hand-written one takes, so a suggested
+   * desk is in every respect an ordinary desk from the moment it exists — there
+   * is no second kind of desk to reason about, and nothing to un-suggest later.
+   */
+  const acceptSuggestion = useCallback(
+    (suggestion: DeskSuggestion) => {
+      setDeskSuggestions((prev) => prev.filter((x) => x.id !== suggestion.id));
+      saveDesk({
+        id: null,
+        label: suggestion.label,
+        keywords: suggestion.keywords.join(", "),
+        remit: "",
+      });
+    },
+    [saveDesk],
+  );
+
   /** Remove a desk, and stop following it — a followed id with no desk behind
    *  it would sit in the settings blob forever, matching nothing. */
   const removeDesk = useCallback(
@@ -1175,6 +1289,9 @@ export function DailyBrief({
   // Unread and not written up: what the level left out, plus what the queue's
   // budget never reached. Both are things the reader still has sitting there.
   const deskLeftOut = (d: Desk) => d.count + (d.omittedArticles ?? 0);
+  const visibleSuggestions = deskSuggestions.filter(
+    (sug) => !dismissedSuggestions.includes(sug.id) && !customDesks.some((d) => d.id === sug.id),
+  );
   const omittedDesks = desks.filter((d) => !d.included && deskLeftOut(d) > 0);
 
   // Editorial masthead — derived from "now". State (not a bare Date) so the
@@ -1271,6 +1388,46 @@ export function DailyBrief({
   // Turn the model's [n] references into tappable inline citations. The source
   // map arrives with the PLAN, before any text, so citations are live from the
   // first token instead of waiting for the whole brief to finish.
+  /**
+   * Follow or unfollow the story a citation belongs to.
+   *
+   * By headline, not article id: a follow outlives the piece it started from,
+   * because tomorrow the story arrives as a different article from a different
+   * outlet — which is the entire case for following one.
+   */
+  const toggleFollow = useCallback(
+    (title: string, following: boolean) => {
+      setFollowedStories((prev) =>
+        following
+          ? [...prev, { title, followedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() }]
+          : prev.filter((f) => f.title !== title),
+      );
+      setWhy((prev) => {
+        const next = new Map(prev);
+        for (const [n, w] of next) {
+          const source = sources.find((x) => x.n === n);
+          if (source?.title === title) next.set(n, { ...w, followed: following });
+        }
+        return next;
+      });
+      void followStoryAction({ title, following }).then((res) => {
+        if (res.ok) return;
+        toast.error(res.error ?? "Couldn't save that");
+      });
+      toast.success(following ? "Following this story" : "Stopped following");
+    },
+    [sources],
+  );
+
+  /** Tell the brief a story was written up under the wrong desk. */
+  const reportMisfile = useCallback((title: string, deskId: string, deskLabel: string) => {
+    void reportMisfileAction({ title, deskId }).then((res) => {
+      if (res.ok) toast.success(`Noted — this won't go to ${deskLabel} again`);
+      else toast.error(res.error ?? "Couldn't save that");
+    });
+    setInspecting(null);
+  }, []);
+
   const citations: Citation[] = [
     ...sources.map((s) => ({
       n: s.n,
@@ -1466,6 +1623,44 @@ export function DailyBrief({
                       </DropdownMenuCheckboxItem>
                     );
                   })}
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              {/* Offered here, where you already are when you think about
+                  desks — not as a notification, and never twice in one sitting.
+                  The evidence is shown so the offer can be judged rather than
+                  trusted. */}
+              {visibleSuggestions.length > 0 && customDesks.length < MAX_CUSTOM_DESKS && (
+                <>
+                  {visibleSuggestions.map((sug) => (
+                    <div
+                      key={sug.id}
+                      className="mx-1 mb-1 rounded-md border border-brand/30 bg-brand/5 px-2 py-2"
+                    >
+                      <p className="text-[12px] font-medium">Add a {sug.label} desk?</p>
+                      <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                        {sug.reason}.
+                      </p>
+                      <div className="mt-1.5 flex gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="brand"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => acceptSuggestion(sug)}
+                        >
+                          Add it
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => setDismissedSuggestions((prev) => [...prev, sug.id])}
+                        >
+                          No thanks
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
                   <DropdownMenuSeparator />
                 </>
               )}
@@ -1791,6 +1986,18 @@ export function DailyBrief({
               {b.text.trim() ? (
                 <CitedMarkdown
                   citations={citations}
+                  // Tapping a number opens the "why is this here" card rather
+                  // than jumping straight to the article. It is the only new
+                  // gesture in the brief, and it is the one that carries the
+                  // rest: what put this in front of you, keep me on it, and
+                  // wrong desk all live on the thing they are about.
+                  onInspect={(c, anchor) =>
+                    setInspecting(
+                      inspecting?.n === c.n
+                        ? null
+                        : { n: c.n, rect: anchor.getBoundingClientRect() },
+                    )
+                  }
                   onNavigate={(href) => {
                     // Opening a cited source credits that article's own folder,
                     // which is usually a different skill from the section's mix.
@@ -1806,6 +2013,32 @@ export function DailyBrief({
               ) : (
                 b.label && <h3>{b.label}</h3>
               )}
+              {/* Only ever rendered when there is something to answer for, which
+                  is what keeps the check from being a feature to remember. It
+                  reports rather than accuses: here is the claim, and it wasn't
+                  found in the source it cites. */}
+              {checks.has(b.key) && (
+                <div className="not-prose mt-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+                  <p className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-400">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    Checked against the sources
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {checks.get(b.key)!.unsupported.map((u, i) => (
+                      <li key={i}>
+                        “{u.claim}” — not found in [{u.ref}].
+                      </li>
+                    ))}
+                    {checks.get(b.key)!.outOfScope.length > 0 && (
+                      <li>
+                        Cited {checks.get(b.key)!.outOfScope.map((n) => `[${n}]`).join(", ")}, which
+                        this section wasn&apos;t given — treat those links as unreliable.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
               {/* What this section paid, and into which skill. Shown after the
                   fact rather than promised up front — the point is to notice
                   where your attention went, not to shop for XP. */}
@@ -1932,6 +2165,28 @@ export function DailyBrief({
             </p>
           )}
         </div>
+      )}
+
+      {/* What you asked to stay on. One line, next to the coverage note, so
+          following never becomes a list to maintain — a story that stops
+          running lapses on its own, and this is only here so you can let one
+          go early without hunting for where you started it. */}
+      {!loading && followedStories.length > 0 && (
+        <p className="not-prose mt-6 text-xs text-muted-foreground">
+          Following:{" "}
+          {followedStories.map((f, i) => (
+            <span key={f.title}>
+              {i > 0 ? ", " : ""}
+              <button
+                onClick={() => toggleFollow(f.title, false)}
+                className="underline decoration-border underline-offset-2 hover:decoration-foreground"
+                title="Stop following this story"
+              >
+                {f.title.length > 60 ? `${f.title.slice(0, 60)}…` : f.title}
+              </button>
+            </span>
+          ))}
+        </p>
       )}
 
       {/* What the brief was built from. The queue is now a SELECTION out of a
@@ -2071,6 +2326,31 @@ export function DailyBrief({
         </footer>
       )}
 
+      {/* The one new gesture in the brief: tap a citation number. */}
+      {inspecting &&
+        (() => {
+          const source = sources.find((x) => x.n === inspecting.n);
+          if (!source) return null;
+          const w = why.get(inspecting.n);
+          return (
+            <CitationCard
+              source={source}
+              why={w}
+              rect={inspecting.rect}
+              following={w?.followed ?? false}
+              onFollow={(next) => toggleFollow(source.title, next)}
+              onMisfile={() =>
+                w?.deskId && reportMisfile(source.title, w.deskId, w.desk ?? "that desk")
+              }
+              onOpen={() => {
+                reading.reportSourceOpened(source.id);
+                router.push(`/feeds?article=${source.id}`);
+              }}
+              onClose={() => setInspecting(null)}
+            />
+          );
+        })()}
+
       {/* ── Desk editor ─────────────────────────────────────────────
           A desk is a label, a remit and the terms that claim an article — the
           same three things a built-in desk is made of, which is why a custom
@@ -2174,6 +2454,138 @@ const RECALL_GRADES: { label: string; quality: number }[] = [
  * Renders nothing when nothing is due: an empty state here would just be a
  * daily reminder that you have no work, which is nagging, not helping.
  */
+/**
+ * The "why is this here" card.
+ *
+ * The brief already knew all of this — which desk claimed the story, how many
+ * outlets carried it, where it ranked, whether you asked to follow it — and
+ * threw it away at exactly the point a reader might wonder. Showing it costs
+ * nothing: no model call, no request, it rides in with the plan.
+ *
+ * It is also where the two corrections live, and that is the point. "Keep me on
+ * this" and "wrong desk" are both statements about one story, so they belong on
+ * the story rather than in a menu somewhere; putting them here means the brief
+ * gained three abilities and one gesture.
+ */
+function CitationCard({
+  source,
+  why,
+  following,
+  onFollow,
+  onMisfile,
+  onOpen,
+  onClose,
+  rect,
+}: {
+  source: BriefSource;
+  why?: SourceWhy;
+  following: boolean;
+  onFollow: (following: boolean) => void;
+  onMisfile: () => void;
+  onOpen: () => void;
+  onClose: () => void;
+  rect: DOMRect;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Dismiss on anything that is not this card: a click elsewhere, Escape, or
+  // the page moving under it. A popover anchored to a position in a document
+  // that scrolls has to close on scroll or it detaches from what it describes.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("resize", onClose);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+
+  const WIDTH = 288;
+  // Clamped to the viewport so a citation near the right edge — which is most
+  // of them, since they end sentences — does not open off-screen.
+  const left = Math.min(Math.max(8, rect.left - WIDTH / 2 + rect.width / 2), window.innerWidth - WIDTH - 8);
+  const below = rect.bottom + 8;
+  const openUp = below + 210 > window.innerHeight && rect.top > 220;
+
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      style={{
+        position: "fixed",
+        left,
+        width: WIDTH,
+        ...(openUp ? { bottom: window.innerHeight - rect.top + 8 } : { top: below }),
+      }}
+      className="z-50 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg"
+    >
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Why this is here</p>
+      <p className="mt-1 line-clamp-2 text-[13px] font-medium leading-snug">{source.title}</p>
+
+      <ul className="mt-2 space-y-1 text-[11px] leading-snug text-muted-foreground">
+        <li>
+          <span className="text-foreground">{source.feedTitle}</span>
+          {why && why.outlets > 1 && <> · carried by {why.outlets} of your feeds</>}
+        </li>
+        {why?.desk && (
+          <li>
+            Filed under <span className="text-foreground">{why.desk}</span>
+          </li>
+        )}
+        {why && (
+          <li>
+            {why.scored
+              ? `Ranked #${why.rank} in today's queue`
+              : `#${why.rank} in your queue — not scored for trend yet`}
+          </li>
+        )}
+        {following && <li className="text-brand">You&apos;re following this story</li>}
+      </ul>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={onOpen}>
+          <ExternalLink className="mr-1 h-3 w-3" /> Open
+        </Button>
+        <Button
+          size="sm"
+          variant={following ? "brand" : "ghost"}
+          className="h-7 px-2 text-[11px]"
+          onClick={() => onFollow(!following)}
+          title={
+            following
+              ? "Stop keeping this story in your brief"
+              : "Keep this story in your brief until it stops running"
+          }
+        >
+          <Bookmark className="mr-1 h-3 w-3" />
+          {following ? "Following" : "Keep me on this"}
+        </Button>
+        {why?.desk && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-[11px] text-muted-foreground"
+            onClick={onMisfile}
+            title={`This story doesn't belong on ${why.desk}`}
+          >
+            Wrong desk
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RecallCheck() {
   const [cards, setCards] = useState<RecallCard[]>([]);
   const [revealed, setRevealed] = useState(false);

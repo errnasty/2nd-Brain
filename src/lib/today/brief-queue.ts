@@ -198,6 +198,8 @@ export type BriefQueue = {
   windowLabel: string;
   coverage: QueueSelection["coverage"];
   omitted: QueueSelection["omitted"];
+  /** Cross-desk threads among the selected stories — see `brief-retrieval.ts`. */
+  threads: QueueSelection["threads"];
   /**
    * Every title the scan saw, selected or not.
    *
@@ -280,6 +282,9 @@ export async function fetchBriefQueue(
     scanLimit: number;
     priority?: string[];
     deskWeights?: Record<string, number>;
+    feedTrust?: Record<string, number>;
+    isFollowed?: (title: string) => boolean;
+    ruledOut?: (title: string, deskId: string) => boolean;
     desks?: BriefTopic[];
     hydrate?: boolean;
     now?: Date;
@@ -290,6 +295,9 @@ export async function fetchBriefQueue(
     limit: opts.limit,
     priority: opts.priority,
     deskWeights: opts.deskWeights,
+    feedTrust: opts.feedTrust,
+    isFollowed: opts.isFollowed,
+    ruledOut: opts.ruledOut,
     desks: opts.desks,
     now: opts.now,
   });
@@ -314,6 +322,7 @@ export async function fetchBriefQueue(
       windowLabel,
       coverage: selection.coverage,
       omitted: selection.omitted,
+      threads: selection.threads,
       scanTitles,
     };
   }
@@ -333,6 +342,7 @@ export async function fetchBriefQueue(
     windowLabel,
     coverage: selection.coverage,
     omitted: selection.omitted,
+    threads: selection.threads,
     scanTitles,
   };
 }
@@ -345,6 +355,9 @@ export async function unreadBriefIds(
     scanLimit: number;
     priority?: string[];
     deskWeights?: Record<string, number>;
+    feedTrust?: Record<string, number>;
+    isFollowed?: (title: string) => boolean;
+    ruledOut?: (title: string, deskId: string) => boolean;
     desks?: BriefTopic[];
   },
 ): Promise<string[]> {
@@ -459,6 +472,51 @@ export function briefSourceMap(rows: Pick<PlanRow, "id" | "title" | "url" | "fee
     title: r.title,
     url: r.url,
     feedTitle: r.feedTitle,
+  }));
+}
+
+/**
+ * Why each cited article is in the brief at all.
+ *
+ * Every part of this was already computed to BUILD the brief — which desk
+ * claimed the story, how many outlets carried it, how hot it was, where it
+ * landed in the queue — and then thrown away at the point the reader might
+ * want it. Handing it over costs one pass over rows already in memory and no
+ * model call whatsoever, which is what makes it affordable to attach to every
+ * citation rather than to a chosen few.
+ */
+export type SourceWhy = {
+  n: number;
+  /** Desk that claimed the story, already resolved to its label. */
+  desk: string | null;
+  /** …and its id, so a correction names the desk rather than a string that
+   *  happens to read the same as another one. */
+  deskId: string | null;
+  /** Distinct outlets carrying it across the whole scan. */
+  outlets: number;
+  /** Position in the queue — 1 is the day's biggest story. */
+  rank: number;
+  /** Whether the trending pass had scored it at all. */
+  scored: boolean;
+  /** Whether the reader is following this story. */
+  followed: boolean;
+};
+
+export function briefWhyMap(
+  rows: PlanRow[],
+  opts: {
+    deskOf: (ref: number) => { id: string; label: string } | null;
+    isFollowed?: (title: string) => boolean;
+  },
+): SourceWhy[] {
+  return rows.map((r, i) => ({
+    n: i + 1,
+    desk: opts.deskOf(i + 1)?.label ?? null,
+    deskId: opts.deskOf(i + 1)?.id ?? null,
+    outlets: Math.max(1, r.storyFeeds ?? 1),
+    rank: i + 1,
+    scored: (r.trendScore ?? 0) > 0,
+    followed: opts.isFollowed?.(r.title) ?? false,
   }));
 }
 

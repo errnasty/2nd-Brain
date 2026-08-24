@@ -175,6 +175,19 @@ ${rules([
 ])}`;
   }
 
+  if (section.kind === "threads") {
+    return `You are writing the "Threads" section of my personal daily intelligence brief. Everything below has ALREADY been written up elsewhere in this brief, on separate desks. Your only job is the line between them.
+
+${rules([
+  "One short paragraph per thread — no more than three or four sentences each.",
+  "Say what actually connects these stories: a shared cause, one party acting in several places, a policy and its consequences, a pattern in the timing. Cite the reference numbers as you go.",
+  "Do NOT summarise the stories. I have just read them. Assume I know what each one says and start from the connection.",
+  "The connection has to be real. If these items share vocabulary but nothing more, say so in one line and move on — a coincidence named as a trend is worse than no section.",
+  "Never invent a mechanism. If you cannot point at what links them from the supplied text, do not assert one.",
+  'If none of the threads amount to anything, reply with exactly this line and nothing else: "Nothing joining up today."',
+])}`;
+  }
+
   if (section.kind === "external") {
     return `You are writing the closing section of my personal daily intelligence brief. These are big stories from the wider news world that my own feeds did NOT carry today — my blind spots, not my queue.
 
@@ -217,6 +230,8 @@ const MAX_LEAD_TOKENS = 850;
 const MAX_TOPIC_TOKENS = 700;
 const MAX_SKIP_TOKENS = 480;
 const MAX_EXTERNAL_TOKENS = 500;
+/** A thread is a paragraph of reasoning, not a recap — the stories are above. */
+const MAX_THREADS_TOKENS = 520;
 
 export function sectionMaxTokens(section: PlannedSection, level: BriefLevel): number {
   const cfg = BRIEF_LEVEL_CONFIG[level];
@@ -225,6 +240,9 @@ export function sectionMaxTokens(section: PlannedSection, level: BriefLevel): nu
   // Headlines in, two sentences out per story — the cheapest section there is.
   if (section.kind === "external") {
     return Math.min(MAX_EXTERNAL_TOKENS, 50 * (section.externals?.length ?? 0) + 80);
+  }
+  if (section.kind === "threads") {
+    return Math.min(MAX_THREADS_TOKENS, 150 * (section.threads?.length ?? 0) + 80);
   }
   // Skip is a list of titles: ~24 tokens each, capped so a 120-item queue can't
   // turn the cheapest section into the longest one.
@@ -237,6 +255,7 @@ export const MAX_SECTION_TOKENS = Math.max(
   MAX_TOPIC_TOKENS,
   MAX_SKIP_TOKENS,
   MAX_EXTERNAL_TOKENS,
+  MAX_THREADS_TOKENS,
 );
 
 export type BriefArticleInput = {
@@ -302,18 +321,50 @@ export function readContextBlock(items: { title: string; feedTitle: string }[]):
  * "is this clickbait" needs the headline, not the body — which is what makes
  * covering the whole queue in one small call affordable.
  */
+/**
+ * Body budget for the threads section.
+ *
+ * Much shorter than a desk's, on purpose: the section is explicitly forbidden
+ * from retelling these stories, so what it needs from each is enough to
+ * recognise it, not enough to summarise it. Every one of these refs has already
+ * been paid for at full length in the section that wrote it up.
+ */
+const THREAD_BODY_CHARS = 320;
+
 export function sectionArticleBlock(
   section: PlannedSection,
   items: BriefArticleInput[],
   level: BriefLevel,
 ): string {
-  const bodyChars = BRIEF_LEVEL_CONFIG[level].bodyChars;
+  const bodyChars =
+    section.kind === "threads" ? THREAD_BODY_CHARS : BRIEF_LEVEL_CONFIG[level].bodyChars;
   return items
     .map((a) => {
       const head = `[${a.n}] (${a.feedTitle}) ${a.title}`;
       if (section.kind === "skip") return head;
       const body = a.body.length > bodyChars ? `${a.body.slice(0, bodyChars)}…` : a.body;
       return body ? `${head}\n${body}` : head;
+    })
+    .join("\n\n");
+}
+
+/**
+ * The "these are the threads" block.
+ *
+ * The shared terms are stated rather than left to be rediscovered, because
+ * they are what the retrieval pass actually found — but they are named as a
+ * starting point, not an answer. The connection worth writing is usually
+ * adjacent to the vocabulary rather than identical to it, and a model handed
+ * "tariffs" as a conclusion will write a paragraph about the word.
+ */
+export function threadBlock(section: PlannedSection): string {
+  const threads = section.threads ?? [];
+  if (threads.length === 0) return "";
+  return threads
+    .map((t, i) => {
+      const refs = t.refs.map((n) => `[${n}]`).join(" ");
+      const desks = t.deskLabels.join(", ");
+      return `Thread ${i + 1} — ${refs}\n  These ran on different desks (${desks}) and share the language: ${t.terms.join(", ")}. That is where to look, not what to say.`;
     })
     .join("\n\n");
 }
@@ -341,6 +392,11 @@ export function sectionPreamble(
 ): string {
   if (section.kind === "external") {
     return `[Stories from the wider news world in the last day that your own feeds did not carry · ${section.externals?.length ?? 0} of them]`;
+  }
+  if (section.kind === "threads") {
+    return `[${section.threads?.length ?? 0} possible ${
+      (section.threads?.length ?? 0) === 1 ? "thread" : "threads"
+    } across desks · every story here is already written up above]`;
   }
   // The scanned count is worth stating on the lead: "10 candidates from 110"
   // reads as a shortlist of a small pile, where "10 candidates from 110, drawn

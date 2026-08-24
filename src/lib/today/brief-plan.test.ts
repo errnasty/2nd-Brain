@@ -27,6 +27,7 @@ import {
   sectionMaxTokens,
   sectionSystemPrompt,
   storyBlock,
+  threadBlock,
 } from "./brief-prompts";
 
 /** A queue with several clear desks and a few unclassifiable items. */
@@ -311,6 +312,72 @@ describe("custom desks in the plan", () => {
   it("changes nothing for a reader who has none", () => {
     const plan = planBrief(sgQueue(), { level: "deep" });
     expect(plan.desks.some((d) => d.topicId.startsWith("custom:"))).toBe(false);
+  });
+});
+
+describe("the threads section", () => {
+  const threads = [
+    { terms: ["semiconductor", "tariffs"], refs: [1, 3, 5], deskIds: ["markets", "policy"] },
+  ];
+
+  it("cites stories the desks already covered, on purpose", () => {
+    const plan = planBrief(queue(), { level: "deep", threads });
+    const section = findSection(plan, "threads")!;
+    expect(section.refs).toEqual([1, 3, 5]);
+    expect(section.threads?.[0].deskLabels).toEqual([
+      "Business & Markets",
+      "Policy & Regulation",
+    ]);
+  });
+
+  it("comes after the desks and before the quick clear", () => {
+    const keys = planBrief(queue(), { level: "deep", threads }).sections.map((s) => s.key);
+    const lastDesk = keys.findLastIndex((k) => k.startsWith("topic:"));
+    expect(keys.indexOf("threads")).toBeGreaterThan(lastDesk);
+    expect(keys.indexOf("threads")).toBeLessThan(keys.indexOf("skip"));
+  });
+
+  it("is not silenced by the dedup pass — every ref in it is covered by design", () => {
+    const plan = planBrief(queue(), { level: "deep", threads, covered: [1] });
+    expect(findSection(plan, "threads")?.refs).toEqual([1, 3, 5]);
+  });
+
+  it("does not push anything out of the quick-clear list", () => {
+    // Threads cite what the desks wrote up, so they add nothing to what has
+    // been "covered" — the quick-clear list must be unaffected by their
+    // presence.
+    const withThreads = findSection(planBrief(queue(), { level: "deep", threads }), "skip")?.refs;
+    const without = findSection(planBrief(queue(), { level: "deep" }), "skip")?.refs;
+    expect(withThreads).toEqual(without);
+  });
+
+  it("is omitted at a depth that has no desks to cross", () => {
+    expect(findSection(planBrief(queue(), { level: "concise", threads }), "threads")).toBeNull();
+  });
+
+  it("is omitted when nothing joins up", () => {
+    expect(findSection(planBrief(queue(), { level: "deep", threads: [] }), "threads")).toBeNull();
+  });
+
+  it("tells the model not to retell the stories", () => {
+    const section = findSection(planBrief(queue(), { level: "deep", threads }), "threads")!;
+    const prompt = sectionSystemPrompt(section, "deep");
+    expect(prompt).toContain("Do NOT summarise the stories");
+    // …and gives it permission to find nothing, which is the whole guard
+    // against a coincidence being written up as a trend.
+    expect(prompt).toContain("Nothing joining up today.");
+  });
+
+  it("names the shared terms as a starting point, not the answer", () => {
+    const section = findSection(planBrief(queue(), { level: "deep", threads }), "threads")!;
+    const block = threadBlock(section);
+    expect(block).toContain("semiconductor");
+    expect(block).toContain("where to look, not what to say");
+  });
+
+  it("stays within the section token ceiling", () => {
+    const section = findSection(planBrief(queue(), { level: "deep", threads }), "threads")!;
+    expect(sectionMaxTokens(section, "deep")).toBeLessThanOrEqual(MAX_SECTION_TOKENS);
   });
 });
 
