@@ -12,6 +12,8 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import { briefSettingsHash, isSectionedBriefHash } from "@/lib/today/brief-queue";
+import { normalizeCustomDesks } from "@/lib/today/topics";
+import { normalizeBriefInstructions } from "@/lib/today/brief-prompts";
 
 /** Best-effort first name: chosen display name, profile/metadata name, else
  *  the email local part. */
@@ -66,6 +68,8 @@ export default async function TodayPage() {
   const followedTopics = Array.isArray(settings.briefTopics)
     ? settings.briefTopics.filter((t): t is string => typeof t === "string")
     : [];
+  const customDesks = normalizeCustomDesks(settings.customDesks);
+  const instructions = normalizeBriefInstructions(settings.briefInstructions);
 
   // Hand the stored brief to the client so it paints instantly — no fetch, no
   // flash — and generates once server-side, not per device. Null when the
@@ -83,7 +87,10 @@ export default async function TodayPage() {
         // in the background rather than leaving the wrong shape of brief up.
         settingsChanged:
           isSectionedBriefHash(stored.promptHash) &&
-          stored.promptHash !== briefSettingsHash(briefSettingsKey(level, followedTopics)),
+          stored.promptHash !==
+            briefSettingsHash(
+              briefSettingsKey(level, followedTopics, customDesks, instructions),
+            ),
       }
     : null;
 
@@ -105,6 +112,8 @@ export default async function TodayPage() {
           initialBrief={initialBrief}
           level={level}
           followedTopics={followedTopics}
+          customDesks={customDesks}
+          instructions={instructions}
         />
       </div>
     </div>

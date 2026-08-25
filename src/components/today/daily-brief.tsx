@@ -18,15 +18,27 @@ import {
   Newspaper,
   RefreshCw,
   RotateCw,
+  Pencil,
+  Plus,
   Settings,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -37,10 +49,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SourceRow, SourceBadge } from "@/components/ui/source-list";
-import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
+import { USAGE_SENTINEL, displayText } from "@/lib/ai/stream-markers";
+import { EMPTY_SECTION_HEADER } from "@/lib/today/brief-stream";
+import { MAX_BRIEF_INSTRUCTIONS } from "@/lib/today/brief-prompts";
 import { cn } from "@/lib/utils";
 import { setReadLaterAction, setReadStatusAction } from "@/app/(app)/feeds/actions";
-import { recordBriefFeedbackAction } from "@/app/(app)/today/actions";
+import {
+  followStoryAction,
+  recordBriefFeedbackAction,
+  reportMisfileAction,
+} from "@/app/(app)/today/actions";
 import { fetchCalendarRange } from "@/app/(app)/study/actions";
 import { fetchRecallCardsAction, gradeCardAction, type RecallCard } from "@/app/(app)/review/actions";
 import { updateUserSettingsAction } from "@/lib/settings/actions";
@@ -51,7 +69,13 @@ import {
   estimateBriefMinutes,
   type BriefLevel,
 } from "@/lib/today/brief-plan";
-import { BRIEF_TOPICS } from "@/lib/today/topics";
+import {
+  BRIEF_TOPICS,
+  MAX_CUSTOM_DESKS,
+  customDeskId,
+  normalizeCustomDesks,
+  type CustomDesk,
+} from "@/lib/today/topics";
 import {
   assembleBrief,
   blockMarkdown,
@@ -92,7 +116,6 @@ type BriefEntry = {
   sections?: StoredSection[];
 };
 
-const PROMPT_STORAGE_KEY = "brief.systemPrompt.v1";
 const BRIEF_CACHE_KEY = "brief.cache.v2";
 const BRIEF_HISTORY_KEY = "brief.history.v1";
 const SYNTHESIS_CACHE_KEY = "brief.weeklySynthesis.v1";
@@ -128,26 +151,28 @@ function greetingFor(d: Date): string {
   return "Good evening";
 }
 
-const DEFAULT_PROMPT_PLACEHOLDER = `You are my personal Second Brain curator. I already receive a highly detailed daily news summary via email, so your goal here is NOT to summarize everything. Your goal is rapid triage and discovery.
+/**
+ * The legacy whole-brief prompt, kept only so a reader who wrote one can see it
+ * and decide what to keep. It is never sent anywhere — see the migration notice
+ * in the instructions panel, and `brief-prompts.ts` for why customization is
+ * now standing instructions rather than an override.
+ */
+const LEGACY_PROMPT_KEY = "brief.systemPrompt.v1";
 
-Review the provided JSON list of my unread articles and newly uploaded documents from the last 24 hours. Generate a short, punchy dashboard using the following strict format:
+const INSTRUCTIONS_PLACEHOLDER = `Write in British English.
+Assume I already follow the Fed closely — skip the background.
+For anything on AI, tell me what it means for people building with it, not for investors.
+Skip crypto price moves entirely.`;
 
-### High-Priority (Read Now)
-Identify the 1-3 most substantial, unique, or high-signal pieces.
-* Provide the title, followed by its bracketed reference number (e.g. [3]) so I can jump to the source.
-* Write a 1-sentence hook explaining exactly *why* it's worth my time.
-* List its primary tag.
-
-### Thematic Clusters (For Batch Reading)
-Group the remaining worthwhile articles into broad themes (e.g., "4 items on AI Tools", "2 items on Macroeconomics").
-* Do not summarize the individual articles.
-* Just list the theme, the article count, and a 1-sentence summary of the overarching trend across those articles.
-
-### Quick Clear (Low Signal / Skip)
-Identify any articles that appear to be clickbait, standard PR announcements, highly repetitive news, or low-value fluff.
-* List their titles so I can confidently mark them as read or delete them without opening them.
-
-Keep your tone sharp, objective, and extremely concise. Output in clean Markdown.`;
+/** One-tap examples. Appended to whatever is in the box, one per line. */
+const INSTRUCTION_EXAMPLES = [
+  "Be blunt. No hedging.",
+  "Always give me the second-order effect.",
+  "Name the specific number or quote, never 'significant growth'.",
+  "Write in British English.",
+  "Skip anything that is a product launch.",
+  "If a story is speculation, say so in the first clause.",
+];
 
 // ── Sectioned generation ────────────────────────────────────────────────
 // The brief is planned server-side with no model involved, then generated one
@@ -158,12 +183,14 @@ Keep your tone sharp, objective, and extremely concise. Output in clean Markdown
 
 type PlanSection = {
   key: string;
-  kind: "lead" | "topic" | "skip" | "external";
+  kind: "lead" | "topic" | "skip" | "external" | "threads";
   topicId?: string;
   label: string;
   refs: number[];
   /** Groups of refs that are one story told by several outlets. */
   stories?: { refs: number[]; sourceCount: number }[];
+  /** Cross-desk threads, for the "threads" section only. */
+  threads?: { terms: string[]; refs: number[]; deskLabels: string[] }[];
   /** Stories from outside the user's feeds, cited as [E1], [E2], … */
   externals?: {
     n: number;
@@ -175,7 +202,70 @@ type PlanSection = {
   }[];
 };
 
-type Desk = { topicId: string; label: string; count: number; included: boolean };
+type Desk = {
+  topicId: string;
+  label: string;
+  count: number;
+  included: boolean;
+  /** Stories on this desk the scan found but the queue had no room for. */
+  omittedStories?: number;
+  /** …and the articles behind them. */
+  omittedArticles?: number;
+};
+
+/**
+ * One section's outcome: what to do next, and the prose it produced.
+ *
+ * "empty" is a success, not a failure: the section had nothing left to write
+ * because everything on its desk was covered further up the brief. Its block
+ * comes off the page rather than sitting there as an empty heading.
+ */
+type SectionResult = { status: "ok" | "replan" | "empty"; text: string };
+
+/** The desk editor's form state. `id` is null while adding a new desk. */
+type DeskDraft = { id: string | null; label: string; keywords: string; remit: string };
+
+/**
+ * Why one cited article is in the brief.
+ *
+ * Every field was already computed to BUILD the brief and then thrown away at
+ * the point the reader might want it. No model call, no extra request — it
+ * arrives with the plan.
+ */
+type SourceWhy = {
+  n: number;
+  desk: string | null;
+  deskId: string | null;
+  outlets: number;
+  rank: number;
+  scored: boolean;
+  followed: boolean;
+};
+
+/** A desk the reader has not thought to create, and the evidence for it. */
+type DeskSuggestion = {
+  id: string;
+  label: string;
+  keywords: string[];
+  reason: string;
+};
+
+/** What the reader asked to stay on. */
+type FollowedStory = { title: string; followedAt: string; lastSeenAt: string };
+
+/** What a section's sources did not turn out to support. */
+type SectionCheck = {
+  unsupported: { ref: number; claim: string }[];
+  outOfScope: number[];
+};
+
+/** What the scan saw against what the brief was built from. */
+type Coverage = {
+  scanned: number;
+  stories: number;
+  selectedStories: number;
+  selected: number;
+};
 
 type BriefPlanResponse = {
   fingerprint: string;
@@ -185,10 +275,37 @@ type BriefPlanResponse = {
   windowLabel: string;
   level: BriefLevel;
   priority: string[];
+  customDesks?: CustomDesk[];
+  instructions?: string;
+  coverage?: Coverage;
   sections: PlanSection[];
   desks: Desk[];
   sources: BriefSource[];
+  why?: SourceWhy[];
+  followedStories?: FollowedStory[];
+  deskSuggestions?: DeskSuggestion[];
 };
+
+/**
+ * The `[n]` references a finished section actually used.
+ *
+ * This is the one thing planning cannot know in advance: the lead is offered a
+ * shortlist of ten and writes up three, and which three is a judgement the
+ * model makes while streaming. Reading them back out of the finished text is
+ * what lets every later section be planned WITHOUT the stories the lead just
+ * covered — the server expands each ref to its whole story before removing it.
+ *
+ * `[E1]`-style external refs are deliberately not matched: they live in their
+ * own numbering space and resolve to stories that were never in the queue.
+ */
+function citedRefs(text: string): number[] {
+  const found = new Set<number>();
+  for (const m of text.matchAll(/\[(\d+)\]/g)) {
+    const n = Number(m[1]);
+    if (Number.isInteger(n) && n >= 1) found.add(n);
+  }
+  return [...found].sort((a, b) => a - b);
+}
 
 type BlockStatus = "pending" | "streaming" | "done" | "error";
 
@@ -277,11 +394,15 @@ export function DailyBrief({
   initialBrief,
   level: initialLevel,
   followedTopics: initialTopics,
+  customDesks: initialCustomDesks,
+  instructions: initialInstructions,
 }: {
   name?: string;
   initialBrief?: InitialBrief | null;
   level?: BriefLevel;
   followedTopics?: string[];
+  customDesks?: CustomDesk[];
+  instructions?: string;
 }) {
   const router = useRouter();
   const [blocks, setBlocks] = useState<Block[]>([]);
@@ -303,27 +424,43 @@ export function DailyBrief({
   const [note, setNote] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<Date | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [customPrompt, setCustomPrompt] = useState("");
-  const [savedPrompt, setSavedPrompt] = useState("");
+  /** The instructions box's contents, saved or not. */
+  const [draftInstructions, setDraftInstructions] = useState(initialInstructions ?? "");
+  const [instructions, setInstructions] = useState(initialInstructions ?? "");
+  /** A whole-brief prompt from before customization was layered instructions.
+   *  Shown once so nothing the reader wrote is lost, then dismissable. */
+  const [legacyPrompt, setLegacyPrompt] = useState("");
   const [level, setLevel] = useState<BriefLevel>(initialLevel ?? DEFAULT_BRIEF_LEVEL);
   const [followed, setFollowed] = useState<string[]>(initialTopics ?? []);
+  const [customDesks, setCustomDesks] = useState<CustomDesk[]>(initialCustomDesks ?? []);
+  /** The desk being added or edited, or null when the editor is closed. */
+  const [deskDraft, setDeskDraft] = useState<DeskDraft | null>(null);
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
+  /** Why each cited article is here, keyed by `[n]`. Arrives with the plan. */
+  const [why, setWhy] = useState<Map<number, SourceWhy>>(new Map());
+  const [followedStories, setFollowedStories] = useState<FollowedStory[]>([]);
+  const [deskSuggestions, setDeskSuggestions] = useState<DeskSuggestion[]>([]);
+  /** Suggestions dismissed this session — never nagged twice in one sitting. */
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<string[]>([]);
+  /** Verification results per section key. Absent = clean, or not checked. */
+  const [checks, setChecks] = useState<Map<string, SectionCheck>>(new Map());
+  /** The citation the reader tapped, if any. */
+  const [inspecting, setInspecting] = useState<{ n: number; rect: DOMRect } | null>(null);
   const hasMounted = useRef(false);
   // Set synchronously when we hydrate a same-day brief from cache. A ref (not
   // state) so the auto-stream effect below — which runs in the SAME commit as
   // the cache-load effect — sees it immediately instead of the batched, still-
   // false `hydratedFromCache` state, which made the brief re-stream every load.
   const cacheHydratedRef = useRef(false);
-  // Latest saved prompt, readable synchronously. The auto-stream effect captures
-  // `generate` from the first render (savedPrompt still ""), so without this the
-  // first brief of the day would generate sectioned, ignoring a user's saved
-  // custom prompt.
-  const savedPromptRef = useRef("");
   // Set during mount hydration when the stored brief is from a prior day (or was
   // generated under different settings), so the auto-stream effect refreshes it
   // in the background instead of leaving yesterday's brief up.
   const backgroundRegenRef = useRef(false);
   // The plan the on-screen sections came from — retry needs it.
   const planRef = useRef<BriefPlanResponse | null>(null);
+  // What the lead covered in this generation, so a retried desk section is
+  // planned against the same exclusions the first attempt was.
+  const coveredRef = useRef<number[]>([]);
   // Token totals summed across a generation's section calls.
   const usageRef = useRef<Usage>({ promptTokens: 0, completionTokens: 0, totalTokens: 0 });
   // Bumped on every new generation so a late chunk from an abandoned one is
@@ -335,17 +472,20 @@ export function DailyBrief({
   const generatedAtRef = useRef<Date | null>(null);
   const levelRef = useRef<BriefLevel>(initialLevel ?? DEFAULT_BRIEF_LEVEL);
 
-  // Load saved prompt + brief on mount. Priority: the server-stored brief
-  // (authoritative, cross-device) → localStorage cache → fresh generation.
+  // Load the stored brief on mount. Priority: the server copy (authoritative,
+  // cross-device) → localStorage cache → fresh generation.
   const [hydratedFromCache, setHydratedFromCache] = useState(false);
   useEffect(() => {
     if (hasMounted.current) return;
     hasMounted.current = true;
     try {
-      const saved = localStorage.getItem(PROMPT_STORAGE_KEY) ?? "";
-      savedPromptRef.current = saved; // sync — before the auto-stream effect runs
-      setSavedPrompt(saved);
-      setCustomPrompt(saved);
+      // A whole-brief prompt written under the old customization. It is not
+      // applied — as a format spec for a document that no longer exists in one
+      // piece it would fight every section prompt — but it is not thrown away
+      // either: it is offered back so the reader can keep the parts that still
+      // mean something.
+      const legacy = localStorage.getItem(LEGACY_PROMPT_KEY) ?? "";
+      if (legacy.trim()) setLegacyPrompt(legacy.trim());
     } catch {
       // ignore
     }
@@ -437,6 +577,40 @@ export function DailyBrief({
     setBlocks((prev) => prev.map((b) => (b.key === key ? { ...b, ...patch } : b)));
   }, []);
 
+  /** Take a section off the page entirely. */
+  const dropBlock = useCallback((key: string) => {
+    setBlocks((prev) => prev.filter((b) => b.key !== key));
+  }, []);
+
+  /**
+   * Check a finished section against the articles it was written from.
+   *
+   * Everything here is best-effort by design. A clean section — which is the
+   * overwhelming majority — leaves no trace, which is what keeps this from
+   * being a feature anybody has to know about.
+   */
+  const verifySection = useCallback(
+    async (key: string, level: BriefLevel, text: string, run: number) => {
+      try {
+        const res = await fetch("/api/brief/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ section: key, level, text }),
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as SectionCheck;
+        const found =
+          (data.unsupported?.length ?? 0) > 0 || (data.outOfScope?.length ?? 0) > 0;
+        if (!found || run !== runRef.current) return;
+        setChecks((prev) => new Map(prev).set(key, data));
+      } catch {
+        // Never surfaced: the brief is already readable without this.
+      }
+    },
+    [],
+  );
+
   /**
    * Generate one section. Each call is a short, self-contained request: a
    * bounded slice of the queue in, a capped number of tokens out. Returns
@@ -444,7 +618,12 @@ export function DailyBrief({
    * rather than write a section against shifted `[n]` numbering.
    */
   const streamSection = useCallback(
-    async (section: PlanSection, plan: BriefPlanResponse, run: number): Promise<"ok" | "replan"> => {
+    async (
+      section: PlanSection,
+      plan: BriefPlanResponse,
+      run: number,
+      covered?: number[],
+    ): Promise<SectionResult> => {
       patchBlock(section.key, { status: "streaming", text: "", error: undefined });
       try {
         const res = await fetch("/api/brief", {
@@ -455,10 +634,20 @@ export function DailyBrief({
             level: plan.level,
             fingerprint: plan.fingerprint,
             order: plan.order,
+            // What the lead already wrote up. The server drops these refs — and
+            // every other telling of the same story — from this section before
+            // it is generated, so nothing gets covered twice.
+            ...(covered && covered.length > 0 ? { covered } : {}),
           }),
           cache: "no-store",
         });
-        if (res.status === 409) return "replan";
+        if (res.status === 409) return { status: "replan", text: "" };
+        // Nothing left on this desk — the lead covered all of it. Drop the
+        // block: a heading with nothing under it reads as a failed section.
+        if (res.headers.get(EMPTY_SECTION_HEADER)) {
+          if (run === runRef.current) dropBlock(section.key);
+          return { status: "empty", text: "" };
+        }
         if (!res.ok || !res.body) {
           const text = await res.text().catch(() => "");
           if (run === runRef.current) {
@@ -467,7 +656,7 @@ export function DailyBrief({
               error: text || `HTTP ${res.status}`,
             });
           }
-          return "ok";
+          return { status: "ok", text: "" };
         }
 
         const reader = res.body.getReader();
@@ -505,8 +694,16 @@ export function DailyBrief({
             // ignore malformed usage
           }
         }
+        const finished = displayText(acc).trim();
+        // Check the section against its sources once it is on screen. Deliberately
+        // not awaited and deliberately not blocking: the brief reads at exactly
+        // the speed it did before this existed, and a verifier that fails says
+        // nothing rather than contradicting a section already rendered.
+        if (finished && (section.kind === "lead" || section.kind === "topic")) {
+          void verifySection(section.key, plan.level, finished, run);
+        }
         if (run === runRef.current) {
-          const body = displayText(acc).trim();
+          const body = finished;
           patchBlock(section.key, {
             status: body ? "done" : "error",
             text: body,
@@ -518,7 +715,7 @@ export function DailyBrief({
               : "The model returned nothing for this section. Retry, or pick a different model in Settings.",
           });
         }
-        return "ok";
+        return { status: "ok", text: finished };
       } catch (err) {
         if (run === runRef.current) {
           patchBlock(section.key, {
@@ -526,10 +723,10 @@ export function DailyBrief({
             error: err instanceof Error ? err.message : "Section failed",
           });
         }
-        return "ok";
+        return { status: "ok", text: "" };
       }
     },
-    [patchBlock],
+    [dropBlock, patchBlock, verifySection],
   );
 
   /**
@@ -552,6 +749,7 @@ export function DailyBrief({
         setSavedIds(new Set());
       }
       usageRef.current = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+      coveredRef.current = [];
       generatedAtRef.current = null;
       producedRef.current = true;
 
@@ -568,6 +766,15 @@ export function DailyBrief({
         setFingerprint(plan.fingerprint);
         setSources(plan.sources ?? []);
         setDesks(plan.desks ?? []);
+        setCoverage(plan.coverage ?? null);
+        setWhy(new Map((plan.why ?? []).map((w) => [w.n, w])));
+        setFollowedStories(plan.followedStories ?? []);
+        setDeskSuggestions(plan.deskSuggestions ?? []);
+        setChecks(new Map());
+        // The server validated the stored desks on its way past; adopting what
+        // it used keeps the picker showing the desks the brief was actually
+        // built from rather than an unvalidated copy of the settings blob.
+        if (plan.customDesks) setCustomDesks(plan.customDesks);
         if (!plan.sections || plan.sections.length === 0) {
           producedRef.current = false;
           setBlocks([]);
@@ -587,13 +794,19 @@ export function DailyBrief({
         );
 
         // The lead goes first and alone: it's the part the reader actually waits
-        // for, so it should never queue behind a desk section.
+        // for, so it should never queue behind a desk section. That ordering is
+        // now load-bearing for a second reason — what the lead chose to cover is
+        // what every later section is planned WITHOUT, and it can only be known
+        // once the lead has been written.
         const [lead, ...rest] = plan.sections;
-        let replan = (await streamSection(lead, plan, run)) === "replan";
+        const leadResult = await streamSection(lead, plan, run);
+        let replan = leadResult.status === "replan";
+        const covered = citedRefs(leadResult.text);
+        coveredRef.current = covered;
         if (!replan && run === runRef.current) {
           await runWithLimit(rest, 2, async (s) => {
             if (run !== runRef.current || replan) return;
-            if ((await streamSection(s, plan, run)) === "replan") replan = true;
+            if ((await streamSection(s, plan, run, covered)).status === "replan") replan = true;
           });
         }
 
@@ -602,6 +815,25 @@ export function DailyBrief({
         if (replan && !opts.replanned && run === runRef.current) {
           await generateSectioned({ ...opts, replanned: true });
           return;
+        }
+
+        // Anything still pending was never attempted — the run bailed out of the
+        // loop early (a second queue change, after the one re-plan we allow).
+        // A block left pending renders as a skeleton forever, which is the one
+        // outcome with no way forward, so give it the retry every other failure
+        // already gets.
+        if (run === runRef.current) {
+          setBlocks((prev) =>
+            prev.map((b) =>
+              b.status === "pending"
+                ? {
+                    ...b,
+                    status: "error" as BlockStatus,
+                    error: "Your queue changed while the brief was being written. Retry this section, or regenerate.",
+                  }
+                : b,
+            ),
+          );
         }
       } catch (err) {
         // A background refresh failing must not blow away the brief already on
@@ -617,128 +849,14 @@ export function DailyBrief({
     [streamSection],
   );
 
-  /**
-   * The single-pass path, used when the user has saved their own brief prompt:
-   * their framing, one call, the whole queue. Kept because only the author of a
-   * custom prompt knows what shape they asked for — it can't be split into
-   * sections on their behalf.
-   */
-  const streamLegacy = useCallback(
-    async (promptOverride?: string, force = false, background = false) => {
-      const run = runRef.current + 1;
-      runRef.current = run;
-      setLoading(true);
-      setError(null);
-      setNote(null);
-      if (!background) setBlocks([]);
-      setRefreshing(background);
-      setNewArticles(false);
-      setReadIds(new Set());
-      setSavedIds(new Set());
-      producedRef.current = true;
-      generatedAtRef.current = null;
-      planRef.current = null;
-      setDesks([]);
-      try {
-        const systemPrompt = (promptOverride ?? savedPromptRef.current).trim();
-        const res = await fetch("/api/brief", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ systemPrompt, force }),
-          cache: "no-store",
-        });
-        if (!res.ok || !res.body) {
-          setError((await res.text().catch(() => "")) || `HTTP ${res.status}`);
-          return;
-        }
-        const briefFingerprint = res.headers.get("x-brief-fingerprint");
-        if (briefFingerprint) setFingerprint(briefFingerprint);
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let acc = "";
-        let frameQueued = false;
-        const flush = () => {
-          frameQueued = false;
-          if (run !== runRef.current) return;
-          setBlocks([
-            {
-              key: "custom",
-              kind: "stored",
-              label: "",
-              refs: [],
-              text: displayText(acc),
-              status: "streaming",
-            },
-          ]);
-        };
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          acc += decoder.decode(value, { stream: true });
-          if (!frameQueued) {
-            frameQueued = true;
-            requestAnimationFrame(flush);
-          }
-        }
-        flush();
-        if (run !== runRef.current) return;
-
-        const bIdx = acc.indexOf(BRIEFSOURCES_SENTINEL);
-        const uIdx = acc.indexOf(USAGE_SENTINEL);
-        if (bIdx >= 0) {
-          const end = uIdx > bIdx ? uIdx : acc.length;
-          try {
-            setSources(
-              JSON.parse(acc.slice(bIdx + BRIEFSOURCES_SENTINEL.length, end)) as BriefSource[],
-            );
-          } catch {
-            // ignore malformed sources
-          }
-        }
-        if (uIdx >= 0) {
-          try {
-            const parsed = JSON.parse(acc.slice(uIdx + USAGE_SENTINEL.length)) as Usage;
-            usageRef.current = parsed;
-            setUsage(parsed);
-          } catch {
-            // ignore malformed usage
-          }
-        }
-        setBlocks([
-          {
-            key: "custom",
-            kind: "stored",
-            label: "",
-            refs: [],
-            text: displayText(acc),
-            status: "done",
-          },
-        ]);
-      } catch (err) {
-        if (!background) setError(err instanceof Error ? err.message : "Failed to load brief");
-      } finally {
-        if (run === runRef.current) {
-          setLoading(false);
-          setRefreshing(false);
-        }
-      }
-    },
-    [],
-  );
-
   /** Generate the brief the way this user has configured it. */
   const generate = useCallback(
-    (opts: { levelOverride?: BriefLevel; background?: boolean; force?: boolean } = {}) => {
-      if (savedPromptRef.current.trim()) {
-        return streamLegacy(undefined, opts.force ?? false, opts.background ?? false);
-      }
-      return generateSectioned({
+    (opts: { levelOverride?: BriefLevel; background?: boolean } = {}) =>
+      generateSectioned({
         levelOverride: opts.levelOverride,
         background: opts.background,
-      });
-    },
-    [generateSectioned, streamLegacy],
+      }),
+    [generateSectioned],
   );
 
   // Auto-generate on mount only when nothing was hydrated. When a stored brief
@@ -828,7 +946,10 @@ export function DailyBrief({
       const plan = planRef.current;
       const section = plan?.sections.find((s) => s.key === key);
       if (!plan || !section) return;
-      void streamSection(section, plan, runRef.current);
+      // A retried desk section still has to be planned without what the lead
+      // covered, or the retry would be the one place duplication crept back in.
+      const covered = section.kind === "lead" ? [] : coveredRef.current;
+      void streamSection(section, plan, runRef.current, covered);
     },
     [streamSection],
   );
@@ -1000,26 +1121,145 @@ export function DailyBrief({
     [followed, generate],
   );
 
-  function savePrompt() {
-    try {
-      const trimmed = customPrompt.trim();
-      localStorage.setItem(PROMPT_STORAGE_KEY, trimmed);
-      localStorage.removeItem(BRIEF_CACHE_KEY); // prompt changed; old brief is stale
-      savedPromptRef.current = trimmed;
-      setSavedPrompt(trimmed);
-      setSettingsOpen(false);
-      toast.success(trimmed ? "Custom prompt saved" : "Reset to the sectioned brief");
-      // Regenerate with the new framing (force — bypass the server cache).
-      if (trimmed) void streamLegacy(trimmed, true);
-      else void generateSectioned();
-    } catch {
-      toast.error("Couldn't save prompt");
-    }
-  }
+  /**
+   * Save a desk the reader defined — new or edited — and rebuild the brief.
+   *
+   * The id is derived from the label on creation and then FROZEN: it is what
+   * the followed-desk list, the section keys and the feedback rows all point
+   * at, so renaming "Singapore" to "Singapore & ASEAN" has to keep pointing at
+   * the same desk rather than quietly orphaning a fortnight of verdicts.
+   *
+   * Everything is validated through the same `normalizeCustomDesks` the server
+   * runs, so what the picker shows and what the planner uses cannot diverge.
+   */
+  const saveDesk = useCallback(
+    (draft: DeskDraft) => {
+      const label = draft.label.trim();
+      if (!label) {
+        toast.error("Give the desk a name");
+        return;
+      }
+      const keywords = draft.keywords
+        .split(/[,\n]/)
+        .map((k) => k.trim())
+        .filter(Boolean);
+      const entry = { id: draft.id ?? customDeskId(label), label, desk: draft.remit.trim(), keywords };
 
-  function resetPrompt() {
-    setCustomPrompt("");
-  }
+      if (!draft.id && customDesks.some((d) => d.id === entry.id)) {
+        toast.error(`You already have a desk called "${label}"`);
+        return;
+      }
+      if (!draft.id && customDesks.length >= MAX_CUSTOM_DESKS) {
+        toast.error(`${MAX_CUSTOM_DESKS} desks is the limit — edit or remove one first`);
+        return;
+      }
+
+      const next = normalizeCustomDesks(
+        draft.id
+          ? customDesks.map((d) => (d.id === draft.id ? entry : d))
+          : [...customDesks, entry],
+      );
+      if (next.length === customDesks.length && !draft.id) {
+        toast.error("That desk needs at least one term to match on");
+        return;
+      }
+      // A desk you just created is one you care about by definition, so it is
+      // followed from the start rather than sitting unticked in the picker.
+      const nextFollowed =
+        draft.id || followed.includes(entry.id) ? followed : [...followed, entry.id];
+
+      setCustomDesks(next);
+      setFollowed(nextFollowed);
+      setDeskDraft(null);
+      void updateUserSettingsAction({ customDesks: next, briefTopics: nextFollowed }).catch(() => {
+        toast.error("Couldn't save your desks");
+      });
+      toast.success(draft.id ? `Updated the ${label} desk` : `Added the ${label} desk`);
+      void generate();
+    },
+    [customDesks, followed, generate],
+  );
+
+  /**
+   * Accept a suggested desk.
+   *
+   * Routed through the same `saveDesk` a hand-written one takes, so a suggested
+   * desk is in every respect an ordinary desk from the moment it exists — there
+   * is no second kind of desk to reason about, and nothing to un-suggest later.
+   */
+  const acceptSuggestion = useCallback(
+    (suggestion: DeskSuggestion) => {
+      setDeskSuggestions((prev) => prev.filter((x) => x.id !== suggestion.id));
+      saveDesk({
+        id: null,
+        label: suggestion.label,
+        keywords: suggestion.keywords.join(", "),
+        remit: "",
+      });
+    },
+    [saveDesk],
+  );
+
+  /** Remove a desk, and stop following it — a followed id with no desk behind
+   *  it would sit in the settings blob forever, matching nothing. */
+  const removeDesk = useCallback(
+    (topicId: string) => {
+      const next = customDesks.filter((d) => d.id !== topicId);
+      const nextFollowed = followed.filter((t) => t !== topicId);
+      setCustomDesks(next);
+      setFollowed(nextFollowed);
+      setDeskDraft(null);
+      void updateUserSettingsAction({ customDesks: next, briefTopics: nextFollowed }).catch(() => {
+        toast.error("Couldn't save your desks");
+      });
+      void generate();
+    },
+    [customDesks, followed, generate],
+  );
+
+  /**
+   * Save the standing instructions and rewrite the brief under them.
+   *
+   * Server-side, unlike the whole-brief prompt this replaced: instructions are
+   * a statement about how you want to be briefed, not a property of the browser
+   * you happened to write them in.
+   */
+  const saveInstructions = useCallback(() => {
+    const trimmed = draftInstructions.trim().slice(0, MAX_BRIEF_INSTRUCTIONS);
+    setInstructions(trimmed);
+    setDraftInstructions(trimmed);
+    setSettingsOpen(false);
+    try {
+      // The brief on screen was written under the old instructions.
+      localStorage.removeItem(BRIEF_CACHE_KEY);
+    } catch {
+      // ignore
+    }
+    void updateUserSettingsAction({ briefInstructions: trimmed }).catch(() => {
+      toast.error("Couldn't save your instructions");
+    });
+    toast.success(trimmed ? "Instructions saved" : "Instructions cleared");
+    void generate();
+  }, [draftInstructions, generate]);
+
+  /** Append an example to whatever is already in the box. */
+  const addExample = useCallback((line: string) => {
+    setDraftInstructions((prev: string) => {
+      const body = prev.trimEnd();
+      if (body.split("\n").some((l: string) => l.trim() === line)) return prev;
+      return (body ? `${body}\n${line}` : line).slice(0, MAX_BRIEF_INSTRUCTIONS);
+    });
+  }, []);
+
+  /** Stop offering the pre-sectioned prompt back. */
+  const dismissLegacyPrompt = useCallback(() => {
+    setLegacyPrompt("");
+    try {
+      localStorage.removeItem(LEGACY_PROMPT_KEY);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Load an archived brief into view (read-only snapshot; Regenerate still
   // fetches fresh). Doesn't touch the live cache or history.
@@ -1046,7 +1286,13 @@ export function DailyBrief({
   const initialLoading = loading && !started;
   const isStale = !loading && generatedAt != null && !isSameDay(generatedAt, new Date());
   const unreadSourceIds = sources.map((s) => s.id).filter((id) => !readIds.has(id));
-  const omittedDesks = desks.filter((d) => !d.included && d.count > 0);
+  // Unread and not written up: what the level left out, plus what the queue's
+  // budget never reached. Both are things the reader still has sitting there.
+  const deskLeftOut = (d: Desk) => d.count + (d.omittedArticles ?? 0);
+  const visibleSuggestions = deskSuggestions.filter(
+    (sug) => !dismissedSuggestions.includes(sug.id) && !customDesks.some((d) => d.id === sug.id),
+  );
+  const omittedDesks = desks.filter((d) => !d.included && deskLeftOut(d) > 0);
 
   // Editorial masthead — derived from "now". State (not a bare Date) so the
   // greeting/date can refresh: a PWA left open overnight was still saying
@@ -1142,6 +1388,46 @@ export function DailyBrief({
   // Turn the model's [n] references into tappable inline citations. The source
   // map arrives with the PLAN, before any text, so citations are live from the
   // first token instead of waiting for the whole brief to finish.
+  /**
+   * Follow or unfollow the story a citation belongs to.
+   *
+   * By headline, not article id: a follow outlives the piece it started from,
+   * because tomorrow the story arrives as a different article from a different
+   * outlet — which is the entire case for following one.
+   */
+  const toggleFollow = useCallback(
+    (title: string, following: boolean) => {
+      setFollowedStories((prev) =>
+        following
+          ? [...prev, { title, followedAt: new Date().toISOString(), lastSeenAt: new Date().toISOString() }]
+          : prev.filter((f) => f.title !== title),
+      );
+      setWhy((prev) => {
+        const next = new Map(prev);
+        for (const [n, w] of next) {
+          const source = sources.find((x) => x.n === n);
+          if (source?.title === title) next.set(n, { ...w, followed: following });
+        }
+        return next;
+      });
+      void followStoryAction({ title, following }).then((res) => {
+        if (res.ok) return;
+        toast.error(res.error ?? "Couldn't save that");
+      });
+      toast.success(following ? "Following this story" : "Stopped following");
+    },
+    [sources],
+  );
+
+  /** Tell the brief a story was written up under the wrong desk. */
+  const reportMisfile = useCallback((title: string, deskId: string, deskLabel: string) => {
+    void reportMisfileAction({ title, deskId }).then((res) => {
+      if (res.ok) toast.success(`Noted — this won't go to ${deskLabel} again`);
+      else toast.error(res.error ?? "Couldn't save that");
+    });
+    setInspecting(null);
+  }, []);
+
   const citations: Citation[] = [
     ...sources.map((s) => ({
       n: s.n,
@@ -1212,17 +1498,23 @@ export function DailyBrief({
                   {newArticles ? "new articles — regenerate" : "stale — regenerate"}
                 </span>
               )}
-              {savedPrompt ? (
-                <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
-                  custom prompt
-                </span>
-              ) : (
-                <span
-                  className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
-                  title={`${BRIEF_LEVEL_CONFIG[level].label} — ${BRIEF_LEVEL_CONFIG[level].blurb}`}
+              <span
+                className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase tracking-wider"
+                title={`${BRIEF_LEVEL_CONFIG[level].label} — ${BRIEF_LEVEL_CONFIG[level].blurb}`}
+              >
+                ≈{briefMinutes} min read
+              </span>
+              {/* Instructions are a modifier on the brief, not a mode instead of
+                  it — so this sits alongside the depth badge rather than
+                  replacing it, and every other control stays available. */}
+              {instructions && (
+                <button
+                  onClick={() => setSettingsOpen(true)}
+                  className="rounded bg-brand/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-brand"
+                  title={instructions}
                 >
-                  ≈{briefMinutes} min read
-                </span>
+                  your instructions
+                </button>
               )}
             </>
           ) : null}
@@ -1269,101 +1561,195 @@ export function DailyBrief({
           )}
 
           {/* Desks the brief leads with. Server-stored, so it holds per person
-              rather than per browser. Hidden while a custom prompt is in force:
-              that path is a single pass with the user's own framing, so neither
-              desks nor depth apply to it. */}
-          {!savedPrompt && (
-            <>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="ghost" title="Choose the desks you follow">
-                    <Compass className="mr-1.5 h-3.5 w-3.5" />
-                    Desks
-                    {followed.length > 0 && (
-                      <span className="ml-1.5 rounded bg-brand/15 px-1 text-[10px] text-brand">
-                        {followed.length}
-                      </span>
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel>Desks you follow</DropdownMenuLabel>
-                  <p className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground">
-                    Followed desks lead the brief and are written up first.
-                  </p>
-                  <DropdownMenuSeparator />
-                  {BRIEF_TOPICS.map((t) => {
-                    const count = desks.find((d) => d.topicId === t.id)?.count ?? 0;
+              rather than per browser. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" title="Choose the desks you follow">
+                <Compass className="mr-1.5 h-3.5 w-3.5" />
+                Desks
+                {followed.length > 0 && (
+                  <span className="ml-1.5 rounded bg-brand/15 px-1 text-[10px] text-brand">
+                    {followed.length}
+                  </span>
+                )}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="max-h-[70vh] w-80 overflow-y-auto">
+              <DropdownMenuLabel>Desks you follow</DropdownMenuLabel>
+              <p className="px-2 pb-1.5 text-[11px] leading-snug text-muted-foreground">
+                Followed desks lead the brief and are written up first.
+              </p>
+              <DropdownMenuSeparator />
+              {/* The reader's own desks come first — they are the ones this
+                  brief is actually shaped around, and the built-in list is
+                  long enough to bury them underneath it. */}
+              {customDesks.length > 0 && (
+                <>
+                  <DropdownMenuLabel className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                    Your desks
+                  </DropdownMenuLabel>
+                  {customDesks.map((d) => {
+                    const count = desks.find((x) => x.topicId === d.id)?.count ?? 0;
                     return (
                       <DropdownMenuCheckboxItem
-                        key={t.id}
-                        checked={followed.includes(t.id)}
-                        onCheckedChange={() => toggleDesk(t.id)}
+                        key={d.id}
+                        checked={followed.includes(d.id)}
+                        onCheckedChange={() => toggleDesk(d.id)}
                         onSelect={(e) => e.preventDefault()}
                       >
-                        <span className="flex-1">{t.label}</span>
+                        <span className="flex-1 truncate">{d.label}</span>
                         {count > 0 && (
                           <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
                             {count}
                           </span>
                         )}
+                        <button
+                          type="button"
+                          className="ml-2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                          title={`Edit the ${d.label} desk`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDeskDraft({
+                              id: d.id,
+                              label: d.label,
+                              keywords: d.keywords.join(", "),
+                              remit: d.desk,
+                            });
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </button>
                       </DropdownMenuCheckboxItem>
                     );
                   })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              {/* How long you have. Each step is more SECTIONS, never one
-                  longer call — that's what keeps every request inside the
-                  host's function budget — but "more sections" is the
-                  implementation, and minutes are the question. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="ghost" title="How long the brief should take to read">
-                    <Layers className="mr-1.5 h-3.5 w-3.5" />≈{briefMinutes} min
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel>Reading time</DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  {BRIEF_LEVELS.map((l) => (
-                    <DropdownMenuItem
-                      key={l}
-                      onClick={() => changeLevel(l)}
-                      className="flex flex-col items-start gap-0.5"
+                </>
+              )}
+              {/* Offered here, where you already are when you think about
+                  desks — not as a notification, and never twice in one sitting.
+                  The evidence is shown so the offer can be judged rather than
+                  trusted. */}
+              {visibleSuggestions.length > 0 && customDesks.length < MAX_CUSTOM_DESKS && (
+                <>
+                  {visibleSuggestions.map((sug) => (
+                    <div
+                      key={sug.id}
+                      className="mx-1 mb-1 rounded-md border border-brand/30 bg-brand/5 px-2 py-2"
                     >
-                      <span className="flex w-full items-center justify-between gap-2">
-                        <span className="font-medium">
-                          ≈{estimateBriefMinutes(l)} min
-                          <span className="ml-1.5 font-normal text-muted-foreground">
-                            {BRIEF_LEVEL_CONFIG[l].label}
-                          </span>
-                        </span>
-                        {l === level && <Check className="h-3.5 w-3.5" />}
-                      </span>
-                      <span className="text-[11px] leading-snug text-muted-foreground">
-                        {BRIEF_LEVEL_CONFIG[l].blurb}
-                      </span>
-                    </DropdownMenuItem>
+                      <p className="text-[12px] font-medium">Add a {sug.label} desk?</p>
+                      <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                        {sug.reason}.
+                      </p>
+                      <div className="mt-1.5 flex gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="brand"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => acceptSuggestion(sug)}
+                        >
+                          Add it
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => setDismissedSuggestions((prev) => [...prev, sug.id])}
+                        >
+                          No thanks
+                        </Button>
+                      </div>
+                    </div>
                   ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          )}
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem
+                onSelect={(e) => {
+                  e.preventDefault();
+                  setDeskDraft({ id: null, label: "", keywords: "", remit: "" });
+                }}
+                disabled={customDesks.length >= MAX_CUSTOM_DESKS}
+              >
+                <Plus className="mr-2 h-3.5 w-3.5" />
+                {customDesks.length >= MAX_CUSTOM_DESKS
+                  ? `${MAX_CUSTOM_DESKS} desks is the limit`
+                  : "Add your own desk…"}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">
+                Built-in desks
+              </DropdownMenuLabel>
+              {BRIEF_TOPICS.map((t) => {
+                const count = desks.find((d) => d.topicId === t.id)?.count ?? 0;
+                return (
+                  <DropdownMenuCheckboxItem
+                    key={t.id}
+                    checked={followed.includes(t.id)}
+                    onCheckedChange={() => toggleDesk(t.id)}
+                    onSelect={(e) => e.preventDefault()}
+                  >
+                    <span className="flex-1">{t.label}</span>
+                    {count > 0 && (
+                      <span className="ml-2 text-[11px] tabular-nums text-muted-foreground">
+                        {count}
+                      </span>
+                    )}
+                  </DropdownMenuCheckboxItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* How long you have. Each step is more SECTIONS, never one
+              longer call — that's what keeps every request inside the
+              host's function budget — but "more sections" is the
+              implementation, and minutes are the question. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="ghost" title="How long the brief should take to read">
+                <Layers className="mr-1.5 h-3.5 w-3.5" />≈{briefMinutes} min
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72">
+              <DropdownMenuLabel>Reading time</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {BRIEF_LEVELS.map((l) => (
+                <DropdownMenuItem
+                  key={l}
+                  onClick={() => changeLevel(l)}
+                  className="flex flex-col items-start gap-0.5"
+                >
+                  <span className="flex w-full items-center justify-between gap-2">
+                    <span className="font-medium">
+                      ≈{estimateBriefMinutes(l)} min
+                      <span className="ml-1.5 font-normal text-muted-foreground">
+                        {BRIEF_LEVEL_CONFIG[l].label}
+                      </span>
+                    </span>
+                    {l === level && <Check className="h-3.5 w-3.5" />}
+                  </span>
+                  <span className="text-[11px] leading-snug text-muted-foreground">
+                    {BRIEF_LEVEL_CONFIG[l].blurb}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <Button
             size="sm"
             variant="ghost"
             onClick={() => setSettingsOpen((v) => !v)}
-            title="Customize the brief prompt"
+            title="Standing instructions for how the brief is written"
           >
             <Settings className="mr-1.5 h-3.5 w-3.5" />
-            Prompt
+            Instructions
           </Button>
           <Button
             size="sm"
             variant="brand"
-            onClick={() => generate({ force: true })}
+            onClick={() => generate()}
             disabled={loading}
           >
             {loading ? (
@@ -1407,7 +1793,7 @@ export function DailyBrief({
       {settingsOpen && (
         <div className="not-prose mb-7 rounded-lg border border-border bg-card p-4">
           <div className="mb-2 flex items-center justify-between">
-            <div className="text-sm font-medium">Custom brief prompt</div>
+            <div className="text-sm font-medium">Standing instructions</div>
             <button
               onClick={() => setSettingsOpen(false)}
               className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -1415,25 +1801,97 @@ export function DailyBrief({
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
-          <p className="mb-3 text-xs text-muted-foreground">
-            Leave this empty for the sectioned brief (a lead, a write-up per desk, a quick-clear
-            list). Fill it in and the brief becomes a single pass with your framing instead —
-            your prompt, the whole queue, one section.
+          <p className="mb-3 text-xs leading-relaxed text-muted-foreground">
+            How you want to be briefed — voice, emphasis, what to leave out. These apply to every
+            part of the brief: the lead, each desk and the quick-clear list. One instruction per
+            line. They shape the writing; they never change which stories are covered (that&apos;s
+            Desks and reading time) and can&apos;t alter a citation.
           </p>
-          <Textarea
-            value={customPrompt}
-            onChange={(e) => setCustomPrompt(e.target.value)}
-            placeholder={DEFAULT_PROMPT_PLACEHOLDER}
-            className="min-h-[140px] text-sm"
-          />
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <Button size="sm" variant="ghost" onClick={resetPrompt}>
-              Reset to default
-            </Button>
-            <Button size="sm" variant="brand" onClick={savePrompt}>
-              Save &amp; regenerate
-            </Button>
+
+          {/* One-tap starters — a blank box with a placeholder is a much worse
+              prompt for "what could I even write here" than six real examples. */}
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {INSTRUCTION_EXAMPLES.map((e) => (
+              <button
+                key={e}
+                onClick={() => addExample(e)}
+                className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-brand/40 hover:text-foreground"
+                title="Add to your instructions"
+              >
+                + {e}
+              </button>
+            ))}
           </div>
+
+          <Textarea
+            value={draftInstructions}
+            onChange={(e) => setDraftInstructions(e.target.value.slice(0, MAX_BRIEF_INSTRUCTIONS))}
+            placeholder={INSTRUCTIONS_PLACEHOLDER}
+            className="min-h-[120px] text-sm"
+          />
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-[11px] tabular-nums text-muted-foreground">
+              {draftInstructions.length}/{MAX_BRIEF_INSTRUCTIONS}
+            </span>
+            <span className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDraftInstructions("")}>
+                Clear
+              </Button>
+              <Button
+                size="sm"
+                variant="brand"
+                onClick={saveInstructions}
+                disabled={draftInstructions.trim() === instructions.trim()}
+              >
+                Save &amp; rewrite
+              </Button>
+            </span>
+          </div>
+
+          {/* The pre-sectioned prompt, offered back rather than silently
+              dropped. It is a format spec for a document that no longer exists
+              in one piece, so applying it wholesale would fight every section
+              prompt — but the reader's intent inside it is usually still good. */}
+          {legacyPrompt && (
+            <div className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+              <p className="text-xs font-medium">Your old brief prompt is no longer used</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                The brief used to be one pass in whatever shape you asked for. It is now written
+                desk by desk — which is what lets it cluster stories, drop repeats and stream as
+                it goes — so customization is these instructions instead. Here is what you had
+                written, in case you want to keep any of it:
+              </p>
+              <pre className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded bg-background/60 p-2 text-[11px] leading-snug text-muted-foreground">
+                {legacyPrompt}
+              </pre>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-[11px]"
+                  onClick={() => {
+                    setDraftInstructions((prev: string) =>
+                      (prev.trim() ? `${prev.trimEnd()}\n${legacyPrompt}` : legacyPrompt).slice(
+                        0,
+                        MAX_BRIEF_INSTRUCTIONS,
+                      ),
+                    );
+                    dismissLegacyPrompt();
+                  }}
+                >
+                  Copy into the box
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-[11px]"
+                  onClick={dismissLegacyPrompt}
+                >
+                  Discard it
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1528,6 +1986,18 @@ export function DailyBrief({
               {b.text.trim() ? (
                 <CitedMarkdown
                   citations={citations}
+                  // Tapping a number opens the "why is this here" card rather
+                  // than jumping straight to the article. It is the only new
+                  // gesture in the brief, and it is the one that carries the
+                  // rest: what put this in front of you, keep me on it, and
+                  // wrong desk all live on the thing they are about.
+                  onInspect={(c, anchor) =>
+                    setInspecting(
+                      inspecting?.n === c.n
+                        ? null
+                        : { n: c.n, rect: anchor.getBoundingClientRect() },
+                    )
+                  }
                   onNavigate={(href) => {
                     // Opening a cited source credits that article's own folder,
                     // which is usually a different skill from the section's mix.
@@ -1543,6 +2013,32 @@ export function DailyBrief({
               ) : (
                 b.label && <h3>{b.label}</h3>
               )}
+              {/* Only ever rendered when there is something to answer for, which
+                  is what keeps the check from being a feature to remember. It
+                  reports rather than accuses: here is the claim, and it wasn't
+                  found in the source it cites. */}
+              {checks.has(b.key) && (
+                <div className="not-prose mt-2 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+                  <p className="flex items-center gap-1.5 font-medium text-amber-700 dark:text-amber-400">
+                    <AlertTriangle className="h-3 w-3 shrink-0" />
+                    Checked against the sources
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {checks.get(b.key)!.unsupported.map((u, i) => (
+                      <li key={i}>
+                        “{u.claim}” — not found in [{u.ref}].
+                      </li>
+                    ))}
+                    {checks.get(b.key)!.outOfScope.length > 0 && (
+                      <li>
+                        Cited {checks.get(b.key)!.outOfScope.map((n) => `[${n}]`).join(", ")}, which
+                        this section wasn&apos;t given — treat those links as unreliable.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
               {/* What this section paid, and into which skill. Shown after the
                   fact rather than promised up front — the point is to notice
                   where your attention went, not to shop for XP. */}
@@ -1671,6 +2167,38 @@ export function DailyBrief({
         </div>
       )}
 
+      {/* What you asked to stay on. One line, next to the coverage note, so
+          following never becomes a list to maintain — a story that stops
+          running lapses on its own, and this is only here so you can let one
+          go early without hunting for where you started it. */}
+      {!loading && followedStories.length > 0 && (
+        <p className="not-prose mt-6 text-xs text-muted-foreground">
+          Following:{" "}
+          {followedStories.map((f, i) => (
+            <span key={f.title}>
+              {i > 0 ? ", " : ""}
+              <button
+                onClick={() => toggleFollow(f.title, false)}
+                className="underline decoration-border underline-offset-2 hover:decoration-foreground"
+                title="Stop following this story"
+              >
+                {f.title.length > 60 ? `${f.title.slice(0, 60)}…` : f.title}
+              </button>
+            </span>
+          ))}
+        </p>
+      )}
+
+      {/* What the brief was built from. The queue is now a SELECTION out of a
+          much wider scan, and a reader who is told "110 articles" when 640 were
+          considered has been told the smaller, less useful half of that. */}
+      {!loading && coverage && coverage.scanned > coverage.selected && (
+        <p className="not-prose mt-6 text-xs text-muted-foreground">
+          Built from {coverage.scanned} unread articles → {coverage.stories} distinct stories →{" "}
+          {coverage.selectedStories} written up or listed.
+        </p>
+      )}
+
       {/* Desks this depth level left out — the honest version of "there's more
           in your queue than this brief covered". */}
       {!loading && omittedDesks.length > 0 && (
@@ -1679,7 +2207,7 @@ export function DailyBrief({
           {omittedDesks.map((d, i) => (
             <span key={d.topicId}>
               {i > 0 ? ", " : ""}
-              {d.label} ({d.count})
+              {d.label} ({deskLeftOut(d)})
             </span>
           ))}
           {level !== "deep" && (
@@ -1797,6 +2325,115 @@ export function DailyBrief({
           </span>
         </footer>
       )}
+
+      {/* The one new gesture in the brief: tap a citation number. */}
+      {inspecting &&
+        (() => {
+          const source = sources.find((x) => x.n === inspecting.n);
+          if (!source) return null;
+          const w = why.get(inspecting.n);
+          return (
+            <CitationCard
+              source={source}
+              why={w}
+              rect={inspecting.rect}
+              following={w?.followed ?? false}
+              onFollow={(next) => toggleFollow(source.title, next)}
+              onMisfile={() =>
+                w?.deskId && reportMisfile(source.title, w.deskId, w.desk ?? "that desk")
+              }
+              onOpen={() => {
+                reading.reportSourceOpened(source.id);
+                router.push(`/feeds?article=${source.id}`);
+              }}
+              onClose={() => setInspecting(null)}
+            />
+          );
+        })()}
+
+      {/* ── Desk editor ─────────────────────────────────────────────
+          A desk is a label, a remit and the terms that claim an article — the
+          same three things a built-in desk is made of, which is why a custom
+          one needs no special handling anywhere downstream. */}
+      <Dialog open={deskDraft !== null} onOpenChange={(open) => !open && setDeskDraft(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{deskDraft?.id ? "Edit desk" : "Add a desk"}</DialogTitle>
+            <DialogDescription>
+              Your own desk gets its own section, and claims its articles ahead of the built-in
+              desks — so a Singapore story is filed under Singapore rather than World Affairs.
+            </DialogDescription>
+          </DialogHeader>
+          {deskDraft && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium" htmlFor="desk-label">
+                  Name
+                </label>
+                <Input
+                  id="desk-label"
+                  value={deskDraft.label}
+                  placeholder="Singapore"
+                  autoFocus
+                  onChange={(e) => setDeskDraft({ ...deskDraft, label: e.target.value })}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium" htmlFor="desk-keywords">
+                  Terms that belong to it
+                </label>
+                <Textarea
+                  id="desk-keywords"
+                  rows={3}
+                  value={deskDraft.keywords}
+                  placeholder="singapore, mas, temasek, gic, straits times, asean"
+                  onChange={(e) => setDeskDraft({ ...deskDraft, keywords: e.target.value })}
+                />
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  Comma-separated. A single one in a headline is enough to claim the article, so
+                  prefer distinctive names over broad words. Leave it empty to match the desk name
+                  alone.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium" htmlFor="desk-remit">
+                  What it covers <span className="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <Input
+                  id="desk-remit"
+                  value={deskDraft.remit}
+                  placeholder="Singapore policy, markets and the region around it"
+                  onChange={(e) => setDeskDraft({ ...deskDraft, remit: e.target.value })}
+                />
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  Handed to the writer as the desk&apos;s brief, so it knows what angle to take.
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="gap-2 sm:justify-between">
+            {deskDraft?.id ? (
+              <Button
+                variant="ghost"
+                className="text-destructive hover:text-destructive"
+                onClick={() => removeDesk(deskDraft.id as string)}
+              >
+                <Trash2 className="mr-1.5 h-3.5 w-3.5" /> Remove
+              </Button>
+            ) : (
+              <span />
+            )}
+            <span className="flex gap-2">
+              <Button variant="ghost" onClick={() => setDeskDraft(null)}>
+                Cancel
+              </Button>
+              <Button onClick={() => deskDraft && saveDesk(deskDraft)}>
+                {deskDraft?.id ? "Save desk" : "Add desk"}
+              </Button>
+            </span>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </article>
   );
 }
@@ -1817,6 +2454,138 @@ const RECALL_GRADES: { label: string; quality: number }[] = [
  * Renders nothing when nothing is due: an empty state here would just be a
  * daily reminder that you have no work, which is nagging, not helping.
  */
+/**
+ * The "why is this here" card.
+ *
+ * The brief already knew all of this — which desk claimed the story, how many
+ * outlets carried it, where it ranked, whether you asked to follow it — and
+ * threw it away at exactly the point a reader might wonder. Showing it costs
+ * nothing: no model call, no request, it rides in with the plan.
+ *
+ * It is also where the two corrections live, and that is the point. "Keep me on
+ * this" and "wrong desk" are both statements about one story, so they belong on
+ * the story rather than in a menu somewhere; putting them here means the brief
+ * gained three abilities and one gesture.
+ */
+function CitationCard({
+  source,
+  why,
+  following,
+  onFollow,
+  onMisfile,
+  onOpen,
+  onClose,
+  rect,
+}: {
+  source: BriefSource;
+  why?: SourceWhy;
+  following: boolean;
+  onFollow: (following: boolean) => void;
+  onMisfile: () => void;
+  onOpen: () => void;
+  onClose: () => void;
+  rect: DOMRect;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Dismiss on anything that is not this card: a click elsewhere, Escape, or
+  // the page moving under it. A popover anchored to a position in a document
+  // that scrolls has to close on scroll or it detaches from what it describes.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onClose, true);
+    window.addEventListener("resize", onClose);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("resize", onClose);
+    };
+  }, [onClose]);
+
+  const WIDTH = 288;
+  // Clamped to the viewport so a citation near the right edge — which is most
+  // of them, since they end sentences — does not open off-screen.
+  const left = Math.min(Math.max(8, rect.left - WIDTH / 2 + rect.width / 2), window.innerWidth - WIDTH - 8);
+  const below = rect.bottom + 8;
+  const openUp = below + 210 > window.innerHeight && rect.top > 220;
+
+  return (
+    <div
+      ref={ref}
+      role="dialog"
+      style={{
+        position: "fixed",
+        left,
+        width: WIDTH,
+        ...(openUp ? { bottom: window.innerHeight - rect.top + 8 } : { top: below }),
+      }}
+      className="z-50 rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-lg"
+    >
+      <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Why this is here</p>
+      <p className="mt-1 line-clamp-2 text-[13px] font-medium leading-snug">{source.title}</p>
+
+      <ul className="mt-2 space-y-1 text-[11px] leading-snug text-muted-foreground">
+        <li>
+          <span className="text-foreground">{source.feedTitle}</span>
+          {why && why.outlets > 1 && <> · carried by {why.outlets} of your feeds</>}
+        </li>
+        {why?.desk && (
+          <li>
+            Filed under <span className="text-foreground">{why.desk}</span>
+          </li>
+        )}
+        {why && (
+          <li>
+            {why.scored
+              ? `Ranked #${why.rank} in today's queue`
+              : `#${why.rank} in your queue — not scored for trend yet`}
+          </li>
+        )}
+        {following && <li className="text-brand">You&apos;re following this story</li>}
+      </ul>
+
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px]" onClick={onOpen}>
+          <ExternalLink className="mr-1 h-3 w-3" /> Open
+        </Button>
+        <Button
+          size="sm"
+          variant={following ? "brand" : "ghost"}
+          className="h-7 px-2 text-[11px]"
+          onClick={() => onFollow(!following)}
+          title={
+            following
+              ? "Stop keeping this story in your brief"
+              : "Keep this story in your brief until it stops running"
+          }
+        >
+          <Bookmark className="mr-1 h-3 w-3" />
+          {following ? "Following" : "Keep me on this"}
+        </Button>
+        {why?.desk && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-[11px] text-muted-foreground"
+            onClick={onMisfile}
+            title={`This story doesn't belong on ${why.desk}`}
+          >
+            Wrong desk
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function RecallCheck() {
   const [cards, setCards] = useState<RecallCard[]>([]);
   const [revealed, setRevealed] = useState(false);

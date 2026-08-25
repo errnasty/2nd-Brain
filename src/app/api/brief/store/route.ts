@@ -1,3 +1,6 @@
+import { sql } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { userSettings } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { saveUserBrief } from "@/lib/brief-cache";
 import { getUserSettings } from "@/lib/settings/store";
@@ -8,6 +11,9 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import { briefSettingsHash } from "@/lib/today/brief-queue";
+import { normalizeCustomDesks, type CustomDesk } from "@/lib/today/topics";
+import { normalizeBriefInstructions } from "@/lib/today/brief-prompts";
+import { normalizeFollowedStories, touchFollows } from "@/lib/today/story-follow";
 import type { BriefSourceRef, BriefUsage } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
@@ -79,23 +85,63 @@ export async function POST(req: Request) {
   // Trust the level the client says it generated at only as far as validating
   // it; the followed desks come from the stored settings either way, so the two
   // halves of the key can't drift apart.
+  const sources = validSources(body.sources);
   let priority: string[] = [];
+  let customDesks: CustomDesk[] = [];
+  let instructions = "";
+  let followedRaw: unknown;
   let level: BriefLevel = isBriefLevel(body.level) ? body.level : DEFAULT_BRIEF_LEVEL;
   try {
     const s = await getUserSettings(auth.user.id);
     priority = Array.isArray(s.briefTopics) ? s.briefTopics.filter((t) => typeof t === "string") : [];
+    customDesks = normalizeCustomDesks(s.customDesks);
+    instructions = normalizeBriefInstructions(s.briefInstructions);
+    followedRaw = s.followedStories;
     if (!isBriefLevel(body.level) && isBriefLevel(s.briefLevel)) level = s.briefLevel;
   } catch {
     // Settings unavailable — store under the defaults rather than not at all.
   }
 
+  // A finished brief is the moment a follow's clock is reset: the story either
+  // turned up in today's queue or it did not, and no other request knows both
+  // the follow list and what the brief actually contained. Fail-soft — a follow
+  // that misses one refresh simply lapses a day later than it might have.
+  try {
+    const followed = normalizeFollowedStories(followedRaw);
+    if (followed.length > 0) {
+      const { followed: next } = touchFollows(
+        followed,
+        sources.map((s) => s.title),
+      );
+      if (JSON.stringify(next) !== JSON.stringify(followed)) {
+        await updateFollowedStories(auth.user.id, next);
+      }
+    }
+  } catch {
+    // ignore
+  }
+
   await saveUserBrief(auth.user.id, {
     fingerprint,
-    promptHash: briefSettingsHash(briefSettingsKey(level, priority)),
+    promptHash: briefSettingsHash(briefSettingsKey(level, priority, customDesks, instructions)),
     content,
-    sourceMap: validSources(body.sources),
+    sourceMap: sources,
     usage: body.usage ?? null,
   });
 
   return Response.json({ ok: true });
+}
+
+/** Write back the refreshed follow list, merged into the settings blob. */
+async function updateFollowedStories(userId: string, followedStories: unknown): Promise<void> {
+  await db
+    .insert(userSettings)
+    .values({ userId, settings: { followedStories } as never, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: userSettings.userId,
+      set: {
+        settings: sql`${userSettings.settings} || ${JSON.stringify({ followedStories })}::jsonb`,
+        updatedAt: new Date(),
+      },
+    });
 }

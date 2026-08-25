@@ -1,13 +1,21 @@
 /**
  * The unread-article queue a Daily Brief is built from.
  *
- * Extracted from the route because three callers now need exactly the same
+ * The queue is no longer "the first N rows of a query". It is a SELECTION: a
+ * wide, title-only scan of several hundred unread articles, collapsed into
+ * stories and narrowed to a bounded, desk-diverse set — see
+ * `brief-retrieval.ts` for why, and for the whole of the decision-making. This
+ * file is the I/O half of that: the two queries (wide and thin, then narrow and
+ * fat) with the pure selector in between.
+ *
+ * It lives apart from the route because four callers need exactly the same
  * queue: the plan endpoint (which classifies it into desks with no model at
- * all), each section generation (which needs the bodies for its own slice), and
- * the fingerprint check that detects drift. If any of them disagreed about the
- * window, the ordering or the limit, the `[n]` numbers in a section would point
- * at different articles than the plan's source map — so the query lives in one
- * place and everything derives from it.
+ * all), each section generation (which needs the bodies for its own slice), the
+ * XP mapping, and the fingerprint check that detects drift. If any of them
+ * disagreed about the window, the selection or the limit, the `[n]` numbers in
+ * a section would point at different articles than the plan's source map — so
+ * every one of them goes through `fetchBriefQueue`, and selection is a pure
+ * function of inputs they all supply identically.
  */
 
 import { createHash } from "crypto";
@@ -15,6 +23,8 @@ import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds, type BriefSourceRef } from "@/lib/db/schema";
 import { trendingDayStart } from "@/lib/trending/day";
+import type { BriefTopic } from "./topics";
+import { selectBriefQueue, type QueueSelection, type ScanArticle } from "./brief-retrieval";
 import type { BriefArticleInput } from "./brief-prompts";
 import type { PlanArticle } from "./brief-plan";
 
@@ -66,11 +76,14 @@ export function briefOrderFingerprint(ids: string[]): string {
 }
 
 /**
- * Hash of the settings a sectioned brief was generated under (level + followed
- * desks), stored in the `promptHash` column the single-pass brief uses for the
- * hash of its custom prompt. The prefix keeps the two distinguishable: a stored
- * brief only gets compared against current settings when it was a sectioned one
- * in the first place.
+ * Hash of the settings a sectioned brief was generated under — depth, followed
+ * desks, the reader's own desks, their standing instructions.
+ *
+ * Stored in the `promptHash` column, which is named for what it used to hold:
+ * the hash of a whole-brief custom prompt, back when customization replaced the
+ * generation rather than layering into it. The prefix survives that history so
+ * a brief stored under the old scheme is never mistaken for one written under
+ * the current settings.
  */
 const SECTIONED_HASH_PREFIX = "sectioned:";
 
@@ -92,6 +105,22 @@ function envLimit(): number | null {
 export function queueLimit(levelLimit: number): number {
   const override = envLimit();
   return override ? Math.min(levelLimit, override) : levelLimit;
+}
+
+/**
+ * How wide the title-only scan goes, honouring `BRIEF_SCAN_LIMIT`.
+ *
+ * Separate from `queueLimit` because the two cost completely different things:
+ * the queue limit bounds excerpts, bodies, classifications and prompt lines,
+ * while the scan limit bounds one `select id, title` — so the scan can be
+ * several times wider without moving peak memory. Never narrower than the queue
+ * it feeds, or selection would be choosing from less than it is asked to keep.
+ */
+export function scanLimit(levelScan: number, levelLimit: number): number {
+  const raw = Number(process.env.BRIEF_SCAN_LIMIT);
+  const override = Number.isFinite(raw) && raw > 0 ? raw : null;
+  const wanted = override ? Math.min(levelScan, override) : levelScan;
+  return Math.max(wanted, queueLimit(levelLimit));
 }
 
 /** Plain-text chars per article, honouring the env cap when one is set. */
@@ -146,19 +175,6 @@ async function widen<T>(
   return { rows: [], windowLabel: windows[0].label };
 }
 
-/** Cheap id-only mirror of the queue — used to detect drift without a model. */
-export async function unreadBriefIds(userId: string, limit: number): Promise<string[]> {
-  const { rows } = await widen((since) =>
-    db
-      .select({ id: articles.id })
-      .from(articles)
-      .where(and(...baseConds(userId, since)))
-      .orderBy(...QUEUE_ORDER)
-      .limit(limit),
-  );
-  return rows.map((r) => r.id);
-}
-
 export type PlanRow = {
   id: string;
   title: string;
@@ -171,31 +187,51 @@ export type PlanRow = {
   trendScore: number;
   /** The story this is one telling of; null when unscored or unique. */
   clusterId: string | null;
+  /** Distinct feeds carrying this article's story across the WHOLE scan — not
+   *  just the tellings that made the queue. Null when selection didn't run. */
+  storyFeeds: number | null;
+};
+
+/** What the brief was built from, beyond the rows themselves. */
+export type BriefQueue = {
+  rows: PlanRow[];
+  windowLabel: string;
+  coverage: QueueSelection["coverage"];
+  omitted: QueueSelection["omitted"];
+  /** Cross-desk threads among the selected stories — see `brief-retrieval.ts`. */
+  threads: QueueSelection["threads"];
+  /**
+   * Every title the scan saw, selected or not.
+   *
+   * Kept for one job: the "outside your feeds" section's entire claim is that
+   * the reader's own feeds did not carry a story, and that has to be checked
+   * against everything they have, not against the slice selection kept. A
+   * story sitting unselected in the queue is still not a blind spot.
+   */
+  scanTitles: string[];
 };
 
 /**
- * The queue as the planner sees it: enough to classify each article into a desk
- * and to build the source map, with no article bodies at all. This is what the
- * Today tab loads on every visit, so it stays deliberately small.
+ * Stage 1: the wide scan. Titles, feed names and the ranking signals — no
+ * excerpts, no bodies, no url. This is the only query whose row count grows
+ * with the scan width, which is what makes widening it nearly free.
  */
-export async function fetchPlanRows(
+async function fetchScanRows(
   userId: string,
   limit: number,
-): Promise<{ rows: PlanRow[]; windowLabel: string }> {
+): Promise<{ rows: ScanArticle[]; windowLabel: string }> {
   return widen((since) =>
     db
       .select({
         id: articles.id,
         title: articles.title,
-        url: articles.url,
-        excerpt: sql<string | null>`left(${articles.excerpt}, ${CLASSIFY_EXCERPT_CHARS})`.as(
-          "excerpt",
-        ),
+        feedId: articles.feedId,
         feedTitle: feeds.title,
-        wordCount: articles.wordCount,
-        hasFullText: sql<boolean>`${articles.fullText} is not null`.as("has_full_text"),
+        publishDate: articles.publishDate,
         trendScore: articles.trendScore,
         clusterId: articles.clusterId,
+        wordCount: articles.wordCount,
+        hasFullText: sql<boolean>`${articles.fullText} is not null`.as("has_full_text"),
       })
       .from(articles)
       .innerJoin(feeds, eq(feeds.id, articles.feedId))
@@ -203,6 +239,130 @@ export async function fetchPlanRows(
       .orderBy(...QUEUE_ORDER)
       .limit(limit),
   );
+}
+
+/**
+ * Stage 3: the excerpt for each SELECTED article, and its url for the source
+ * map. Two queries instead of one, deliberately — the first is wide and thin,
+ * this one is narrow and fat, and keeping them apart is the whole point of the
+ * split. Falls back to the scan row when a row has vanished under us.
+ */
+async function hydrateSelected(userId: string, ids: string[]) {
+  if (ids.length === 0) return new Map<string, { url: string; excerpt: string | null }>();
+  const rows = await db
+    .select({
+      id: articles.id,
+      url: articles.url,
+      excerpt: sql<string | null>`left(${articles.excerpt}, ${CLASSIFY_EXCERPT_CHARS})`.as(
+        "excerpt",
+      ),
+    })
+    .from(articles)
+    .where(and(eq(articles.userId, userId), inArray(articles.id, ids)));
+  return new Map(rows.map((r) => [r.id, { url: r.url, excerpt: r.excerpt }]));
+}
+
+/**
+ * The brief's queue: scan wide, select stories, hydrate the survivors.
+ *
+ * Every caller that needs to agree about `[n]` goes through here — the plan
+ * endpoint, each section generation, the XP mapping and the drift check — so
+ * they all run the same selection over the same scan and land on the same
+ * numbering. That is why selection is a pure function of its inputs (see
+ * `brief-retrieval.ts`): the same queue and the same preferences must produce
+ * the same list on every one of those calls.
+ *
+ * `hydrate: false` stops before the excerpt query, for the drift check, which
+ * only ever looks at ids.
+ */
+export async function fetchBriefQueue(
+  userId: string,
+  opts: {
+    limit: number;
+    scanLimit: number;
+    priority?: string[];
+    deskWeights?: Record<string, number>;
+    feedTrust?: Record<string, number>;
+    isFollowed?: (title: string) => boolean;
+    ruledOut?: (title: string, deskId: string) => boolean;
+    desks?: BriefTopic[];
+    hydrate?: boolean;
+    now?: Date;
+  },
+): Promise<BriefQueue> {
+  const { rows: scan, windowLabel } = await fetchScanRows(userId, opts.scanLimit);
+  const selection = selectBriefQueue(scan, {
+    limit: opts.limit,
+    priority: opts.priority,
+    deskWeights: opts.deskWeights,
+    feedTrust: opts.feedTrust,
+    isFollowed: opts.isFollowed,
+    ruledOut: opts.ruledOut,
+    desks: opts.desks,
+    now: opts.now,
+  });
+
+  const base = selection.selected.map((a) => ({
+    id: a.id,
+    title: a.title,
+    url: "",
+    excerpt: null as string | null,
+    feedTitle: a.feedTitle,
+    wordCount: a.wordCount,
+    hasFullText: a.hasFullText,
+    trendScore: a.trendScore,
+    clusterId: a.clusterId,
+    storyFeeds: selection.storyFeeds.get(a.id) ?? null,
+  }));
+
+  const scanTitles = scan.map((a) => a.title);
+  if (opts.hydrate === false) {
+    return {
+      rows: base,
+      windowLabel,
+      coverage: selection.coverage,
+      omitted: selection.omitted,
+      threads: selection.threads,
+      scanTitles,
+    };
+  }
+
+  const extra = await hydrateSelected(
+    userId,
+    base.map((r) => r.id),
+  );
+  for (const row of base) {
+    const hit = extra.get(row.id);
+    if (!hit) continue;
+    row.url = hit.url;
+    row.excerpt = hit.excerpt;
+  }
+  return {
+    rows: base,
+    windowLabel,
+    coverage: selection.coverage,
+    omitted: selection.omitted,
+    threads: selection.threads,
+    scanTitles,
+  };
+}
+
+/** Cheap id-only mirror of the queue — used to detect drift without a model. */
+export async function unreadBriefIds(
+  userId: string,
+  opts: {
+    limit: number;
+    scanLimit: number;
+    priority?: string[];
+    deskWeights?: Record<string, number>;
+    feedTrust?: Record<string, number>;
+    isFollowed?: (title: string) => boolean;
+    ruledOut?: (title: string, deskId: string) => boolean;
+    desks?: BriefTopic[];
+  },
+): Promise<string[]> {
+  const { rows } = await fetchBriefQueue(userId, { ...opts, hydrate: false });
+  return rows.map((r) => r.id);
 }
 
 /** An article the reader has already been through, offered as background. */
@@ -264,11 +424,12 @@ export type SectionRow = PlanRow & { fullText: string | null };
  * Article bodies for a specific set of ids.
  *
  * Deliberately NOT "the whole queue, with bodies". A section cites at most a
- * dozen articles, but the pool it's planned against is now up to 120 — pulling
- * every body to use ten of them would ship close to a megabyte out of Postgres
- * per section, on a request that has under ten seconds to also run a model
- * call. So the section endpoint plans on the light rows (no bodies at all) and
- * then fetches bodies for just the refs it actually needs.
+ * dozen articles, but the queue it's planned against runs to well over a
+ * hundred, drawn from a scan several times wider than that — pulling every body
+ * to use ten of them would ship megabytes out of Postgres per section, on a
+ * request that also has to run a model call. So the section endpoint plans on
+ * the light rows (no bodies at all) and then fetches bodies for just the refs
+ * it actually needs.
  *
  * `rawChars` caps `full_text` in SQL — only `bodyChars` plain characters per
  * article ever reach the model after `stripHtml`, so the multiplier is just
@@ -314,6 +475,51 @@ export function briefSourceMap(rows: Pick<PlanRow, "id" | "title" | "url" | "fee
   }));
 }
 
+/**
+ * Why each cited article is in the brief at all.
+ *
+ * Every part of this was already computed to BUILD the brief — which desk
+ * claimed the story, how many outlets carried it, how hot it was, where it
+ * landed in the queue — and then thrown away at the point the reader might
+ * want it. Handing it over costs one pass over rows already in memory and no
+ * model call whatsoever, which is what makes it affordable to attach to every
+ * citation rather than to a chosen few.
+ */
+export type SourceWhy = {
+  n: number;
+  /** Desk that claimed the story, already resolved to its label. */
+  desk: string | null;
+  /** …and its id, so a correction names the desk rather than a string that
+   *  happens to read the same as another one. */
+  deskId: string | null;
+  /** Distinct outlets carrying it across the whole scan. */
+  outlets: number;
+  /** Position in the queue — 1 is the day's biggest story. */
+  rank: number;
+  /** Whether the trending pass had scored it at all. */
+  scored: boolean;
+  /** Whether the reader is following this story. */
+  followed: boolean;
+};
+
+export function briefWhyMap(
+  rows: PlanRow[],
+  opts: {
+    deskOf: (ref: number) => { id: string; label: string } | null;
+    isFollowed?: (title: string) => boolean;
+  },
+): SourceWhy[] {
+  return rows.map((r, i) => ({
+    n: i + 1,
+    desk: opts.deskOf(i + 1)?.label ?? null,
+    deskId: opts.deskOf(i + 1)?.id ?? null,
+    outlets: Math.max(1, r.storyFeeds ?? 1),
+    rank: i + 1,
+    scored: (r.trendScore ?? 0) > 0,
+    followed: opts.isFollowed?.(r.title) ?? false,
+  }));
+}
+
 /** Rows as the planner wants them (classification + ranking signals only). */
 export function toPlanArticles(rows: PlanRow[]): PlanArticle[] {
   return rows.map((r) => ({
@@ -324,6 +530,7 @@ export function toPlanArticles(rows: PlanRow[]): PlanArticle[] {
     hasFullText: r.hasFullText,
     trendScore: r.trendScore,
     clusterId: r.clusterId,
+    storyFeeds: r.storyFeeds,
   }));
 }
 

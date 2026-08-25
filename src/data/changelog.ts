@@ -27,6 +27,50 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-24-b",
+    date: "August 24, 2026",
+    title: "Tap any number in the brief",
+    tag: "feature",
+    summary:
+      "The bracketed numbers in your brief now open a small card: why that story is in front of you, a button to keep the brief on it until it stops running, and a way to say it was filed under the wrong desk. That is the only new thing to learn — everything else in this update either happens on its own or turns up where you were already looking.",
+    items: [
+      "Why it's here: which desk claimed the story, how many of your feeds carried it, and where it ranked today. No waiting — the brief already knew all of it.",
+      "Keep me on this: follows one story rather than a whole desk, so it stays in your brief even on a quiet day. It lets go by itself once the story stops running, so there is no list to tidy up.",
+      "Wrong desk: that desk stops claiming the story straight away. And when a few corrections turn out to be about the same subject, the Desks menu offers to give it a desk of its own — as it does when you keep saving articles about something no desk covers.",
+      "New in the brief: a short Threads section when several stories on different desks turn out to be circling the same thing — the connection a desk-by-desk brief can't otherwise make. It says so plainly when there isn't one.",
+      "Quietly, in the background: feeds you actually read now count for more when the brief works out which stories matter, and each section is checked against its own sources after it lands. You'll only hear about that check if something doesn't hold up.",
+    ],
+  },
+  {
+    id: "2026-08-24-a",
+    date: "August 24, 2026",
+    title: "Tell the brief how you want to be written to",
+    tag: "improvement",
+    summary:
+      "Customizing the brief used to mean replacing it: your prompt, one pass, and none of the desks, depth, clustering or repeat-removal the brief has learned since. Now you write standing instructions instead — voice, emphasis, what to leave out — and they apply to every part of the brief while everything else keeps working.",
+    items: [
+      'Open Instructions on Today and write one per line: "Write in British English", "always give me the second-order effect", "skip anything that is a product launch". There are one-tap examples to start from.',
+      "They apply to the lead, every desk and the quick-clear list at once — and they change how the brief is written, never which stories it covers or where a citation points.",
+      "Instructions are saved to your account rather than the browser, so they follow you to your phone. The old custom prompt never did.",
+      "If you had written a custom prompt, it is waiting for you in the Instructions panel — nothing was thrown away — with the option to reuse it or discard it.",
+    ],
+  },
+  {
+    id: "2026-08-24",
+    date: "August 24, 2026",
+    title: "Add your own desks, and a brief that stops repeating itself",
+    tag: "feature",
+    summary:
+      "You can now add desks of your own — Singapore, semiconductors, one company, whatever you actually follow — and each gets its own section written up under its own name. The brief also reads a much wider slice of your unread queue, and no longer covers the same story twice.",
+    items: [
+      "Add a desk from the Desks menu on Today: give it a name and the terms that belong to it. Your desks claim their articles ahead of the built-in ones, so a Singapore story is filed under Singapore rather than World Affairs.",
+      "Anything the lead covers is now left out of the desks below it, and the freed space goes to a story you would not otherwise have been told about.",
+      "The quick-clear list only offers what nothing else in the brief covered, so it stops handing back articles you have just read about.",
+      "Every telling of one story now lands on a single desk, instead of the same event being written up twice under two headings.",
+      "The brief now considers several hundred unread articles rather than at most 120, choosing the strongest stories from across all of them — and it says what it was built from at the end.",
+    ],
+  },
+  {
     id: "2026-08-22-b",
     date: "August 22, 2026",
     title: "Reader settings open again, and Ask reads better on a phone",

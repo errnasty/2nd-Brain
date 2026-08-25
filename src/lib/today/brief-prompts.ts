@@ -17,7 +17,46 @@
 
 import type { BriefLevel, PlannedSection } from "./brief-plan";
 import { BRIEF_LEVEL_CONFIG } from "./brief-plan";
-import { topicById, topicLabel } from "./topics";
+import { topicById, topicLabel, type BriefTopic } from "./topics";
+
+/**
+ * Standing instructions: the reader's own steer, applied to every section.
+ *
+ * ## What this replaced
+ *
+ * Customization used to be a whole-brief system prompt that took over the
+ * generation completely — one call, the reader's format, the entire queue. It
+ * was the right shape when the brief WAS one call. It stopped being right the
+ * moment the brief became a planned set of sections, because everything added
+ * since lives in that plan: desks, depth, story clustering, continuity markers,
+ * the dedup pass, per-section streaming, retry, feedback and XP. A reader who
+ * customized their brief silently opted out of all of it, and the gap only ever
+ * widened. It also lived in localStorage, so it never followed them to a second
+ * device.
+ *
+ * So customization now LAYERS instead of overriding. The instructions go into
+ * every section's system prompt, and everything the brief knows how to do keeps
+ * happening around them. "Write in British English", "always give me the
+ * second-order effect", "skip anything about crypto", "I already follow the
+ * Fed closely — assume that" all work, and they work in the lead, on each desk
+ * and in the quick-clear list at once.
+ *
+ * They are placed AFTER the rules and explicitly subordinated to them. This is
+ * the reader steering their own brief, not an untrusted input — but the
+ * citation contract is what makes every `[n]` in the output resolve against the
+ * client's source map, and an instruction that quietly broke it would produce a
+ * brief full of dead references rather than a differently-written one.
+ */
+export const MAX_BRIEF_INSTRUCTIONS = 2000;
+
+/** Validate whatever is in the settings blob. Never throws; "" means unset. */
+export function normalizeBriefInstructions(v: unknown): string {
+  return typeof v === "string" ? v.trim().slice(0, MAX_BRIEF_INSTRUCTIONS) : "";
+}
+
+function instructionsBlock(text: string): string {
+  return `\n\nStanding instructions from me, the reader. Apply them to this section:\n\n${text}\n\nThey govern emphasis, voice, and what to leave out. They do not override the rules above: every bracketed number must still be one you were given, and nothing may be stated that the supplied text does not support. Where an instruction cannot be followed without breaking one of those, follow the rule and drop the instruction silently.`;
+}
 
 const SHARED_RULES = [
   "Cite with the bracketed reference numbers exactly as supplied (e.g. [3]). Never invent a number.",
@@ -57,6 +96,22 @@ export type SectionContext = {
   readContext?: boolean;
   /** Stories this brief has covered before — see `story-memory.ts`. */
   continuing?: boolean;
+  /**
+   * An earlier section of THIS brief already wrote some of this desk's
+   * material up, and it has been removed from the list below.
+   *
+   * The rule exists because removal alone is not quite enough: a desk handed
+   * eight items where its biggest story is conspicuously missing will often
+   * reach for it anyway from memory of the day, or open with a state-of-play
+   * sentence about a story it can no longer cite. Saying plainly that the
+   * story is elsewhere in the brief turns that into what it should be — a
+   * clause of context, or nothing at all.
+   */
+  covered?: boolean;
+  /** The reader's desk list, so a custom desk resolves to its own label. */
+  desks?: BriefTopic[];
+  /** The reader's standing instructions — see `instructionsBlock`. */
+  instructions?: string;
 };
 
 /** The system prompt for one section. */
@@ -65,6 +120,10 @@ export function sectionSystemPrompt(
   level: BriefLevel,
   ctx: SectionContext = {},
 ): string {
+  return basePrompt(section, level, ctx) + (ctx.instructions ? instructionsBlock(ctx.instructions) : "");
+}
+
+function basePrompt(section: PlannedSection, level: BriefLevel, ctx: SectionContext): string {
   const cfg = BRIEF_LEVEL_CONFIG[level];
 
   if (section.kind === "lead") {
@@ -90,7 +149,7 @@ ${rules([
   }
 
   if (section.kind === "topic") {
-    const topic = section.topicId ? topicById(section.topicId) : null;
+    const topic = section.topicId ? topicById(section.topicId, ctx.desks) : null;
     const remit = topic
       ? `This desk covers ${topic.desk}.`
       : "This desk covers whatever did not fit the other desks — treat it as a short catch-all.";
@@ -110,7 +169,22 @@ ${rules([
     "Stories marked as previously briefed are not new to me. Lead those bullets with the development, not the background.",
   ctx.readContext &&
     "Pieces I have already read today are listed for background only. Never cite them — they have no reference number — and don't spend a bullet retelling one.",
+  ctx.covered &&
+    "Stories the lead already covered have been removed from this desk's list. They are elsewhere in this brief, so do not write them up again or reach for them from memory — a single clause referring back is the most they are worth here.",
   "If an item was clearly misfiled onto this desk, leave it out rather than stretching the desk's remit.",
+])}`;
+  }
+
+  if (section.kind === "threads") {
+    return `You are writing the "Threads" section of my personal daily intelligence brief. Everything below has ALREADY been written up elsewhere in this brief, on separate desks. Your only job is the line between them.
+
+${rules([
+  "One short paragraph per thread — no more than three or four sentences each.",
+  "Say what actually connects these stories: a shared cause, one party acting in several places, a policy and its consequences, a pattern in the timing. Cite the reference numbers as you go.",
+  "Do NOT summarise the stories. I have just read them. Assume I know what each one says and start from the connection.",
+  "The connection has to be real. If these items share vocabulary but nothing more, say so in one line and move on — a coincidence named as a trend is worse than no section.",
+  "Never invent a mechanism. If you cannot point at what links them from the supplied text, do not assert one.",
+  'If none of the threads amount to anything, reply with exactly this line and nothing else: "Nothing joining up today."',
 ])}`;
   }
 
@@ -133,6 +207,8 @@ ${rules([
   "One bullet each: a shortened title, its bracketed reference number, and a reason of at most eight words.",
   hasStories(section) &&
     "References marked as the same story are duplicate coverage. Keep the fullest telling out of the list and put the rest in it, reason \"already covered by [n]\".",
+  ctx.covered &&
+    "Everything the rest of this brief wrote up has already been removed from this list, so never say an item is \"covered above\" — what is in front of you is only what nothing else touched.",
   "Be conservative — when in doubt, leave it out. A wrongly-skipped article costs me more than a wrongly-kept one.",
   'If nothing qualifies, reply with exactly this line and nothing else: "Nothing obviously skippable today."',
 ])}`;
@@ -154,6 +230,8 @@ const MAX_LEAD_TOKENS = 850;
 const MAX_TOPIC_TOKENS = 700;
 const MAX_SKIP_TOKENS = 480;
 const MAX_EXTERNAL_TOKENS = 500;
+/** A thread is a paragraph of reasoning, not a recap — the stories are above. */
+const MAX_THREADS_TOKENS = 520;
 
 export function sectionMaxTokens(section: PlannedSection, level: BriefLevel): number {
   const cfg = BRIEF_LEVEL_CONFIG[level];
@@ -162,6 +240,9 @@ export function sectionMaxTokens(section: PlannedSection, level: BriefLevel): nu
   // Headlines in, two sentences out per story — the cheapest section there is.
   if (section.kind === "external") {
     return Math.min(MAX_EXTERNAL_TOKENS, 50 * (section.externals?.length ?? 0) + 80);
+  }
+  if (section.kind === "threads") {
+    return Math.min(MAX_THREADS_TOKENS, 150 * (section.threads?.length ?? 0) + 80);
   }
   // Skip is a list of titles: ~24 tokens each, capped so a 120-item queue can't
   // turn the cheapest section into the longest one.
@@ -174,6 +255,7 @@ export const MAX_SECTION_TOKENS = Math.max(
   MAX_TOPIC_TOKENS,
   MAX_SKIP_TOKENS,
   MAX_EXTERNAL_TOKENS,
+  MAX_THREADS_TOKENS,
 );
 
 export type BriefArticleInput = {
@@ -239,12 +321,23 @@ export function readContextBlock(items: { title: string; feedTitle: string }[]):
  * "is this clickbait" needs the headline, not the body — which is what makes
  * covering the whole queue in one small call affordable.
  */
+/**
+ * Body budget for the threads section.
+ *
+ * Much shorter than a desk's, on purpose: the section is explicitly forbidden
+ * from retelling these stories, so what it needs from each is enough to
+ * recognise it, not enough to summarise it. Every one of these refs has already
+ * been paid for at full length in the section that wrote it up.
+ */
+const THREAD_BODY_CHARS = 320;
+
 export function sectionArticleBlock(
   section: PlannedSection,
   items: BriefArticleInput[],
   level: BriefLevel,
 ): string {
-  const bodyChars = BRIEF_LEVEL_CONFIG[level].bodyChars;
+  const bodyChars =
+    section.kind === "threads" ? THREAD_BODY_CHARS : BRIEF_LEVEL_CONFIG[level].bodyChars;
   return items
     .map((a) => {
       const head = `[${a.n}] (${a.feedTitle}) ${a.title}`;
@@ -256,15 +349,36 @@ export function sectionArticleBlock(
 }
 
 /**
+ * The "these are the threads" block.
+ *
+ * The shared terms are stated rather than left to be rediscovered, because
+ * they are what the retrieval pass actually found — but they are named as a
+ * starting point, not an answer. The connection worth writing is usually
+ * adjacent to the vocabulary rather than identical to it, and a model handed
+ * "tariffs" as a conclusion will write a paragraph about the word.
+ */
+export function threadBlock(section: PlannedSection): string {
+  const threads = section.threads ?? [];
+  if (threads.length === 0) return "";
+  return threads
+    .map((t, i) => {
+      const refs = t.refs.map((n) => `[${n}]`).join(" ");
+      const desks = t.deskLabels.join(", ");
+      return `Thread ${i + 1} — ${refs}\n  These ran on different desks (${desks}) and share the language: ${t.terms.join(", ")}. That is where to look, not what to say.`;
+    })
+    .join("\n\n");
+}
+
+/**
  * The block for the external section: headlines only, in their own `[E n]`
  * namespace. There is no body text to give — these are stories from outside the
  * user's subscriptions, and the app has deliberately not fetched them.
  */
-export function externalBlock(section: PlannedSection): string {
+export function externalBlock(section: PlannedSection, desks?: BriefTopic[]): string {
   return (section.externals ?? [])
     .map((e) => {
       const outlet = e.outlet ? ` (${e.outlet})` : "";
-      const desk = e.topicId ? ` · desk: ${topicLabel(e.topicId)}` : "";
+      const desk = e.topicId ? ` · desk: ${topicLabel(e.topicId, desks)}` : "";
       const spread = e.sourceCount > 1 ? ` · ${e.sourceCount} outlets` : "";
       return `[E${e.n}]${outlet} ${e.title}${desk}${spread}`;
     })
@@ -274,16 +388,28 @@ export function externalBlock(section: PlannedSection): string {
 /** One line of context above the article block: what window, how much queue. */
 export function sectionPreamble(
   section: PlannedSection,
-  opts: { windowLabel: string; totalCount: number; deskCount?: number },
+  opts: { windowLabel: string; totalCount: number; deskCount?: number; scannedCount?: number },
 ): string {
   if (section.kind === "external") {
     return `[Stories from the wider news world in the last day that your own feeds did not carry · ${section.externals?.length ?? 0} of them]`;
   }
+  if (section.kind === "threads") {
+    return `[${section.threads?.length ?? 0} possible ${
+      (section.threads?.length ?? 0) === 1 ? "thread" : "threads"
+    } across desks · every story here is already written up above]`;
+  }
+  // The scanned count is worth stating on the lead: "10 candidates from 110"
+  // reads as a shortlist of a small pile, where "10 candidates from 110, drawn
+  // from 640 scanned" tells the model what a candidate actually survived.
+  const pool =
+    opts.scannedCount && opts.scannedCount > opts.totalCount
+      ? `${opts.totalCount} articles selected from ${opts.scannedCount} unread`
+      : `${opts.totalCount} unread articles`;
   const scope =
     section.kind === "lead"
-      ? `${section.refs.length} candidates drawn from ${opts.totalCount} unread articles`
+      ? `${section.refs.length} candidates drawn from ${pool}`
       : section.kind === "topic"
         ? `${section.refs.length} of ${opts.deskCount ?? section.refs.length} items on this desk`
-        : `${section.refs.length} unread articles, titles only`;
+        : `${section.refs.length} articles no other section covered, titles only`;
   return `[Briefing window: ${opts.windowLabel} · ${scope} · ranked by how widely each story is being covered]`;
 }

@@ -3,6 +3,7 @@ import {
   BRIEF_LEVELS,
   BRIEF_LEVEL_CONFIG,
   briefSettingsKey,
+  coveredRefs,
   findSection,
   isBriefLevel,
   deskRefs,
@@ -11,18 +12,22 @@ import {
   leadCandidateRefs,
   planBrief,
   storyGroupsFor,
+  type BriefPlan,
   type PlanArticle,
 } from "./brief-plan";
-import { OTHER_TOPIC_ID } from "./topics";
+import { OTHER_TOPIC_ID, resolveDesks } from "./topics";
 import {
+  MAX_BRIEF_INSTRUCTIONS,
   MAX_SECTION_TOKENS,
   continuityBlock,
+  normalizeBriefInstructions,
   externalBlock,
   readContextBlock,
   sectionArticleBlock,
   sectionMaxTokens,
   sectionSystemPrompt,
   storyBlock,
+  threadBlock,
 } from "./brief-prompts";
 
 /** A queue with several clear desks and a few unclassifiable items. */
@@ -126,10 +131,18 @@ describe("planBrief", () => {
     expect(ai?.refs.length).toBe(BRIEF_LEVEL_CONFIG.standard.maxTopicRefs);
   });
 
-  it("gives the skip section the whole queue (titles only, so it stays cheap)", () => {
+  it("keeps the quick-clear list to what no other section covered", () => {
     const items = queue();
     const plan = planBrief(items, { level: "standard" });
-    expect(findSection(plan, "skip")?.refs).toHaveLength(items.length);
+    const written = new Set(
+      plan.sections.filter((s) => s.kind === "topic").flatMap((s) => s.refs),
+    );
+    const skip = findSection(plan, "skip")?.refs ?? [];
+    expect(written.size).toBeGreaterThan(0);
+    for (const ref of skip) expect(written.has(ref)).toBe(false);
+    // …and everything else is still accounted for, so nothing falls off the
+    // end of the brief unmentioned.
+    expect(new Set([...skip, ...written]).size).toBe(items.length);
   });
 
   it("reports desks it left out so the UI can offer more depth", () => {
@@ -169,7 +182,284 @@ describe("planBrief", () => {
   });
 });
 
+describe("dedup across sections", () => {
+  /** One geopolitics story in three tellings, plus three more on the desk. */
+  function deskQueue(): PlanArticle[] {
+    return [
+      { title: "NATO weighs fresh sanctions on Russia", clusterId: "c1" },
+      { title: "Sanctions package advances in Brussels", clusterId: "c1" },
+      { title: "Russia sanctions move forward, say envoys", clusterId: "c1" },
+      { title: "Taiwan summit collapses as envoys walk out", clusterId: "c2" },
+      { title: "Iran ceasefire talks resume in Brussels", clusterId: "c3" },
+      { title: "Ukraine drone strike hits a Kremlin depot", clusterId: "c4" },
+    ];
+  }
+
+  it("drops a covered ref and every other telling of the same story", () => {
+    expect([...coveredRefs(deskQueue(), [1])]).toEqual([1, 2, 3]);
+  });
+
+  it("ignores refs that are not in the queue", () => {
+    expect([...coveredRefs(deskQueue(), [0, 99, -1])]).toEqual([]);
+    expect([...coveredRefs(deskQueue(), undefined)]).toEqual([]);
+  });
+
+  it("keeps a covered story off the desk that would have written it up again", () => {
+    const before = planBrief(deskQueue(), { level: "deep" });
+    const after = planBrief(deskQueue(), { level: "deep", covered: [1] });
+    const deskOf = (p: typeof before) =>
+      p.sections.find((x) => x.topicId === "geopolitics")?.refs ?? [];
+    expect(deskOf(before)).toContain(1);
+    for (const ref of [1, 2, 3]) expect(deskOf(after)).not.toContain(ref);
+  });
+
+  it("backfills the freed slots instead of shrinking the desk", () => {
+    // A desk with more material than its cap, whose top story is three
+    // tellings of one event. Removing that story should pull three further
+    // developments in — dedup and coverage are the same edit.
+    const cap = BRIEF_LEVEL_CONFIG.deep.maxTopicRefs;
+    const items: PlanArticle[] = [
+      { title: "NATO weighs fresh sanctions on Russia", clusterId: "c1" },
+      { title: "Sanctions package advances in Brussels", clusterId: "c1" },
+      { title: "Russia sanctions move forward, say envoys", clusterId: "c1" },
+      ...Array.from({ length: cap + 3 }, (_, i) => ({
+        title: `Ukraine drone strike hits depot number ${i}`,
+        clusterId: `c${i + 2}`,
+      })),
+    ];
+    const deskOf = (p: BriefPlan) =>
+      p.sections.find((x) => x.topicId === "geopolitics")?.refs ?? [];
+    const before = deskOf(planBrief(items, { level: "deep" }));
+    const after = deskOf(planBrief(items, { level: "deep", covered: [1] }));
+
+    expect(before).toHaveLength(cap);
+    // Still a full desk, and every slot the covered story held has been spent
+    // on something the reader would otherwise not have been told about.
+    expect(after).toHaveLength(cap);
+    for (const ref of [1, 2, 3]) expect(after).not.toContain(ref);
+    expect(after.filter((r) => !before.includes(r))).toHaveLength(3);
+  });
+
+  it("keeps an emptied desk in the plan, with no refs", () => {
+    // The client planned WITHOUT `covered` — the lead had not been written yet
+    // — so it already holds a block for this desk and will ask for it by key.
+    // Dropping the section here would turn "nothing left to say" into a section
+    // that fails to load; the route answers the empty ref list instead.
+    const items: PlanArticle[] = [
+      { title: "NATO weighs fresh sanctions on Russia", clusterId: "c1" },
+      { title: "OpenAI ships a smaller open weights model", clusterId: "c2" },
+    ];
+    const uncovered = planBrief(items, { level: "deep" });
+    const covered = planBrief(items, { level: "deep", covered: [1] });
+    // Same shape either way — that is the invariant the client depends on.
+    expect(covered.sections.map((x) => x.key)).toEqual(uncovered.sections.map((x) => x.key));
+    expect(covered.sections.find((x) => x.topicId === "geopolitics")?.refs).toEqual([]);
+  });
+
+  it("never offers the quick-clear list something the brief wrote up", () => {
+    const items = deskQueue();
+    const plan = planBrief(items, { level: "deep", covered: [1] });
+    const written = new Set([
+      ...plan.sections.filter((x) => x.kind === "topic").flatMap((x) => x.refs),
+      1,
+      2,
+      3,
+    ]);
+    for (const ref of findSection(plan, "skip")?.refs ?? []) {
+      expect(written.has(ref)).toBe(false);
+    }
+  });
+
+  it("caps the quick-clear list however long the queue is", () => {
+    const many: PlanArticle[] = Array.from({ length: 200 }, (_, i) => ({
+      title: `Untitled draft ${i}`,
+    }));
+    const plan = planBrief(many, { level: "concise" });
+    expect(findSection(plan, "skip")?.refs.length).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("custom desks in the plan", () => {
+  const desks = resolveDesks([
+    { id: "custom:singapore", label: "Singapore", desk: "Singapore", keywords: ["singapore"] },
+  ]);
+
+  function sgQueue(): PlanArticle[] {
+    return [
+      { title: "Singapore tightens chip export rules aimed at Beijing" },
+      { title: "MAS holds policy as Singapore inflation cools" },
+      { title: "OpenAI ships a smaller open weights model" },
+      { title: "Ransomware crew breaches a hospital network" },
+    ];
+  }
+
+  it("gets its own section, under its own name", () => {
+    const plan = planBrief(sgQueue(), { level: "deep", desks });
+    const section = plan.sections.find((s) => s.topicId === "custom:singapore");
+    expect(section?.label).toBe("Singapore");
+    expect(section?.refs).toContain(1);
+  });
+
+  it("leads the brief when it is followed", () => {
+    const plan = planBrief(sgQueue(), {
+      level: "standard",
+      desks,
+      priority: ["custom:singapore"],
+    });
+    expect(plan.sections.find((s) => s.kind === "topic")?.topicId).toBe("custom:singapore");
+  });
+
+  it("changes nothing for a reader who has none", () => {
+    const plan = planBrief(sgQueue(), { level: "deep" });
+    expect(plan.desks.some((d) => d.topicId.startsWith("custom:"))).toBe(false);
+  });
+});
+
+describe("the threads section", () => {
+  const threads = [
+    { terms: ["semiconductor", "tariffs"], refs: [1, 3, 5], deskIds: ["markets", "policy"] },
+  ];
+
+  it("cites stories the desks already covered, on purpose", () => {
+    const plan = planBrief(queue(), { level: "deep", threads });
+    const section = findSection(plan, "threads")!;
+    expect(section.refs).toEqual([1, 3, 5]);
+    expect(section.threads?.[0].deskLabels).toEqual([
+      "Business & Markets",
+      "Policy & Regulation",
+    ]);
+  });
+
+  it("comes after the desks and before the quick clear", () => {
+    const keys = planBrief(queue(), { level: "deep", threads }).sections.map((s) => s.key);
+    const lastDesk = keys.findLastIndex((k) => k.startsWith("topic:"));
+    expect(keys.indexOf("threads")).toBeGreaterThan(lastDesk);
+    expect(keys.indexOf("threads")).toBeLessThan(keys.indexOf("skip"));
+  });
+
+  it("is not silenced by the dedup pass — every ref in it is covered by design", () => {
+    const plan = planBrief(queue(), { level: "deep", threads, covered: [1] });
+    expect(findSection(plan, "threads")?.refs).toEqual([1, 3, 5]);
+  });
+
+  it("does not push anything out of the quick-clear list", () => {
+    // Threads cite what the desks wrote up, so they add nothing to what has
+    // been "covered" — the quick-clear list must be unaffected by their
+    // presence.
+    const withThreads = findSection(planBrief(queue(), { level: "deep", threads }), "skip")?.refs;
+    const without = findSection(planBrief(queue(), { level: "deep" }), "skip")?.refs;
+    expect(withThreads).toEqual(without);
+  });
+
+  it("is omitted at a depth that has no desks to cross", () => {
+    expect(findSection(planBrief(queue(), { level: "concise", threads }), "threads")).toBeNull();
+  });
+
+  it("is omitted when nothing joins up", () => {
+    expect(findSection(planBrief(queue(), { level: "deep", threads: [] }), "threads")).toBeNull();
+  });
+
+  it("tells the model not to retell the stories", () => {
+    const section = findSection(planBrief(queue(), { level: "deep", threads }), "threads")!;
+    const prompt = sectionSystemPrompt(section, "deep");
+    expect(prompt).toContain("Do NOT summarise the stories");
+    // …and gives it permission to find nothing, which is the whole guard
+    // against a coincidence being written up as a trend.
+    expect(prompt).toContain("Nothing joining up today.");
+  });
+
+  it("names the shared terms as a starting point, not the answer", () => {
+    const section = findSection(planBrief(queue(), { level: "deep", threads }), "threads")!;
+    const block = threadBlock(section);
+    expect(block).toContain("semiconductor");
+    expect(block).toContain("where to look, not what to say");
+  });
+
+  it("stays within the section token ceiling", () => {
+    const section = findSection(planBrief(queue(), { level: "deep", threads }), "threads")!;
+    expect(sectionMaxTokens(section, "deep")).toBeLessThanOrEqual(MAX_SECTION_TOKENS);
+  });
+});
+
+describe("standing instructions", () => {
+  const plan = planBrief(queue(), { level: "deep" });
+  const lead = findSection(plan, "lead")!;
+  const desk = plan.sections.find((s) => s.kind === "topic")!;
+  const skip = findSection(plan, "skip")!;
+  const instructions = "Write in British English.\nSkip anything about crypto.";
+
+  it("reaches every section, not just the lead", () => {
+    for (const section of [lead, desk, skip]) {
+      const prompt = sectionSystemPrompt(section, "deep", { instructions });
+      expect(prompt).toContain("Write in British English.");
+      expect(prompt).toContain("Skip anything about crypto.");
+    }
+  });
+
+  it("is absent entirely when the reader has written none", () => {
+    expect(sectionSystemPrompt(lead, "deep")).not.toContain("Standing instructions");
+    expect(sectionSystemPrompt(lead, "deep", { instructions: "" })).not.toContain(
+      "Standing instructions",
+    );
+  });
+
+  it("leaves the section's own rules intact and above it", () => {
+    const plain = sectionSystemPrompt(desk, "deep");
+    const withInstructions = sectionSystemPrompt(desk, "deep", { instructions });
+    // Layered, not an override: the whole base prompt is still there, and the
+    // instructions are appended after it.
+    expect(withInstructions.startsWith(plain)).toBe(true);
+  });
+
+  it("says plainly that it cannot break the citation contract", () => {
+    const prompt = sectionSystemPrompt(desk, "deep", { instructions });
+    expect(prompt).toContain("do not override the rules above");
+    expect(prompt.indexOf("Never invent a number")).toBeLessThan(
+      prompt.indexOf("Standing instructions"),
+    );
+  });
+});
+
+describe("normalizeBriefInstructions", () => {
+  it("drops anything that is not text", () => {
+    expect(normalizeBriefInstructions(null)).toBe("");
+    expect(normalizeBriefInstructions(42)).toBe("");
+    expect(normalizeBriefInstructions("   ")).toBe("");
+  });
+
+  it("trims and bounds", () => {
+    expect(normalizeBriefInstructions("  be blunt  ")).toBe("be blunt");
+    expect(normalizeBriefInstructions("x".repeat(9000))).toHaveLength(MAX_BRIEF_INSTRUCTIONS);
+  });
+});
+
 describe("briefSettingsKey", () => {
+  it("changes when the instructions are rewritten", () => {
+    const base = briefSettingsKey("deep", [], []);
+    expect(briefSettingsKey("deep", [], [], "be blunt")).not.toBe(base);
+    expect(briefSettingsKey("deep", [], [], "be blunt")).not.toBe(
+      briefSettingsKey("deep", [], [], "be verbose"),
+    );
+  });
+
+  it("changes when a custom desk is added or retuned", () => {
+    const base = briefSettingsKey("deep", []);
+    const withDesk = briefSettingsKey("deep", [], [
+      { id: "custom:sg", label: "Singapore", desk: "Singapore", keywords: ["singapore"] },
+    ]);
+    const retuned = briefSettingsKey("deep", [], [
+      { id: "custom:sg", label: "Singapore", desk: "Singapore", keywords: ["singapore", "mas"] },
+    ]);
+    expect(withDesk).not.toBe(base);
+    expect(retuned).not.toBe(withDesk);
+  });
+
+  it("does not change with the order the desks happen to be stored in", () => {
+    const a = { id: "custom:a", label: "A", desk: "a", keywords: ["a"] };
+    const b = { id: "custom:b", label: "B", desk: "b", keywords: ["b"] };
+    expect(briefSettingsKey("deep", [], [a, b])).toBe(briefSettingsKey("deep", [], [b, a]));
+  });
+
   it("changes with the level and with the followed desks", () => {
     expect(briefSettingsKey("standard", [])).not.toBe(briefSettingsKey("deep", []));
     expect(briefSettingsKey("deep", ["ai"])).not.toBe(briefSettingsKey("deep", ["geopolitics"]));
@@ -312,8 +602,8 @@ describe("deskRefs", () => {
 describe("planBrief with clusters and externals", () => {
   it("annotates sections with their same-story groups", () => {
     const plan = planBrief(clusteredQueue(), { level: "deep" });
-    const skip = findSection(plan, "skip");
-    expect(skip?.stories).toEqual([{ refs: [1, 2, 3], sourceCount: 3 }]);
+    const desk = plan.sections.find((s) => s.topicId === "geopolitics");
+    expect(desk?.stories).toEqual([{ refs: [1, 2, 3], sourceCount: 3 }]);
   });
 
   it("adds an external section when candidates are supplied", () => {
@@ -388,7 +678,8 @@ describe("external section prompt", () => {
 describe("storyBlock", () => {
   it("states the groups once, not per member", () => {
     const plan = planBrief(clusteredQueue(), { level: "deep" });
-    const block = storyBlock(findSection(plan, "skip")!);
+    const desk = plan.sections.find((s) => s.topicId === "geopolitics")!;
+    const block = storyBlock(desk);
     expect(block).toContain("[1] [2] [3] — one story, 3 outlets");
     expect(block.match(/one story/g)).toHaveLength(1);
   });
@@ -396,6 +687,19 @@ describe("storyBlock", () => {
   it("is empty when no story has more than one telling", () => {
     const plan = planBrief(queue(), { level: "deep" });
     expect(storyBlock(findSection(plan, "skip")!)).toBe("");
+  });
+
+  it("reports the story's true spread, not just the refs that fit", () => {
+    // Retrieval keeps three tellings of a story six outlets ran. The brief
+    // still has to be able to say six — that is most of why it leads.
+    const items: PlanArticle[] = [
+      { title: "Wire copy one", clusterId: "big", storyFeeds: 6 },
+      { title: "Wire copy two", clusterId: "big", storyFeeds: 6 },
+      { title: "Wire copy three", clusterId: "big", storyFeeds: 6 },
+    ];
+    expect(storyGroupsFor(items, [1, 2, 3])).toEqual([
+      { refs: [1, 2, 3], sourceCount: 6 },
+    ]);
   });
 });
 

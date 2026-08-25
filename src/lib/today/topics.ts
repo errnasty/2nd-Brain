@@ -643,13 +643,172 @@ export const BRIEF_TOPICS: BriefTopic[] = [
 
 const TOPIC_BY_ID = new Map(BRIEF_TOPICS.map((t) => [t.id, t]));
 
+// ── Desks the reader defines themselves ─────────────────────────────────
+
+/**
+ * The built-in desks are a general-interest newsroom's, and they will never be
+ * anybody's exactly. A reader who follows Singapore, or semiconductor supply,
+ * or one company, has no desk for it: those articles scatter across
+ * Geopolitics, Markets and "Also in your queue" and never get written up as
+ * the thing they actually are.
+ *
+ * A custom desk is the same object as a built-in one — a label, a remit, and
+ * terms that claim an article — with two differences:
+ *
+ *   - every term the reader gives is STRONG, because they typed it on purpose.
+ *     The weak/strong split exists to stop ambient words ("model", "market")
+ *     from claiming articles, and a term somebody deliberately added is not
+ *     ambient by definition;
+ *   - a custom desk that clears the threshold WINS over any built-in that also
+ *     clears it (see `classifyArticle`). "Singapore tightens chip export rules"
+ *     scores well on Geopolitics too, and filing it there is exactly the
+ *     outcome the reader added a Singapore desk to prevent.
+ *
+ * Ids are namespaced so a custom desk can never collide with a built-in one,
+ * and so every consumer (settings, feedback rows, XP) can tell them apart
+ * without a lookup.
+ */
+export const CUSTOM_DESK_PREFIX = "custom:";
+
+/** Ceilings. Generous for a person, bounded for a prompt and a jsonb blob. */
+export const MAX_CUSTOM_DESKS = 8;
+export const MAX_CUSTOM_DESK_KEYWORDS = 30;
+const MAX_DESK_LABEL_CHARS = 40;
+const MAX_DESK_REMIT_CHARS = 240;
+const MAX_KEYWORD_CHARS = 40;
+
+export type CustomDesk = {
+  /** `custom:<slug>` — namespaced so it can never collide with a built-in. */
+  id: string;
+  label: string;
+  /** The desk's remit, handed to the model. Derived from the label when blank. */
+  desk: string;
+  /** Normalized match terms. Always at least one, or the desk is dropped. */
+  keywords: string[];
+};
+
+export function isCustomDeskId(id: string): boolean {
+  return id.startsWith(CUSTOM_DESK_PREFIX);
+}
+
+/**
+ * Terms are matched against the same normalized, space-padded haystack the
+ * built-in keywords are, so they have to go through the same transform:
+ * "South-East Asia" and "south east asia" must become the same term, or the
+ * one the reader typed with a hyphen would silently never match.
+ */
+export function normalizeKeyword(raw: string): string {
+  return normalize(raw).trim().slice(0, MAX_KEYWORD_CHARS).trim();
+}
+
+/** Stable id for a desk label. Same label ⇒ same id, across devices. */
+export function customDeskId(label: string): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/g, "");
+  return CUSTOM_DESK_PREFIX + (slug || "desk");
+}
+
+/**
+ * Validate whatever is sitting in the settings blob into desks the planner can
+ * use. Never throws and never returns a half-formed desk: this runs on every
+ * brief request, and a desk with no terms would silently claim nothing while
+ * still costing a section.
+ *
+ * The label doubles as a term when the reader gave none that survived — a desk
+ * called "Singapore" with an empty keyword box should still find Singapore.
+ */
+export function normalizeCustomDesks(v: unknown): CustomDesk[] {
+  if (!Array.isArray(v)) return [];
+  const out: CustomDesk[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!raw || typeof raw !== "object") continue;
+    const d = raw as Partial<CustomDesk> & { keywords?: unknown };
+    const label = typeof d.label === "string" ? d.label.trim().slice(0, MAX_DESK_LABEL_CHARS) : "";
+    if (!label) continue;
+    const id =
+      typeof d.id === "string" && isCustomDeskId(d.id) ? d.id.slice(0, 64) : customDeskId(label);
+    if (seen.has(id)) continue;
+
+    const terms = Array.isArray(d.keywords) ? d.keywords : [];
+    const keywords: string[] = [];
+    for (const t of terms) {
+      if (typeof t !== "string") continue;
+      const k = normalizeKeyword(t);
+      if (k && !keywords.includes(k)) keywords.push(k);
+      if (keywords.length >= MAX_CUSTOM_DESK_KEYWORDS) break;
+    }
+    if (keywords.length === 0) {
+      const fromLabel = normalizeKeyword(label);
+      if (!fromLabel) continue;
+      keywords.push(fromLabel);
+    }
+
+    const remit =
+      typeof d.desk === "string" && d.desk.trim()
+        ? d.desk.trim().slice(0, MAX_DESK_REMIT_CHARS)
+        : `${label} — anything in my queue that bears on it`;
+
+    seen.add(id);
+    out.push({ id, label, desk: remit, keywords });
+    if (out.length >= MAX_CUSTOM_DESKS) break;
+  }
+  return out;
+}
+
+/**
+ * A custom desk in the shape the classifier works with.
+ *
+ * Terms are re-normalized on the way through even though `normalizeCustomDesks`
+ * already did it. The classifier matches against a normalized haystack, so a
+ * term that skipped that transform silently matches NOTHING — a desk that looks
+ * saved, looks followed, and quietly claims no articles. Re-running a regex
+ * over at most a few dozen short strings is a much cheaper way to hold that
+ * invariant than trusting every future caller to have gone through the
+ * validator first.
+ */
+export function customDeskTopic(d: CustomDesk): BriefTopic {
+  return {
+    id: d.id,
+    label: d.label,
+    desk: d.desk,
+    strong: d.keywords.map(normalizeKeyword).filter(Boolean),
+    weak: [],
+  };
+}
+
+/**
+ * The desk list for one reader: their own desks first, then the built-ins.
+ *
+ * Order matters twice — it is the tie-break for equally-scored desks in
+ * `classifyArticle`, and the tie-break for equally-sized buckets in
+ * `groupByTopic` — and in both cases a desk somebody asked for should win a
+ * tie against one the app assumed.
+ */
+export function resolveDesks(custom?: CustomDesk[] | null): BriefTopic[] {
+  if (!custom || custom.length === 0) return BRIEF_TOPICS;
+  return [...custom.map(customDeskTopic), ...BRIEF_TOPICS];
+}
+
 /** Desk for an id, including the synthetic "other" desk. */
-export function topicLabel(id: string): string {
+export function topicLabel(id: string, desks: BriefTopic[] = BRIEF_TOPICS): string {
   if (id === OTHER_TOPIC_ID) return OTHER_TOPIC_LABEL;
+  if (desks !== BRIEF_TOPICS) {
+    const found = desks.find((t) => t.id === id);
+    if (found) return found.label;
+  }
   return TOPIC_BY_ID.get(id)?.label ?? id;
 }
 
-export function topicById(id: string): BriefTopic | null {
+export function topicById(id: string, desks: BriefTopic[] = BRIEF_TOPICS): BriefTopic | null {
+  if (desks !== BRIEF_TOPICS) {
+    const found = desks.find((t) => t.id === id);
+    if (found) return found;
+  }
   return TOPIC_BY_ID.get(id) ?? null;
 }
 
@@ -696,12 +855,15 @@ export type ClassifiableArticle = {
 };
 
 /** Per-desk score for one article. Exported for tests and for tuning. */
-export function scoreTopics(a: ClassifiableArticle): Map<string, number> {
+export function scoreTopics(
+  a: ClassifiableArticle,
+  desks: BriefTopic[] = BRIEF_TOPICS,
+): Map<string, number> {
   const title = normalize(a.title ?? "");
   const feed = normalize(a.feedTitle ?? "");
   const excerpt = normalize((a.excerpt ?? "").slice(0, EXCERPT_SCAN_CHARS));
   const scores = new Map<string, number>();
-  for (const t of BRIEF_TOPICS) {
+  for (const t of desks) {
     const score =
       TITLE_WEIGHT * (STRONG * hits(title, t.strong) + WEAK * hits(title, t.weak)) +
       FEED_WEIGHT * (STRONG * hits(feed, t.strong) + WEAK * hits(feed, t.weak)) +
@@ -713,20 +875,35 @@ export function scoreTopics(a: ClassifiableArticle): Map<string, number> {
 
 /**
  * The single desk an article belongs to, or `"other"`. Highest score wins;
- * ties break by desk order (world affairs, then AI, …) so the result is stable.
+ * ties break by desk order (the reader's own desks, then world affairs, then
+ * AI, …) so the result is stable.
+ *
+ * One asymmetry: among the desks that clear the threshold, a CUSTOM desk beats
+ * every built-in regardless of score. A reader who adds a Singapore desk is
+ * telling us where Singapore stories go, and "Singapore tightens chip export
+ * rules to Beijing" scores higher on Geopolitics than on any three-term desk
+ * ever could — so score alone would file it exactly where they added the desk
+ * to stop it going.
  */
-export function classifyArticle(a: ClassifiableArticle): string {
-  const scores = scoreTopics(a);
-  let bestId = OTHER_TOPIC_ID;
-  let best = 0;
-  for (const t of BRIEF_TOPICS) {
+export function classifyArticle(
+  a: ClassifiableArticle,
+  desks: BriefTopic[] = BRIEF_TOPICS,
+): string {
+  const scores = scoreTopics(a, desks);
+  const clearing = desks.filter((t) => (scores.get(t.id) ?? 0) >= MIN_SCORE);
+  if (clearing.length === 0) return OTHER_TOPIC_ID;
+  const custom = clearing.filter((t) => isCustomDeskId(t.id));
+  const pool = custom.length > 0 ? custom : clearing;
+  let bestId = pool[0].id;
+  let best = scores.get(bestId) ?? 0;
+  for (const t of pool) {
     const s = scores.get(t.id) ?? 0;
     if (s > best) {
       best = s;
       bestId = t.id;
     }
   }
-  return best >= MIN_SCORE ? bestId : OTHER_TOPIC_ID;
+  return bestId;
 }
 
 export type TopicBucket = {
@@ -737,29 +914,94 @@ export type TopicBucket = {
 };
 
 /**
+ * The desk each article belongs to, with every telling of one story landing on
+ * the SAME desk.
+ *
+ * Classifying tellings independently is where cross-desk duplication came
+ * from: "Fed holds rates" reads as Markets, "No change from the FOMC" reads as
+ * Policy, and the brief then wrote the same event up twice under two headings,
+ * each citing half the outlets. The cluster already knows they are one story,
+ * so the desk is decided once per story and applied to all its members.
+ *
+ * The vote ignores "other" unless every member landed there — one telling with
+ * a topical headline is better evidence of what a story IS than three wire
+ * stubs that mention nothing. Ties go to the earliest member, which in queue
+ * order is the hottest telling.
+ */
+function deskIdsFor(
+  items: ClassifiableArticle[],
+  desks: BriefTopic[],
+  clusterIds?: (string | null | undefined)[],
+): string[] {
+  const raw = items.map((a) => classifyArticle(a, desks));
+  if (!clusterIds) return raw;
+
+  const votes = new Map<string, Map<string, number>>();
+  const firstReal = new Map<string, string>();
+  raw.forEach((id, i) => {
+    const cluster = clusterIds[i];
+    if (!cluster) return;
+    let tally = votes.get(cluster);
+    if (!tally) votes.set(cluster, (tally = new Map()));
+    tally.set(id, (tally.get(id) ?? 0) + 1);
+    if (id !== OTHER_TOPIC_ID && !firstReal.has(cluster)) firstReal.set(cluster, id);
+  });
+
+  const winner = new Map<string, string>();
+  for (const [cluster, tally] of votes) {
+    const real = [...tally.entries()].filter(([id]) => id !== OTHER_TOPIC_ID);
+    const pool = real.length > 0 ? real : [...tally.entries()];
+    const fallback = firstReal.get(cluster);
+    let bestId = pool[0][0];
+    let bestCount = pool[0][1];
+    for (const [id, count] of pool) {
+      // Strictly greater, so a tie keeps the earliest member's desk — and when
+      // that member was unclassifiable, the first one that wasn't.
+      if (count > bestCount || (count === bestCount && id === fallback && bestId !== fallback)) {
+        bestId = id;
+        bestCount = count;
+      }
+    }
+    winner.set(cluster, bestId);
+  }
+
+  return raw.map((id, i) => {
+    const cluster = clusterIds[i];
+    return cluster ? (winner.get(cluster) ?? id) : id;
+  });
+}
+
+/**
  * Group articles into desks, ordered so the desks the user said they care about
  * come first, then the busiest ones. `refs` are 1-based indices into `items`,
  * matching the `[n]` numbering the brief cites, so every section can quote
  * numbers from the same map.
  *
  * "other" is always last: it exists to account for the queue, not to lead it.
+ *
+ * Pass `clusterIds` (parallel to `items`) to keep every telling of one story on
+ * one desk — see `deskIdsFor`. Pass `desks` to include the reader's own.
  */
 export function groupByTopic(
   items: ClassifiableArticle[],
-  opts: { priority?: string[] } = {},
+  opts: {
+    priority?: string[];
+    desks?: BriefTopic[];
+    clusterIds?: (string | null | undefined)[];
+  } = {},
 ): TopicBucket[] {
   const priority = opts.priority ?? [];
+  const desks = opts.desks ?? BRIEF_TOPICS;
   const byTopic = new Map<string, number[]>();
-  items.forEach((a, i) => {
-    const id = classifyArticle(a);
+  deskIdsFor(items, desks, opts.clusterIds).forEach((id, i) => {
     const refs = byTopic.get(id);
     if (refs) refs.push(i + 1);
     else byTopic.set(id, [i + 1]);
   });
 
-  const order = new Map(BRIEF_TOPICS.map((t, i) => [t.id, i]));
+  const order = new Map(desks.map((t, i) => [t.id, i]));
   return [...byTopic.entries()]
-    .map(([topicId, refs]) => ({ topicId, label: topicLabel(topicId), refs }))
+    .map(([topicId, refs]) => ({ topicId, label: topicLabel(topicId, desks), refs }))
     .sort((a, b) => {
       if (a.topicId === OTHER_TOPIC_ID) return 1;
       if (b.topicId === OTHER_TOPIC_ID) return -1;

@@ -30,15 +30,23 @@ const keyOf = (c: Pick<Citation, "n" | "prefix">) => `${c.prefix ?? ""}${c.n}`;
  * `onNavigate` handles in-app routing (so the click stays a client navigation);
  * citations marked `external` render as a normal new-tab anchor, because they
  * point at the open web rather than anything the app holds.
+ *
+ * `onInspect` opts a caller into a different behaviour for in-app citations:
+ * the chip reports the click instead of navigating, so the caller can answer
+ * "why is this here" before deciding to open anything. The Daily Brief uses it
+ * — it is the one surface that knows why each source was chosen. Ask does not,
+ * and keeps navigating on a tap, which is what it means there.
  */
 export function CitedMarkdown({
   children,
   citations,
   onNavigate,
+  onInspect,
 }: {
   children: string;
   citations: Citation[];
   onNavigate: (href: string) => void;
+  onInspect?: (citation: Citation, anchor: HTMLElement) => void;
 }) {
   const byKey = new Map(citations.map((c) => [keyOf(c), c]));
   const content =
@@ -71,9 +79,11 @@ export function CitedMarkdown({
           return (
             <button
               type="button"
-              onClick={() => onNavigate(c.href)}
+              onClick={(e) =>
+                onInspect ? onInspect(c, e.currentTarget) : onNavigate(c.href)
+              }
               className={className}
-              title={c.title ? `Open: ${c.title}` : "Open source"}
+              title={c.title ? (onInspect ? c.title : `Open: ${c.title}`) : "Open source"}
             >
               {kids}
             </button>

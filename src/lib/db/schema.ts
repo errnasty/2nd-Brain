@@ -1199,6 +1199,28 @@ export type UserSettingsData = {
   // these lead the brief and get a section first. Shallow-merge caveat: always
   // send the whole array. Additive jsonb key — no migration needed.
   briefTopics?: string[];
+  // Desks the user defined themselves ("Singapore", "Semiconductors", …), each
+  // with the terms that claim an article for it. Ids are namespaced `custom:`
+  // so they can sit alongside built-in desk ids in `briefTopics` and in the
+  // brief-feedback rows. Validated on read by normalizeCustomDesks() — the
+  // settings write path is a generic shallow merge and cannot police shape.
+  // Shallow-merge caveat: always send the whole array. Additive jsonb key.
+  customDesks?: { id: string; label: string; desk: string; keywords: string[] }[];
+  // Standing instructions applied to every section of the brief — voice,
+  // emphasis, what to leave out. Replaces the old whole-brief `systemPrompt`
+  // override, which lived in localStorage (so it never followed the reader to
+  // another device) and bypassed the sectioned brief entirely. Server-side, so
+  // it syncs. Additive jsonb key — no migration needed.
+  briefInstructions?: string;
+  // Stories the reader asked to keep following (src/lib/today/story-follow.ts).
+  // Bounded and self-expiring, so this never becomes a second desk list nobody
+  // remembers creating. Shallow-merge caveat: always send the whole array.
+  followedStories?: { title: string; followedAt: string; lastSeenAt: string }[];
+  // Bullets the reader marked as filed under the wrong desk
+  // (src/lib/today/desk-suggest.ts). Two jobs: the rejected desk stops claiming
+  // that story, and a run of corrections about the same subject becomes the
+  // suggestion to create a desk for it. Shallow-merge caveat: whole array.
+  briefMisfiles?: { title: string; deskId: string; at: string }[];
 };
 
 export const userSettings = pgTable(

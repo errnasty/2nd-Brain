@@ -47,18 +47,6 @@ export async function loadUserBrief(userId: string): Promise<StoredBrief | null>
   }
 }
 
-/** Reuse a stored brief only if it matches the current inputs exactly. */
-export async function getMatchingBrief(
-  userId: string,
-  fingerprint: string,
-  promptHash: string,
-): Promise<StoredBrief | null> {
-  const stored = await loadUserBrief(userId);
-  if (!stored) return null;
-  if (stored.fingerprint !== fingerprint || stored.promptHash !== promptHash) return null;
-  return stored;
-}
-
 /**
  * What the brief has told this user about, from the row that gets replaced
  * every time a brief is saved.

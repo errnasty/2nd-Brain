@@ -22,15 +22,35 @@
  *
  * `refs` are 1-based positions in the article list, so every section cites the
  * same `[n]` numbers and the client can link them to one shared source map.
+ * That list is itself a selection out of a much wider scan — see
+ * `brief-retrieval.ts`; planning takes it as given.
+ *
+ * ## Why nothing appears twice
+ *
+ * A brief that covers one story in the lead and again on a desk has wasted the
+ * reader's time twice over, and it was doing so through three separate routes.
+ * All three are closed here:
+ *
+ *   - two tellings of one story classifying onto different desks — fixed by
+ *     deciding the desk once per STORY (`groupByTopic`'s cluster vote);
+ *   - a desk re-covering what the lead just wrote up — fixed by `covered`,
+ *     which the client feeds back once the lead has streamed, since planning
+ *     cannot know which of the lead's ten candidates it chose;
+ *   - the quick-clear list offering back articles the brief already covered —
+ *     fixed by building it from what nothing else claimed.
  *
  * Pure and client-safe: the Today tab uses this to render the section outline
  * before any generation starts.
  */
 
 import {
+  BRIEF_TOPICS,
   OTHER_TOPIC_ID,
   groupByTopic,
+  topicLabel,
+  type BriefTopic,
   type ClassifiableArticle,
+  type CustomDesk,
 } from "./topics";
 import { continuingSince, matchRemembered, type RememberedStory } from "./story-memory";
 
@@ -46,7 +66,12 @@ export type LevelConfig = {
   label: string;
   /** One line for the depth picker. */
   blurb: string;
-  /** How many unread articles the plan considers at all. */
+  /**
+   * How wide the title-only scan goes before selection — see
+   * `brief-retrieval.ts`. This is how much of the queue the brief CONSIDERS.
+   */
+  scanLimit: number;
+  /** How many articles survive selection and get `[n]` numbers. */
   articleLimit: number;
   /** Plain-text chars per article sent to a desk section. */
   bodyChars: number;
@@ -76,6 +101,8 @@ export type LevelConfig = {
   includeSkip: boolean;
   /** Big stories from outside the user's feeds. 0 = section omitted. */
   externalPicks: number;
+  /** Cross-desk threads to draw out. 0 = section omitted. */
+  threadPicks: number;
 };
 
 /**
@@ -87,7 +114,8 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
   concise: {
     label: "Concise",
     blurb: "The lead and a quick-clear list. Two short passes.",
-    articleLimit: 50,
+    scanLimit: 250,
+    articleLimit: 60,
     bodyChars: 700,
     leadCandidates: 8,
     leadPicks: 3,
@@ -102,11 +130,15 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     includeOther: false,
     includeSkip: true,
     externalPicks: 0,
+    // Concise is the lead and a clear-out. A thread needs several stories on
+    // several desks, and at this depth there are no desks.
+    threadPicks: 0,
   },
   standard: {
     label: "Standard",
     blurb: "The lead, your five busiest desks, and what your feeds missed.",
-    articleLimit: 80,
+    scanLimit: 500,
+    articleLimit: 110,
     bodyChars: 900,
     leadCandidates: 10,
     leadPicks: 3,
@@ -121,11 +153,13 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     includeOther: false,
     includeSkip: true,
     externalPicks: 3,
+    threadPicks: 2,
   },
   deep: {
     label: "Deep",
     blurb: "Every desk with a write-up, tensions and open questions.",
-    articleLimit: 120,
+    scanLimit: 900,
+    articleLimit: 180,
     bodyChars: 1300,
     leadCandidates: 12,
     // Three, not four: the lead's ceiling is a time budget (see
@@ -136,13 +170,14 @@ export const BRIEF_LEVEL_CONFIG: Record<BriefLevel, LevelConfig> = {
     leadWatch: true,
     maxTopics: 8,
     minTopicSize: 1,
-    maxTopicRefs: 10,
+    maxTopicRefs: 12,
     topicBullets: 5,
     topicTension: true,
     topicOpenQuestion: true,
     includeOther: true,
     includeSkip: true,
     externalPicks: 5,
+    threadPicks: 3,
   },
 };
 
@@ -177,7 +212,7 @@ const SKIP_BULLET_WORDS = 14;
 /**
  * Quick-clear entries in a typical brief. Not the queue size: the section is
  * told to be conservative and only list what is genuinely skippable, so it
- * runs to a handful of lines whether the queue is 40 articles or 120.
+ * runs to a handful of lines however long the queue is.
  */
 const TYPICAL_SKIP_ITEMS = 6;
 
@@ -222,7 +257,7 @@ export function estimateBriefMinutes(level: BriefLevel, shape: BriefShape = {}):
   return Math.max(1, Math.round(estimateBriefWords(level, shape) / BRIEF_READING_WPM));
 }
 
-export type SectionKind = "lead" | "topic" | "skip" | "external";
+export type SectionKind = "lead" | "topic" | "skip" | "external" | "threads";
 
 /**
  * Refs that are the same real-world story, told by different outlets.
@@ -272,6 +307,17 @@ export type PlannedSection = {
   continuing?: ContinuingRef[];
   /** External stories, for the "you're missing" section only. */
   externals?: ExternalRef[];
+  /** Cross-desk threads, for the "threads" section only. */
+  threads?: PlannedThread[];
+};
+
+/** One thread the brief is asked to explain, as the section receives it. */
+export type PlannedThread = {
+  /** The shared vocabulary. What the thread is "about", before anyone writes it. */
+  terms: string[];
+  refs: number[];
+  /** Names of the desks it crosses — the reason this is worth a section. */
+  deskLabels: string[];
 };
 
 export type BriefPlan = {
@@ -290,6 +336,15 @@ export type PlanArticle = ClassifiableArticle & {
   trendScore?: number | null;
   /** The story cluster this article belongs to, when it has one. */
   clusterId?: string | null;
+  /**
+   * Distinct feeds carrying this article's story across the whole scan.
+   *
+   * Not the same as "how many of its tellings are in the queue": retrieval
+   * keeps at most three, so a wire report six outlets ran arrives as three
+   * refs. The brief should still be able to say six — that spread is most of
+   * why the story matters — so the true count rides along with the article.
+   */
+  storyFeeds?: number | null;
 };
 
 /** An external story as the planner receives it, before `[E n]` numbering. */
@@ -305,6 +360,7 @@ export type ExternalCandidate = {
 const LEAD_SECTION_LABEL = "The lead";
 const SKIP_SECTION_LABEL = "Quick clear";
 const EXTERNAL_SECTION_LABEL = "Outside your feeds";
+const THREADS_SECTION_LABEL = "Threads";
 
 /**
  * Group a set of refs by the story cluster they belong to, keeping only groups
@@ -323,7 +379,13 @@ export function storyGroupsFor(items: PlanArticle[], refs: number[]): StoryGroup
   }
   return [...byCluster.values()]
     .filter((group) => group.length > 1)
-    .map((group) => ({ refs: [...group].sort((a, b) => a - b), sourceCount: group.length }))
+    .map((group) => {
+      const sorted = [...group].sort((a, b) => a - b);
+      // The true spread when retrieval measured it, never less than the refs
+      // in hand — an under-count would be a claim the citation itself refutes.
+      const feeds = items[sorted[0] - 1]?.storyFeeds ?? 0;
+      return { refs: sorted, sourceCount: Math.max(sorted.length, feeds) };
+    })
     .sort((a, b) => a.refs[0] - b.refs[0]);
 }
 
@@ -384,11 +446,19 @@ function substanceScore(a: PlanArticle): number {
  */
 export function leadCandidateRefs(
   items: PlanArticle[],
-  opts: { priority?: string[]; count: number; deskWeights?: Record<string, number> },
+  opts: {
+    priority?: string[];
+    count: number;
+    deskWeights?: Record<string, number>;
+    desks?: BriefTopic[];
+  },
 ): number[] {
   const priority = new Set(opts.priority ?? []);
   const weights = opts.deskWeights ?? {};
-  const buckets = groupByTopic(items);
+  const buckets = groupByTopic(items, {
+    desks: opts.desks,
+    clusterIds: items.map((a) => a.clusterId),
+  });
   const topicOf = new Map<number, string>();
   for (const b of buckets) for (const ref of b.refs) topicOf.set(ref, b.topicId);
 
@@ -472,6 +542,61 @@ export function deskRefs(items: PlanArticle[], refs: number[], maxRefs: number):
 }
 
 /**
+ * Refs that must not be written up again, expanded to whole stories.
+ *
+ * The lead is generated first and alone, and what it actually chose is only
+ * known once it has been written — planning offers it ten candidates and it
+ * picks three. So the refs it cited come BACK from the client and every later
+ * section is planned without them.
+ *
+ * Expansion to the cluster is the part that matters. A lead item citing [3] has
+ * covered the story, not the telling: leaving [7] and [12] on a desk would
+ * reproduce exactly the duplication this exists to remove, one syndication hop
+ * away from where it was noticed.
+ */
+export function coveredRefs(items: PlanArticle[], refs: number[] | undefined): Set<number> {
+  const out = new Set<number>();
+  if (!refs || refs.length === 0) return out;
+  const clusters = new Set<string>();
+  for (const ref of refs) {
+    if (!Number.isInteger(ref) || ref < 1 || ref > items.length) continue;
+    out.add(ref);
+    const id = items[ref - 1]?.clusterId;
+    if (id) clusters.add(id);
+  }
+  if (clusters.size > 0) {
+    items.forEach((a, i) => {
+      if (a.clusterId && clusters.has(a.clusterId)) out.add(i + 1);
+    });
+  }
+  return out;
+}
+
+/**
+ * Titles the quick-clear list is shown.
+ *
+ * Everything the brief has already written up is removed first, which is the
+ * whole point: an article covered in the lead or on a desk is not a candidate
+ * for "you can mark this read without opening it" — it has just been read
+ * ABOUT. Listing it again was the most visible duplication in the brief,
+ * because it put the same story in front of the reader twice under two
+ * opposite framings.
+ *
+ * What is left is then capped. Quick clear is a list of headlines, so it used
+ * to scale with the whole queue; at the scan widths the brief now works at,
+ * uncapped it would quietly become the longest section in the document.
+ */
+const MAX_SKIP_REFS = 60;
+
+function skipRefs(total: number, written: Set<number>): number[] {
+  const out: number[] = [];
+  for (let ref = 1; ref <= total && out.length < MAX_SKIP_REFS; ref += 1) {
+    if (!written.has(ref)) out.push(ref);
+  }
+  return out;
+}
+
+/**
  * Build the section plan for a queue. No model, no network — this runs on every
  * Today load so the page can show the outline (and the desk counts) instantly,
  * then fill each section in.
@@ -486,6 +611,12 @@ export function planBrief(
     memory?: RememberedStory[];
     /** Desk verdicts, in [-1, 1]. See `brief-feedback.ts`. */
     deskWeights?: Record<string, number>;
+    /** The reader's full desk list — their own desks plus the built-ins. */
+    desks?: BriefTopic[];
+    /** Refs an earlier section already wrote up. See `coveredRefs`. */
+    covered?: number[];
+    /** Cross-desk threads found during retrieval — see `brief-retrieval.ts`. */
+    threads?: { terms: string[]; refs: number[]; deskIds: string[] }[];
     now?: Date;
   } = {},
 ): BriefPlan {
@@ -494,14 +625,18 @@ export function planBrief(
   const priority = opts.priority ?? [];
   const memory = opts.memory ?? [];
   const weights = opts.deskWeights ?? {};
+  const desks = opts.desks ?? BRIEF_TOPICS;
   const now = opts.now ?? new Date();
 
   if (items.length === 0) return { level, sections: [], desks: [] };
+
+  const covered = coveredRefs(items, opts.covered);
 
   const leadRefs = leadCandidateRefs(items, {
     priority,
     count: cfg.leadCandidates,
     deskWeights: weights,
+    desks,
   });
   const sections: PlannedSection[] = [
     {
@@ -519,7 +654,15 @@ export function planBrief(
     },
   ];
 
-  const buckets = groupByTopic(items, { priority });
+  // Cluster ids go in so every telling of one story lands on ONE desk. Without
+  // it the same event could be written up under two headings, each citing half
+  // the outlets, because two outlets phrased the headline differently enough to
+  // classify apart.
+  const buckets = groupByTopic(items, {
+    priority,
+    desks,
+    clusterIds: items.map((a) => a.clusterId),
+  });
   const eligible = buckets.filter(
     (b) =>
       b.refs.length >= cfg.minTopicSize && (b.topicId !== OTHER_TOPIC_ID || cfg.includeOther),
@@ -536,8 +679,26 @@ export function planBrief(
   const chosen = ranked.slice(0, cfg.maxTopics);
   const chosenIds = new Set(chosen.map((b) => b.topicId));
 
+  // Everything the brief writes up, so the quick-clear list can be told what is
+  // already dealt with rather than offering it back as skippable.
+  const writtenUp = new Set<number>(covered);
+
   for (const b of chosen) {
-    const refs = deskRefs(items, b.refs, cfg.maxTopicRefs);
+    // Covered refs come off BEFORE the cap, not after, so a desk whose top
+    // story went to the lead backfills with its next story instead of losing
+    // the slot. Dedup and coverage turn out to be the same edit.
+    const available = covered.size > 0 ? b.refs.filter((r) => !covered.has(r)) : b.refs;
+    const refs = deskRefs(items, available, cfg.maxTopicRefs);
+    // A desk the lead emptied keeps its section, with no refs.
+    //
+    // Dropping it here instead is tempting and wrong: the plan the client
+    // renders is built WITHOUT `covered` (the lead has not been written yet),
+    // so the client already holds a block for this desk and will ask for it by
+    // key. A planner that then denies the key turns a desk with nothing left to
+    // say into a section that fails to load. Keeping it means the two plans
+    // always have the same shape, and "nothing left" is answered in the
+    // protocol — see the empty-section short-circuit in the route.
+    for (const r of refs) writtenUp.add(r);
     sections.push({
       key: `topic:${b.topicId}`,
       kind: "topic",
@@ -549,16 +710,43 @@ export function planBrief(
     });
   }
 
+  // Threads go BEFORE the quick-clear list and after the desks, because that is
+  // where they make sense: they are about material the reader has just read,
+  // and they are the last thing in the brief that is actually reading.
+  const threads = (opts.threads ?? [])
+    .filter((t) => t.refs.length >= 2)
+    .slice(0, cfg.threadPicks);
+  if (cfg.threadPicks > 0 && threads.length > 0) {
+    sections.push({
+      key: "threads",
+      kind: "threads",
+      label: THREADS_SECTION_LABEL,
+      // Deliberately NOT filtered by `covered`, and deliberately not added to
+      // `writtenUp`. Every ref here has been covered already — that is the
+      // precondition, not a bug. The section's job is the line between them,
+      // which is the one thing a desk-by-desk brief can never say, and it is
+      // told in its prompt not to retell the stories themselves.
+      refs: [...new Set(threads.flatMap((t) => t.refs))].sort((a, b) => a - b),
+      threads: threads.map((t) => ({
+        terms: t.terms,
+        refs: t.refs,
+        deskLabels: t.deskIds.map((id) => topicLabel(id, desks)),
+      })),
+    });
+  }
+
   if (cfg.includeSkip) {
+    const refs = skipRefs(items.length, writtenUp);
     sections.push({
       key: "skip",
       kind: "skip",
       label: SKIP_SECTION_LABEL,
-      // Titles only, so the whole queue fits in one small call.
-      refs: items.map((_, i) => i + 1),
+      // Titles only, and only what no other section covered — so the section
+      // stays one small call and can never repeat the brief back at the reader.
+      refs,
       // Duplicate coverage is the most common reason an item is skippable, and
       // it's the one thing the model can't see from titles alone.
-      stories: storyGroupsFor(items, items.map((_, i) => i + 1)),
+      stories: storyGroupsFor(items, refs),
     });
   }
 
@@ -605,6 +793,25 @@ export function findSection(plan: BriefPlan, key: string): PlannedSection | null
  * matches what the user has asked for (they switched to Deep, or changed which
  * desks they follow) and should be regenerated.
  */
-export function briefSettingsKey(level: BriefLevel, priority: string[]): string {
-  return `sectioned/v1/${level}/${[...priority].join(",")}`;
+export function briefSettingsKey(
+  level: BriefLevel,
+  priority: string[],
+  customDesks: CustomDesk[] = [],
+  instructions: string = "",
+): string {
+  // Custom desks change the shape of the brief as directly as the depth level
+  // does — a new desk is a new section — so editing one has to invalidate a
+  // stored brief the same way switching to Deep does. Terms are included, not
+  // just ids: retuning a desk's keywords changes what it claims.
+  const custom = customDesks
+    .map((d) => `${d.id}:${d.keywords.join("|")}`)
+    .sort()
+    .join(";");
+  // Standing instructions are part of the brief's identity for the same reason:
+  // rewriting them changes every section, so a brief written under the old ones
+  // is no longer the brief the reader is asking for.
+  return `sectioned/v1/${level}/${[...priority].join(",")}${custom ? `/${custom}` : ""}${
+    instructions ? `/${instructions}` : ""
+  }`;
 }
+

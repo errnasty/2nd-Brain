@@ -1,4 +1,3 @@
-import { createHash } from "crypto";
 import { streamText } from "ai";
 import { aiAvailable } from "@/lib/ai/provider";
 import { quietReasoningOptions, withReasoningHeadroom } from "@/lib/ai/models";
@@ -6,7 +5,7 @@ import { resolveUserSmartModel } from "@/lib/ai/user-model";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
-import { getMatchingBrief, loadStoryMemory, saveUserBrief } from "@/lib/brief-cache";
+import { loadStoryMemory } from "@/lib/brief-cache";
 import { getUserSettings } from "@/lib/settings/store";
 import {
   BRIEF_LEVEL_CONFIG,
@@ -17,6 +16,13 @@ import {
   type BriefLevel,
 } from "@/lib/today/brief-plan";
 import {
+  normalizeCustomDesks,
+  resolveDesks,
+  topicLabel,
+  type BriefTopic,
+  type CustomDesk,
+} from "@/lib/today/topics";
+import {
   continuityBlock,
   externalBlock,
   readContextBlock,
@@ -25,26 +31,36 @@ import {
   sectionPreamble,
   sectionSystemPrompt,
   storyBlock,
+  threadBlock,
+  normalizeBriefInstructions,
 } from "@/lib/today/brief-prompts";
 import {
   bodyCharLimit,
   briefFingerprint,
   briefOrderFingerprint,
   briefSourceMap,
+  briefWhyMap,
   fetchBodies,
-  fetchPlanRows,
+  fetchBriefQueue,
   fetchReadContext,
   queueLimit,
-  stripHtml,
+  scanLimit,
   toArticleInputs,
   toPlanArticles,
   unreadBriefIds,
 } from "@/lib/today/brief-queue";
-import { BRIEFSOURCES_SENTINEL, USAGE_SENTINEL, briefStream } from "@/lib/today/brief-stream";
+import { EMPTY_SECTION_HEADER, briefStream } from "@/lib/today/brief-stream";
 import { loadDeskWeights } from "@/lib/today/feedback-store";
+import { loadEngagedTitles, loadFeedTrust } from "@/lib/today/reading-signals";
+import { followMatcher, normalizeFollowedStories, type FollowedStory } from "@/lib/today/story-follow";
+import {
+  isRuledOut,
+  normalizeMisfiles,
+  suggestDesks,
+  type MisfiledStory,
+} from "@/lib/today/desk-suggest";
 import { loadExternalStories } from "@/lib/trending/signals";
 import { TITLE_SHINGLE_THRESHOLD, jaccard, titleShingles } from "@/lib/trending/cluster";
-import type { BriefSourceRef } from "@/lib/db/schema";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -68,7 +84,11 @@ export const maxDuration = 60;
  *   GET  /api/brief            → cheap fingerprint of the unread set (drift check)
  *   GET  /api/brief?plan=1     → the section plan + source map, no model involved
  *   POST /api/brief            → generate ONE section (streamed)
- *   POST /api/brief {systemPrompt} → legacy single-pass brief with a custom prompt
+ *
+ * There is no whole-brief mode. Customization used to replace the entire
+ * generation with the reader's own prompt, which meant opting out of the plan
+ * and everything built on it; it is now standing instructions layered into each
+ * section's prompt instead — see `brief-prompts.ts`.
  */
 
 // Raw full_text cap in SQL — ~6× the plain-text budget leaves HTML headroom.
@@ -82,18 +102,70 @@ const RAW_FULLTEXT_MULTIPLIER = 6;
  */
 const READ_CONTEXT_LIMIT = 12;
 
+type BriefPrefs = {
+  level: BriefLevel;
+  priority: string[];
+  /** The reader's own desks, validated. */
+  customDesks: CustomDesk[];
+  /** Those desks plus the built-ins — what every classifier here works from. */
+  desks: BriefTopic[];
+  /** The reader's standing instructions, applied to every section. */
+  instructions: string;
+  /** Stories the reader asked to stay on. */
+  followedStories: FollowedStory[];
+  /** Desks the reader has ruled out, story by story. */
+  misfiles: MisfiledStory[];
+};
+
 /** The user's stored brief preferences, validated. */
-async function briefPrefs(userId: string): Promise<{ level: BriefLevel; priority: string[] }> {
+async function briefPrefs(userId: string): Promise<BriefPrefs> {
   try {
     const s = await getUserSettings(userId);
+    const customDesks = normalizeCustomDesks(s.customDesks);
     return {
       level: isBriefLevel(s.briefLevel) ? s.briefLevel : DEFAULT_BRIEF_LEVEL,
       priority: Array.isArray(s.briefTopics) ? s.briefTopics.filter((t) => typeof t === "string") : [],
+      customDesks,
+      desks: resolveDesks(customDesks),
+      instructions: normalizeBriefInstructions(s.briefInstructions),
+      followedStories: normalizeFollowedStories(s.followedStories),
+      misfiles: normalizeMisfiles(s.briefMisfiles),
     };
   } catch {
     // A settings hiccup must not stop the brief — fall back to the defaults.
-    return { level: DEFAULT_BRIEF_LEVEL, priority: [] };
+    return {
+      level: DEFAULT_BRIEF_LEVEL,
+      priority: [],
+      customDesks: [],
+      desks: resolveDesks(),
+      instructions: "",
+      followedStories: [],
+      misfiles: [],
+    };
   }
+}
+
+/**
+ * Everything selection is scored by, beyond the queue itself.
+ *
+ * Assembled in one place because every caller that has to agree about `[n]` —
+ * the plan, each section, the XP mapping, the drift check — must pass exactly
+ * the same set. A signal loaded by one and forgotten by another would select a
+ * different queue and shift every citation in the brief.
+ */
+async function selectionSignals(userId: string, prefs: BriefPrefs) {
+  const [deskWeights, feedTrust] = await Promise.all([
+    loadDeskWeights(userId),
+    loadFeedTrust(userId),
+  ]);
+  return {
+    priority: prefs.priority,
+    desks: prefs.desks,
+    deskWeights,
+    feedTrust,
+    isFollowed: followMatcher(prefs.followedStories),
+    ruledOut: (title: string, deskId: string) => isRuledOut(title, deskId, prefs.misfiles),
+  };
 }
 
 /**
@@ -118,11 +190,6 @@ export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const wantPlan = params.get("plan") === "1";
 
-  if (!wantPlan) {
-    const ids = await unreadBriefIds(userId, queueLimit(BRIEF_LEVEL_CONFIG.deep.articleLimit));
-    return Response.json({ fingerprint: briefFingerprint(ids), count: ids.length });
-  }
-
   const prefs = await briefPrefs(userId);
   // An explicit level wins over the stored one: the client passes the depth the
   // user just picked, so the plan doesn't lag a settings write by a round trip.
@@ -130,24 +197,83 @@ export async function GET(req: Request) {
   const level = isBriefLevel(levelParam) ? levelParam : prefs.level;
   const priority = prefs.priority;
   const cfg = BRIEF_LEVEL_CONFIG[level];
-  const [{ rows, windowLabel }, externals, memory, weights] = await Promise.all([
-    fetchPlanRows(userId, queueLimit(cfg.articleLimit)),
+
+  if (!wantPlan) {
+    // Selection decides WHICH articles are the queue, so the drift check has to
+    // run the same selection or it would compare two different sets and nudge
+    // forever. It stops short of the excerpt fetch — ids are all it looks at.
+    const ids = await unreadBriefIds(userId, {
+      limit: queueLimit(cfg.articleLimit),
+      scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
+      ...(await selectionSignals(userId, prefs)),
+    });
+    return Response.json({ fingerprint: briefFingerprint(ids), count: ids.length });
+  }
+
+  // Signals first, and in parallel with everything that doesn't depend on them:
+  // selection is scored by desk verdicts and feed trust, so the queue cannot be
+  // fetched until they are in hand.
+  const [signals, externals, memory, engagedTitles] = await Promise.all([
+    selectionSignals(userId, prefs),
     // Fail-soft and independent: no trending run yet, or all four public
     // signals down, simply means no "outside your feeds" section today.
     cfg.externalPicks > 0
       ? loadExternalStories(EXTERNAL_CANDIDATE_POOL).catch(() => [])
       : Promise.resolve([]),
     loadStoryMemory(userId),
-    loadDeskWeights(userId),
+    loadEngagedTitles(userId),
   ]);
+  const { rows, windowLabel, coverage, omitted, scanTitles, threads } = await fetchBriefQueue(
+    userId,
+    {
+      limit: queueLimit(cfg.articleLimit),
+      scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
+      ...signals,
+    },
+  );
   const plan = planBrief(toPlanArticles(rows), {
     level,
     priority,
-    externals: pickExternals(externals, rows, priority),
+    externals: pickExternals(externals, scanTitles, priority),
     memory,
-    deskWeights: weights,
+    deskWeights: signals.deskWeights,
+    desks: prefs.desks,
+    threads,
   });
   const ids = rows.map((r) => r.id);
+  // Stories the queue did not reach, by desk, so the Today tab can say what was
+  // left out rather than implying the brief saw everything.
+  const omittedByDesk = new Map(omitted.map((o) => [o.topicId, o]));
+  const deskRows = plan.desks.map((d) => ({
+    ...d,
+    omittedStories: omittedByDesk.get(d.topicId)?.stories ?? 0,
+    omittedArticles: omittedByDesk.get(d.topicId)?.articles ?? 0,
+  }));
+  // A desk with nothing at all in the queue does not appear in the plan's desk
+  // list, so a desk the budget skipped ENTIRELY would silently vanish from
+  // "also unread, not written up" — the one line whose job is to admit it.
+  const known = new Set(plan.desks.map((d) => d.topicId));
+  for (const o of omitted) {
+    if (known.has(o.topicId)) continue;
+    deskRows.push({
+      topicId: o.topicId,
+      label: topicLabel(o.topicId, prefs.desks),
+      count: 0,
+      included: false,
+      omittedStories: o.stories,
+      omittedArticles: o.articles,
+    });
+  }
+  // Which desk claimed each ref, from the plan's own buckets — the same answer
+  // the desk sections were built from, not a second guess at it.
+  const deskByRef = new Map<number, { id: string; label: string }>();
+  for (const section of plan.sections) {
+    if (section.kind !== "topic" || !section.topicId) continue;
+    for (const ref of section.refs) {
+      deskByRef.set(ref, { id: section.topicId, label: section.label });
+    }
+  }
+
   return Response.json({
     fingerprint: briefFingerprint(ids),
     order: briefOrderFingerprint(ids),
@@ -155,9 +281,24 @@ export async function GET(req: Request) {
     windowLabel,
     level,
     priority,
+    customDesks: prefs.customDesks,
+    instructions: prefs.instructions,
+    coverage,
     sections: plan.sections,
-    desks: plan.desks,
+    desks: deskRows,
     sources: briefSourceMap(rows),
+    why: briefWhyMap(rows, {
+      deskOf: (ref) => deskByRef.get(ref) ?? null,
+      isFollowed: signals.isFollowed,
+    }),
+    followedStories: prefs.followedStories,
+    // Offered inside the Desks menu, where the reader already goes to think
+    // about desks — never as a notification.
+    deskSuggestions: suggestDesks({
+      engagedTitles,
+      misfiles: prefs.misfiles,
+      desks: prefs.desks,
+    }),
   });
 }
 
@@ -187,11 +328,13 @@ function pickExternals(
     volume: number;
     sourceCount: number;
   }[],
-  rows: { title: string }[],
+  /** Every title the scan saw — not just the ones selection kept. A story
+   *  sitting unselected in the queue is still not a blind spot. */
+  ownedTitles: string[],
   priority: string[],
 ) {
   if (externals.length === 0) return [];
-  const owned = rows.map((r) => titleShingles(r.title));
+  const owned = ownedTitles.map((t) => titleShingles(t));
   const followed = new Set(priority);
 
   return externals
@@ -221,10 +364,25 @@ type PostBody = {
   fingerprint?: string;
   /** The id-ORDER fingerprint — catches a trending re-rank of the same set. */
   order?: string;
-  /** Legacy single-pass mode: the user's own framing for the whole brief. */
-  systemPrompt?: string;
-  force?: boolean;
+  /**
+   * Refs an earlier section of this same brief already wrote up.
+   *
+   * The client sends what the lead actually cited once the lead has finished
+   * streaming — planning can only offer the lead a shortlist, never know which
+   * of it was chosen. See `coveredRefs` in `brief-plan.ts`.
+   */
+  covered?: number[];
 };
+
+/** Bound the covered list: it is client-supplied and only ever refs. */
+const MAX_COVERED_REFS = 40;
+
+function validCovered(v: unknown): number[] {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n >= 1)
+    .slice(0, MAX_COVERED_REFS);
+}
 
 export async function POST(req: Request) {
   let auth;
@@ -262,12 +420,6 @@ export async function POST(req: Request) {
   } catch {
     // No body or invalid JSON — treat as a default sectioned request.
   }
-  const customPrompt =
-    typeof body.systemPrompt === "string" && body.systemPrompt.trim().length > 0
-      ? body.systemPrompt.trim()
-      : null;
-
-  if (customPrompt) return legacyBrief(user.id, customPrompt, body.force === true, req);
   return sectionBrief(user.id, body, req);
 }
 
@@ -297,12 +449,26 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
   const cfg = BRIEF_LEVEL_CONFIG[level];
   const bodyChars = bodyCharLimit(cfg.bodyChars);
 
-  // Plan against the LIGHT rows — no bodies. The pool is now up to 120
-  // articles while a section cites at most a dozen, so fetching every body to
-  // use ten of them would ship close to a megabyte out of Postgres on a request
-  // that also has to run a model call inside ten seconds. Bodies come after the
-  // section is known, for its refs only.
-  const { rows, windowLabel } = await fetchPlanRows(userId, queueLimit(cfg.articleLimit));
+  // Re-planned here rather than trusted from the client, so the continuity
+  // markers and desk ordering this section is generated under are the same ones
+  // the plan endpoint computed — same memory row, same verdicts, same queue.
+  // Signals come first because selection itself depends on them: a different
+  // weight would select a different queue and shift every `[n]`.
+  const [signals, memory] = await Promise.all([
+    selectionSignals(userId, prefs),
+    loadStoryMemory(userId),
+  ]);
+
+  // Plan against the LIGHT rows — no bodies. The queue runs to well over a
+  // hundred articles while a section cites at most a dozen, so fetching every
+  // body to use ten of them would ship close to a megabyte out of Postgres on a
+  // request that also has to run a model call. Bodies come after the section is
+  // known, for its refs only.
+  const { rows, windowLabel, coverage, scanTitles, threads } = await fetchBriefQueue(userId, {
+    limit: queueLimit(cfg.articleLimit),
+    scanLimit: scanLimit(cfg.scanLimit, cfg.articleLimit),
+    ...signals,
+  });
   if (rows.length === 0) {
     return new Response(
       "No unread articles to brief on. Add some feeds and sync them, then come back.",
@@ -332,25 +498,42 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     cfg.externalPicks > 0 && body.section === "external"
       ? pickExternals(
           await loadExternalStories(EXTERNAL_CANDIDATE_POOL).catch(() => []),
-          rows,
+          scanTitles,
           prefs.priority,
         )
       : [];
 
-  // Re-planned here rather than trusted from the client, so the continuity
-  // markers and desk ordering this section is generated under are the same ones
-  // the plan endpoint computed — same memory row, same verdicts, same queue.
-  const [memory, weights] = await Promise.all([loadStoryMemory(userId), loadDeskWeights(userId)]);
+  const covered = validCovered(body.covered);
   const plan = planBrief(planArticles, {
     level,
     priority: prefs.priority,
     externals,
     memory,
-    deskWeights: weights,
+    deskWeights: signals.deskWeights,
+    desks: prefs.desks,
+    threads,
+    covered,
   });
   const section = body.section ? findSection(plan, body.section) : plan.sections[0];
   if (!section) {
     return new Response("No such brief section", { status: 404 });
+  }
+
+  // Nothing left for this section to write about: everything on the desk was
+  // covered in the lead, or the whole queue was written up and the quick-clear
+  // list has no leftovers. Answered as an empty section rather than a model
+  // call about nothing — the client drops the block, so the reader sees a brief
+  // with one fewer heading instead of a heading over an apology.
+  if (section.kind !== "external" && section.refs.length === 0) {
+    return new Response("", {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "x-brief-fingerprint": fingerprint,
+        "x-brief-order": order,
+        "x-brief-section": section.key,
+        [EMPTY_SECTION_HEADER]: "1",
+      },
+    });
   }
 
   const deskCount = plan.desks.find((d) => d.topicId === section.topicId)?.count;
@@ -358,6 +541,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
     windowLabel,
     totalCount: rows.length,
     deskCount,
+    scannedCount: coverage.scanned,
   });
 
   // What the reader already went through today. Only for the sections that
@@ -368,7 +552,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
 
   let inputBlock: string;
   if (section.kind === "external") {
-    inputBlock = externalBlock(section);
+    inputBlock = externalBlock(section, prefs.desks);
   } else {
     // Skip works off titles alone, which is what makes covering the whole queue
     // in one call affordable — fetching 120 bodies for it would undo that.
@@ -382,6 +566,7 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
           );
     inputBlock = [
       sectionArticleBlock(section, toArticleInputs(rows, section.refs, bodies), level),
+      threadBlock(section),
       storyBlock(section),
       continuityBlock(section),
       readContextBlock(readContext),
@@ -403,6 +588,9 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
       system: sectionSystemPrompt(section, level, {
         readContext: readContext.length > 0,
         continuing: (section.continuing?.length ?? 0) > 0,
+        covered: covered.length > 0,
+        desks: prefs.desks,
+        instructions: prefs.instructions,
       }),
       messages: [
         {
@@ -437,114 +625,6 @@ async function sectionBrief(userId: string, body: PostBody, req: Request): Promi
       "x-brief-fingerprint": fingerprint,
       "x-brief-order": order,
       "x-brief-section": section.key,
-    },
-  });
-}
-
-/**
- * The pre-sectioned path, kept for users who wrote their own brief prompt: one
- * call, their framing, the whole queue. It can't be split into sections (only
- * the author knows what shape they asked for), so it also keeps the server-side
- * whole-brief cache that makes a reload free.
- */
-async function legacyBrief(
-  userId: string,
-  systemPrompt: string,
-  force: boolean,
-  req: Request,
-): Promise<Response> {
-  const bodyChars = bodyCharLimit(BRIEF_LEVEL_CONFIG.standard.bodyChars);
-  const { rows, windowLabel } = await fetchPlanRows(
-    userId,
-    queueLimit(BRIEF_LEVEL_CONFIG.standard.articleLimit),
-  );
-  if (rows.length === 0) {
-    return new Response(
-      "No unread articles to brief on. Add some feeds and sync them, then come back.",
-      { headers: { "content-type": "text/plain; charset=utf-8" } },
-    );
-  }
-
-  const fingerprint = briefFingerprint(rows.map((r) => r.id));
-  const sourceMap = briefSourceMap(rows);
-  const promptHash = createHash("sha1").update(systemPrompt).digest("base64");
-
-  if (!force) {
-    const hit = await getMatchingBrief(userId, fingerprint, promptHash);
-    if (hit) {
-      const cached =
-        `${hit.content}` +
-        `\n${BRIEFSOURCES_SENTINEL}${JSON.stringify(hit.sourceMap)}` +
-        `\n${USAGE_SENTINEL}${JSON.stringify(hit.usage)}`;
-      return new Response(cached, {
-        headers: {
-          "content-type": "text/plain; charset=utf-8",
-          "x-brief-fingerprint": fingerprint,
-          "x-brief-cache": "hit",
-        },
-      });
-    }
-  }
-
-  // The custom-prompt path briefs on the whole queue in one call, so unlike a
-  // section it genuinely does need every body.
-  const bodies = await fetchBodies(
-    userId,
-    rows.map((r) => r.id),
-    bodyChars * RAW_FULLTEXT_MULTIPLIER,
-  );
-  const articleBlock = rows
-    .map((r, i) => {
-      const raw = bodies.get(r.id) ?? r.excerpt ?? "";
-      const text = raw ? stripHtml(raw) : "";
-      const trimmed = text.length > bodyChars ? `${text.slice(0, bodyChars)}…` : text;
-      return `[${i + 1}] (${r.feedTitle}) ${r.title}\n${trimmed}`.trim();
-    })
-    .join("\n\n");
-
-  const resolved = await resolveUserSmartModel();
-  const result = streamText({
-    model: resolved.model,
-    system: systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `Articles to brief on:\n\n[Briefing window: ${windowLabel}, ${rows.length} unread articles]\n\n${articleBlock}`,
-            ...cacheControlFor(resolved),
-          },
-          { type: "text", text: "Write the daily brief now." },
-        ],
-      },
-    ],
-    temperature: 0.4,
-    abortSignal: req.signal,
-    // No output cap on this path, so reasoning can't starve the answer — but a
-    // whole brief of visible thinking still isn't what was asked for.
-    providerOptions: quietReasoningOptions(resolved.provider, resolved.id),
-  });
-
-  const stream = briefStream(result, {
-    recordUsage: (tokens) => void recordAiUsage(userId, tokens),
-    signal: req.signal,
-    sourceMap,
-    onDone: (content, usage) => {
-      if (!content.trim()) return;
-      void saveUserBrief(userId, {
-        fingerprint,
-        promptHash,
-        content,
-        sourceMap: sourceMap as BriefSourceRef[],
-        usage,
-      });
-    },
-  });
-  return new Response(stream, {
-    headers: {
-      "content-type": "text/plain; charset=utf-8",
-      "x-brief-fingerprint": fingerprint,
     },
   });
 }

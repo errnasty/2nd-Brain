@@ -20,6 +20,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { trendingRuns } from "@/lib/db/schema";
 import { getUserSettings } from "@/lib/settings/store";
+import { normalizeCustomDesks, type CustomDesk } from "@/lib/today/topics";
 import { computeTrendingForUser, decayStaleScores } from "./compute";
 import { refreshSignals, signalsAreStale } from "./signals";
 
@@ -69,15 +70,20 @@ async function usersToProcess(limit: number): Promise<string[]> {
   return rows.map((r) => r.user_id);
 }
 
-/** The desks this user follows, for the followed-desk boost. Never throws. */
-async function followedTopics(userId: string): Promise<string[]> {
+/** This user's desk preferences, for the followed-desk boost. Never throws. */
+async function deskPrefs(
+  userId: string,
+): Promise<{ followedTopics: string[]; customDesks: CustomDesk[] }> {
   try {
     const s = await getUserSettings(userId);
-    return Array.isArray(s.briefTopics)
-      ? s.briefTopics.filter((t): t is string => typeof t === "string")
-      : [];
+    return {
+      followedTopics: Array.isArray(s.briefTopics)
+        ? s.briefTopics.filter((t): t is string => typeof t === "string")
+        : [],
+      customDesks: normalizeCustomDesks(s.customDesks),
+    };
   } catch {
-    return [];
+    return { followedTopics: [], customDesks: [] };
   }
 }
 
@@ -153,8 +159,8 @@ export async function runTrending(now: Date = new Date()): Promise<TrendingRunSu
       break;
     }
     try {
-      const topics = await followedTopics(userId);
-      const result = await computeTrendingForUser(userId, { followedTopics: topics, now });
+      const prefs = await deskPrefs(userId);
+      const result = await computeTrendingForUser(userId, { ...prefs, now });
       summary.clusters += result.clusters;
       summary.scored += result.scored;
       summary.decayed += await decayStaleScores(userId, now);
@@ -184,8 +190,8 @@ export async function runTrendingForUser(userId: string): Promise<TrendingRunSum
     errors,
   };
   try {
-    const topics = await followedTopics(userId);
-    const result = await computeTrendingForUser(userId, { followedTopics: topics });
+    const prefs = await deskPrefs(userId);
+    const result = await computeTrendingForUser(userId, prefs);
     summary.clusters = result.clusters;
     summary.scored = result.scored;
     summary.decayed = await decayStaleScores(userId);
