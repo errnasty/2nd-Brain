@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, Loader2, Minimize2, MoreVertical, Pencil, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -21,11 +21,16 @@ import {
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   autoTagItemAction,
+  createNoteAction,
   deleteDirectoryItemAction,
   distillItemAction,
+  searchNoteTitlesAction,
   updateNoteAction,
   type ItemSummary,
 } from "@/app/(app)/directory/actions";
+import { NoteEditor } from "./note-editor";
+import { NoteOutline } from "./note-outline";
+import { extractHeadings, toggleTaskAtLine } from "@/lib/notes/markdown";
 import { editAssistAction } from "@/app/(app)/directory/ai-actions";
 import type { EditAssistMode } from "@/lib/ai/edit-assist";
 import { buildFlashcards } from "@/components/study/build-flashcards";
@@ -60,13 +65,19 @@ type FullItem = {
 
 type ArticleContent = { fullText: string | null; excerpt: string | null; url: string };
 
+/** ReactMarkdown hands each component the mdast node; we only need its source
+ *  line, which is what anchors headings and task checkboxes back to the text. */
+type MdNode = { position?: { start?: { line?: number } } };
+type MdNodeProps = React.HTMLAttributes<HTMLElement> & { node?: MdNode };
+type MdInputProps = React.InputHTMLAttributes<HTMLInputElement> & { node?: MdNode };
+
 const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
 
 /**
  * Turn [[Title]] / [[Title|alias]] into markdown links the ReactMarkdown `a`
- * handler routes to ?item=<id>. Resolved → app link; missing → a marker link
- * (#missing) the renderer styles dim/red. Square brackets escaped so stray
- * ones don't break markdown.
+ * handler routes to ?item=<id>. Resolved → app link; missing → a
+ * `#new-note:<title>` marker the renderer turns into a create-it button. The
+ * target title rides in the href because the visible label may be an alias.
  */
 function linkifyWikilinks(md: string, links: ResolvedLink[]): string {
   const byLower = new Map(links.map((l) => [l.title.toLowerCase(), l.id]));
@@ -75,7 +86,7 @@ function linkifyWikilinks(md: string, links: ResolvedLink[]): string {
     const label = (alias ?? title).trim();
     const id = byLower.get(title.toLowerCase()) ?? null;
     if (id) return `[${label}](?item=${id})`;
-    return `[${label}](#missing-wikilink)`;
+    return `[${label}](#new-note:${encodeURIComponent(title)})`;
   });
 }
 
@@ -116,6 +127,13 @@ export function ItemViewer({
   const [queryOpen, setQueryOpen] = useState(false);
   const [rabbitholeOpen, setRabbitholeOpen] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const scrollRootRef = useRef<HTMLDivElement>(null);
+  // Real elements rather than refs: child effects run before parent effects, so
+  // a ref written here would still read null when NoteOutline first looks.
+  const [viewportEl, setViewportEl] = useState<HTMLElement | null>(null);
+  const [noteBodyEl, setNoteBodyEl] = useState<HTMLElement | null>(null);
+  const [titleEl, setTitleEl] = useState<HTMLElement | null>(null);
+  const [titleStuck, setTitleStuck] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [distilling, setDistilling] = useState(false);
@@ -133,15 +151,40 @@ export function ItemViewer({
   const editedRef = useRef(false);
 
   // AI edit-assistant (rewrite/summarize/continue) state for the note editor.
-  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [selRange, setSelRange] = useState({ start: 0, end: 0 });
   const [assistBusy, setAssistBusy] = useState<EditAssistMode | null>(null);
   const assistSnapshotRef = useRef<string | null>(null);
 
-  function trackSelection(e: React.SyntheticEvent<HTMLTextAreaElement>) {
-    const el = e.currentTarget;
-    setSelRange({ start: el.selectionStart, end: el.selectionEnd });
-  }
+  // Radix nests its own scrolling div inside ScrollArea; that element, not the
+  // root, is the scroll container the outline observes.
+  useEffect(() => {
+    setViewportEl(
+      scrollRootRef.current?.querySelector<HTMLElement>("[data-radix-scroll-area-viewport]") ?? null,
+    );
+  }, [item?.id]);
+
+  // Slide the note title into the header once the real h1 scrolls out of view.
+  useEffect(() => {
+    if (!titleEl || !viewportEl) {
+      setTitleStuck(false);
+      return;
+    }
+    const io = new IntersectionObserver(([e]) => setTitleStuck(!e.isIntersecting), {
+      root: viewportEl,
+      threshold: 0,
+    });
+    io.observe(titleEl);
+    return () => io.disconnect();
+  }, [titleEl, viewportEl]);
+
+  /** Backs the editor's `[[` autocomplete. */
+  const searchTitles = useCallback(async (query: string) => {
+    try {
+      return await searchNoteTitlesAction(query);
+    } catch {
+      return [];
+    }
+  }, []);
 
   /** Fire-and-forget auto-tag for a note the user just finished editing.
    *  autoTagDirectoryItem already no-ops server-side if the item has tags, so
@@ -403,6 +446,37 @@ export function ItemViewer({
     });
   }
 
+  /** A [[Wikilink]] pointing at nothing: create that note and jump to it. */
+  function createMissingNote(target: string) {
+    const t = target.trim();
+    if (!t) return;
+    startTransition(async () => {
+      try {
+        const r = await createNoteAction({ title: t, folderId: null });
+        if (!r.ok) {
+          toast.error("Couldn't create that note");
+          return;
+        }
+        toast.success(`Created "${t}"`);
+        router.push(`/directory?item=${r.itemId}`);
+      } catch {
+        toast.error("Couldn't create that note");
+      }
+    });
+  }
+
+  /** Tick a `- [ ]` straight from the rendered note. The markdown source line
+   *  is the anchor, so the rest of the note is left byte-for-byte alone. */
+  function toggleTask(line: number) {
+    if (!item || !isNote) return;
+    const next = toggleTaskAtLine(content, line);
+    if (next === null) return;
+    setContent(next);
+    setDirty(true);
+    editedRef.current = true;
+    editBufRef.current = { id: item.id, kind: item.kind, title, content: next };
+  }
+
   function runAssist(mode: EditAssistMode) {
     if (!item || assistBusy) return;
     const { start, end } = selRange;
@@ -469,17 +543,53 @@ export function ItemViewer({
   const outgoing = full?.outgoingLinks ?? [];
   const backlinks = full?.backlinks ?? [];
 
+  // Outline anchors: keyed by source line, so the slug the outline jumps to and
+  // the id the renderer emits cannot drift apart. linkifyWikilinks only ever
+  // rewrites within a line, so line numbers survive it.
+  const headingSlugByLine = new Map(extractHeadings(content).map((h) => [h.line, h.slug]));
+
+  const heading = (Tag: "h1" | "h2" | "h3" | "h4") =>
+    function Heading({ node, children, ...props }: MdNodeProps) {
+      const slug = headingSlugByLine.get(node?.position?.start?.line ?? -1);
+      return (
+        <Tag id={slug} data-note-heading={slug} {...props}>
+          {children}
+        </Tag>
+      );
+    };
+
   // ReactMarkdown link handler: intercept wikilink hrefs and route them in-app.
   const mdComponents = {
+    h1: heading("h1"),
+    h2: heading("h2"),
+    h3: heading("h3"),
+    h4: heading("h4"),
+    input: ({ type, checked, node, ...props }: MdInputProps) => {
+      const line = node?.position?.start?.line;
+      if (type !== "checkbox" || !isNote || !line) {
+        return <input type={type} checked={checked} readOnly {...props} />;
+      }
+      return (
+        <input
+          type="checkbox"
+          checked={!!checked}
+          aria-label="Toggle task"
+          onChange={() => toggleTask(line)}
+        />
+      );
+    },
     a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement>) => {
-      if (href === "#missing-wikilink") {
+      if (href?.startsWith("#new-note:")) {
+        const target = decodeURIComponent(href.slice("#new-note:".length));
         return (
-          <span
-            className="rounded bg-destructive/10 px-1 text-destructive/80"
-            title="No matching item — create a note with this title"
+          <button
+            onClick={() => createMissingNote(target)}
+            title={`No note called "${target}" yet — click to create it`}
+            className="inline-flex items-baseline gap-0.5 rounded bg-muted px-1 text-muted-foreground underline decoration-dotted underline-offset-2 transition-colors hover:bg-accent hover:text-foreground"
           >
             {children}
-          </span>
+            <Plus className="h-3 w-3 self-center opacity-70" />
+          </button>
         );
       }
       if (href?.startsWith("?item=")) {
@@ -511,7 +621,13 @@ export function ItemViewer({
         </Button>
         <PaneToggles listCollapsed={listCollapsed} onToggleList={onToggleList} className="-ml-1 mr-0.5" />
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-          <span className="truncate">{item.kind.replace("_", " ")}</span>
+          {titleStuck && title ? (
+            <span className="truncate font-sans text-sm normal-case tracking-normal text-foreground">
+              {title}
+            </span>
+          ) : (
+            <span className="truncate">{item.kind.replace("_", " ")}</span>
+          )}
           <span className="hidden sm:inline">·</span>
           <span className="hidden sm:inline">{formatRelativeTime(item.updatedAt)}</span>
           {saving ? (
@@ -551,6 +667,26 @@ export function ItemViewer({
               <Eye className="mr-1 hidden h-3 w-3 sm:inline" /> Preview
             </button>
           </div>
+        )}
+
+        {/* Outline: a rail at xl+, a dropdown everywhere below that. */}
+        {isNote && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" title="Outline" className="xl:hidden">
+                <List className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="p-0">
+              <NoteOutline
+                content={content}
+                mode={mode}
+                bodyEl={noteBodyEl}
+                scrollEl={viewportEl}
+                variant="panel"
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
 
         {isArticle && (articleData?.url ?? full?.sourceUrl) && (
@@ -620,8 +756,15 @@ export function ItemViewer({
         </DropdownMenu>
       </div>
 
-      <ScrollArea className="min-w-0 flex-1">
-        <div ref={bodyRef} className="mx-auto w-full max-w-[68ch] break-words px-4 py-6 sm:px-6 sm:py-8">
+      <div className="flex min-h-0 min-w-0 flex-1">
+      <ScrollArea ref={scrollRootRef} className="min-w-0 flex-1">
+        <div
+          ref={bodyRef}
+          className={cn(
+            "mx-auto w-full break-words px-4 py-6 sm:px-6 sm:py-8",
+            isNote ? "max-w-[72ch]" : "max-w-[68ch]",
+          )}
+        >
           {/* Breadcrumb */}
           {full && (
             <nav
@@ -719,7 +862,12 @@ export function ItemViewer({
               placeholder="Title"
             />
           ) : (
-            <h1 className="editorial-display break-words text-3xl font-bold tracking-tight">{title}</h1>
+            <h1
+              ref={setTitleEl}
+              className="editorial-display break-words text-3xl font-bold tracking-tight"
+            >
+              {title}
+            </h1>
           )}
 
           <Separator className="my-6" />
@@ -782,26 +930,25 @@ export function ItemViewer({
                   Continue
                 </Button>
               </div>
-              <Textarea
-                ref={contentTextareaRef}
-                value={content}
-                onChange={(e) => {
-                  setContent(e.target.value);
-                  setDirty(true);
-                  editedRef.current = true;
-                  editBufRef.current = { id: item.id, kind: item.kind, title, content: e.target.value };
-                }}
-                onSelect={trackSelection}
-                onKeyUp={trackSelection}
-                onClick={trackSelection}
-                placeholder={"Start writing your note in Markdown…\n\n# Heading\n\nA list:\n- item one\n- item two\n\nLinks, **bold**, _italic_, `code`, all work."}
-                className="min-h-[60vh] resize-none border-0 px-0 text-[1.05rem] leading-[1.85] shadow-none focus-visible:ring-0"
-              />
+              <div ref={setNoteBodyEl} className="min-h-[60vh]">
+                <NoteEditor
+                  value={content}
+                  onChange={(next) => {
+                    setContent(next);
+                    setDirty(true);
+                    editedRef.current = true;
+                    editBufRef.current = { id: item.id, kind: item.kind, title, content: next };
+                  }}
+                  onSelectionChange={setSelRange}
+                  searchTitles={searchTitles}
+                  placeholder={"Start writing…  ⌘B bold · ⌘I italic · ⌘K link · [[ to link a note"}
+                />
+              </div>
             </>
           )}
 
           {isNote && mode === "preview" && (
-            <div className="prose-reader">
+            <div ref={setNoteBodyEl} className="prose-note">
               {content.trim() ? (
                 <Markdown components={mdComponents}>
                   {linkifyWikilinks(content, outgoing)}
@@ -885,6 +1032,17 @@ export function ItemViewer({
           )}
         </div>
       </ScrollArea>
+      {isNote && (
+        <NoteOutline
+          content={content}
+          mode={mode}
+          bodyEl={noteBodyEl}
+          scrollEl={viewportEl}
+          variant="rail"
+          className="hidden xl:flex"
+        />
+      )}
+      </div>
       <DocQueryPanel
         open={queryOpen}
         docId={item.id}
