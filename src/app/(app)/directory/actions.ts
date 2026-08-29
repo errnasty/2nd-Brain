@@ -1,6 +1,6 @@
 "use server";
 
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
@@ -1080,4 +1080,33 @@ export async function getDirectoryItemsByTagsAction(tagIds: string[]) {
     .where(and(eq(directoryItems.userId, user.id), inArray(directoryItems.id, ids)))
     .orderBy(desc(directoryItems.updatedAt))
     .limit(200);
+}
+
+/**
+ * Title lookup behind the note editor's `[[` autocomplete.
+ *
+ * Deliberately tiny: ids + titles only, capped at 12 rows, ordered so the most
+ * recently touched items surface first. An empty query returns recents, which
+ * is what you want the instant `[[` is typed.
+ */
+export async function searchNoteTitlesAction(query: string) {
+  const { user } = await requireUser();
+  const q = (query ?? "").trim().slice(0, 100);
+
+  const where = q
+    ? and(
+        eq(directoryItems.userId, user.id),
+        // Escape LIKE wildcards so a literal % or _ in a title still matches.
+        ilike(directoryItems.title, `%${q.replace(/[\%_]/g, "\$&")}%`),
+      )
+    : eq(directoryItems.userId, user.id);
+
+  const rows = await db
+    .select({ id: directoryItems.id, title: directoryItems.title, kind: directoryItems.kind })
+    .from(directoryItems)
+    .where(where)
+    .orderBy(desc(directoryItems.updatedAt))
+    .limit(12);
+
+  return rows;
 }

@@ -596,6 +596,151 @@
   }
 }
 
+/* ── Notes ──────────────────────────────────────────────────────────
+   A note is not an article. `.prose-reader` is tuned for long-form reading
+   (Georgia, 19px, 1.85 leading, generous list spacing) and applying it to a
+   note — bullets, headings, code, tasks — makes structured text read mushy
+   and endless. `.prose-note` is the same content at a working scale: sans,
+   16/1.6, tighter lists, smaller heading jumps.
+
+   Real CSS rather than utilities for the same reason documented on
+   `.prose-answer`: this file is loaded after `@tailwind utilities`, so at
+   equal specificity it wins on source order.
+   ─────────────────────────────────────────────────────────────────── */
+.prose-note {
+  font-family: var(--app-font-body, ui-sans-serif), system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  width: 100%;
+  max-width: 100%;
+  /* Long URLs and unbroken tokens must wrap, not push the pane sideways. */
+  overflow-wrap: break-word;
+}
+
+.prose-note h1,
+.prose-note h2,
+.prose-note h3,
+.prose-note h4 {
+  /* Anchor jumps from the outline must not tuck the heading under the header. */
+  scroll-margin-top: 1.5rem;
+}
+.prose-note h1 {
+  @apply text-2xl font-bold mt-8 mb-3;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+}
+.prose-note h2 {
+  @apply text-xl font-semibold mt-7 mb-2;
+  line-height: 1.3;
+  letter-spacing: -0.012em;
+}
+.prose-note h3 {
+  @apply text-[1.05rem] font-semibold mt-5 mb-1.5;
+}
+.prose-note h4 {
+  @apply text-[0.95rem] font-semibold uppercase tracking-wide text-muted-foreground mt-5 mb-1;
+}
+.prose-note p {
+  @apply my-3;
+}
+.prose-note a {
+  @apply underline underline-offset-2 decoration-border hover:decoration-foreground transition-colors;
+  color: inherit;
+}
+.prose-note strong {
+  @apply font-semibold;
+}
+.prose-note img {
+  @apply my-4 rounded-md max-w-full h-auto;
+}
+
+/* Callout, not a magazine pull-quote — notes quote sources, they don't emote. */
+.prose-note blockquote {
+  @apply my-4 rounded-r-md border-l-[3px] border-border bg-muted/40 py-2 pl-4 pr-3 text-muted-foreground;
+}
+.prose-note blockquote p {
+  @apply my-1;
+}
+
+.prose-note code {
+  @apply bg-muted px-1.5 py-0.5 rounded text-[0.85em];
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.prose-note pre {
+  @apply my-4 overflow-x-auto rounded-md border border-border bg-muted p-3;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.prose-note pre code {
+  @apply bg-transparent p-0;
+  font-size: inherit;
+}
+
+.prose-note ul {
+  @apply list-disc pl-5 my-3;
+}
+.prose-note ol {
+  @apply list-decimal pl-5 my-3;
+}
+.prose-note li {
+  @apply my-1;
+}
+.prose-note li > p {
+  @apply my-1;
+}
+/* Nested lists hug their parent instead of restarting the rhythm. */
+.prose-note li > ul,
+.prose-note li > ol {
+  @apply my-1;
+}
+
+/* Task lists: real, clickable checkboxes rather than decoration. */
+.prose-note li:has(> input[type="checkbox"]) {
+  @apply list-none -ml-5;
+}
+.prose-note input[type="checkbox"] {
+  @apply mr-2 h-[0.95em] w-[0.95em] cursor-pointer rounded-sm border-border align-[-0.1em];
+  accent-color: hsl(var(--brand, var(--primary)));
+}
+/* A ticked item recedes so the open ones carry the eye. */
+.prose-note li:has(> input[type="checkbox"]:checked) {
+  @apply text-muted-foreground;
+}
+
+.prose-note hr {
+  @apply border-border my-6;
+}
+.prose-note table {
+  @apply my-4 w-full border-collapse text-[0.925em];
+}
+.prose-note th {
+  @apply border-b-2 border-border px-2 py-1.5 text-left font-semibold;
+}
+.prose-note td {
+  @apply border-b border-border px-2 py-1.5 align-top;
+}
+.prose-note tr:last-child td {
+  @apply border-b-0;
+}
+
+/* Phones: one step down, and lists lose the indent they can't afford. */
+@media (max-width: 640px) {
+  .prose-note {
+    font-size: 15.5px;
+    line-height: 1.58;
+  }
+  .prose-note h1 {
+    @apply text-xl mt-6;
+  }
+  .prose-note h2 {
+    @apply text-lg mt-5;
+  }
+  .prose-note ul,
+  .prose-note ol {
+    @apply pl-4;
+  }
+}
+
 /* ── Brief markdown overrides ───────────────────────────────────────
    The Daily Brief content streams as Markdown. Promote the H3 section
    markers ("### High-Priority") into editorial section dividers and
