@@ -20,6 +20,9 @@ export type NoteEditorProps = {
   placeholder?: string;
   autoFocus?: boolean;
   className?: string;
+  /** Touch only: the formatting bar's "done" button. Dismisses the keyboard —
+   *  wire it to whatever leaves edit mode. */
+  onDone?: () => void;
 };
 
 // CodeMirror is ~45KB gzipped and only ever needed once someone edits a note,

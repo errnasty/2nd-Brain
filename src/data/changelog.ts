@@ -32,13 +32,15 @@ export const CHANGELOG: ChangelogEntry[] = [
     title: "Notes that read like notes",
     tag: "feature",
     summary:
-      "Writing a note used to mean typing into a plain box, and reading one meant reading it at newspaper size. Both have been rebuilt: the editor now formats as you type, and notes are set at a scale meant for headings, bullets and code rather than long-form articles.",
+      "Writing a note used to mean typing into a plain box, and reading one meant reading it at newspaper size. Both have been rebuilt on every screen: the editor now formats as you type, notes are set at a scale meant for headings, bullets and code rather than long-form articles, and on a phone the tools sit where your thumb already is.",
     items: [
       "Formatting as you write: bold, italic and headings show their real shape instead of their asterisks and hashes. Put the cursor on a line and the raw Markdown comes back, so nothing is ever hidden from you.",
       "Shortcuts that work: Cmd/Ctrl+B for bold, +I for italic, +K to turn a selection into a link, +E for code. Enter carries on a list, a numbered list, a quote or a checklist; Tab and Shift+Tab indent inside one.",
       "Linking without remembering: type [[ and pick from your own titles. A link to a note you have not written yet is now a button that writes it and takes you there.",
       "An outline for long notes: your headings become a jump list, following along as you scroll, with a live word count and reading time. It sits beside wide notes and behind a button on narrower screens.",
       "Checkboxes you can tick: a checklist in a note is now clickable where you read it, and the title stays with you in the bar once you scroll past it.",
+      "On a phone: a formatting strip rides just above the keyboard — headings, bold, lists, checklists, quotes, code, links and undo — so none of it depends on a keyboard shortcut you cannot press. Done takes you back to reading.",
+      "Also on a phone: switching between writing and reading is a button under your thumb rather than a reach to the top corner, titles and spacing are sized for the screen, and what a note links back from is tucked away until you ask for it.",
     ],
   },
   {

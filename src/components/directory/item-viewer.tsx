@@ -140,6 +140,8 @@ export function ItemViewer({
   const [makingCards, setMakingCards] = useState(false);
   const [makingQuiz, setMakingQuiz] = useState(false);
   const [essenceOpen, setEssenceOpen] = useState(true);
+  // Phone only — at sm+ the list is always shown and the header is inert.
+  const [backlinksOpen, setBacklinksOpen] = useState(false);
   const lastSavedRef = useRef<{ title: string; content: string }>({ title: "", content: "" });
   // Mirrors the live editable buffer so we can flush a pending edit immediately
   // when switching items / closing / unloading — refs survive the re-render that
@@ -477,6 +479,12 @@ export function ItemViewer({
     editBufRef.current = { id: item.id, kind: item.kind, title, content: next };
   }
 
+  /** Leave edit mode, giving the note its one auto-tag pass on the way out. */
+  function leaveEdit() {
+    setMode("preview");
+    if (item) maybeAutoTag(item.id, item.kind, content);
+  }
+
   function runAssist(mode: EditAssistMode) {
     if (!item || assistBusy) return;
     const { start, end } = selRange;
@@ -640,7 +648,12 @@ export function ItemViewer({
         </div>
 
         {(isNote || isDoc) && (
-          <div className="flex shrink-0 items-center rounded-md border border-border p-0.5">
+          <div
+            className={cn(
+              "shrink-0 items-center rounded-md border border-border p-0.5",
+              isNote ? "hidden sm:flex" : "flex",
+            )}
+          >
             <button
               onClick={() => setMode("edit")}
               className={cn(
@@ -653,10 +666,7 @@ export function ItemViewer({
               <Pencil className="mr-1 hidden h-3 w-3 sm:inline" /> Edit
             </button>
             <button
-              onClick={() => {
-                setMode("preview");
-                if (item) maybeAutoTag(item.id, item.kind, content);
-              }}
+              onClick={leaveEdit}
               className={cn(
                 "rounded px-2 py-0.5 text-xs transition-colors",
                 mode === "preview"
@@ -762,7 +772,7 @@ export function ItemViewer({
           ref={bodyRef}
           className={cn(
             "mx-auto w-full break-words px-4 py-6 sm:px-6 sm:py-8",
-            isNote ? "max-w-[72ch]" : "max-w-[68ch]",
+            isNote ? "max-w-[72ch] pb-28 sm:pb-8" : "max-w-[68ch]",
           )}
         >
           {/* Breadcrumb */}
@@ -858,19 +868,19 @@ export function ItemViewer({
                 if (item.kind === "user_note") editedRef.current = true;
                 editBufRef.current = { id: item.id, kind: item.kind, title: e.target.value, content };
               }}
-              className="editorial-display border-0 px-0 text-3xl font-bold tracking-tight shadow-none focus-visible:ring-0"
+              className="editorial-display border-0 px-0 text-2xl font-bold tracking-tight shadow-none focus-visible:ring-0 sm:text-3xl"
               placeholder="Title"
             />
           ) : (
             <h1
               ref={setTitleEl}
-              className="editorial-display break-words text-3xl font-bold tracking-tight"
+              className="editorial-display break-words text-2xl font-bold tracking-tight sm:text-3xl"
             >
               {title}
             </h1>
           )}
 
-          <Separator className="my-6" />
+          <Separator className="my-4 sm:my-6" />
 
           {/* Body */}
           {fullLoading && !isNote && (
@@ -883,11 +893,11 @@ export function ItemViewer({
 
           {isNote && mode === "edit" && (
             <>
-              <div className="not-prose mb-2 flex items-center gap-1.5">
+              <div className="not-prose -mx-4 mb-2 flex items-center gap-1.5 overflow-x-auto px-4 pb-1 [scrollbar-width:none] sm:mx-0 sm:overflow-visible sm:px-0 sm:pb-0 [&::-webkit-scrollbar]:hidden">
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-7 gap-1.5 px-2 text-xs"
+                  className="h-7 shrink-0 gap-1.5 px-2 text-xs"
                   onClick={() => runAssist("rewrite")}
                   disabled={assistBusy !== null}
                   title="Rewrite the selected text"
@@ -902,7 +912,7 @@ export function ItemViewer({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-7 gap-1.5 px-2 text-xs"
+                  className="h-7 shrink-0 gap-1.5 px-2 text-xs"
                   onClick={() => runAssist("summarize")}
                   disabled={assistBusy !== null}
                   title="Summarize the selected text"
@@ -917,7 +927,7 @@ export function ItemViewer({
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-7 gap-1.5 px-2 text-xs"
+                  className="h-7 shrink-0 gap-1.5 px-2 text-xs"
                   onClick={() => runAssist("continue")}
                   disabled={assistBusy !== null}
                   title="Continue writing from the cursor"
@@ -941,6 +951,7 @@ export function ItemViewer({
                   }}
                   onSelectionChange={setSelRange}
                   searchTitles={searchTitles}
+                  onDone={leaveEdit}
                   placeholder={"Start writing…  ⌘B bold · ⌘I italic · ⌘K link · [[ to link a note"}
                 />
               </div>
@@ -1012,10 +1023,16 @@ export function ItemViewer({
           {/* Backlinks — items that link here via [[…]] */}
           {!fullLoading && backlinks.length > 0 && (
             <div className="not-prose mt-10 border-t border-border pt-4">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <button
+                onClick={() => setBacklinksOpen((v) => !v)}
+                className="mb-2 flex w-full items-center gap-1.5 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:pointer-events-none"
+              >
                 Linked from ({backlinks.length})
-              </div>
-              <ul className="space-y-1">
+                <ChevronDown
+                  className={cn("h-3.5 w-3.5 transition-transform sm:hidden", !backlinksOpen && "-rotate-90")}
+                />
+              </button>
+              <ul className={cn("space-y-1", !backlinksOpen && "hidden sm:block")}>
                 {backlinks.map((b) => (
                   <li key={b.id}>
                     <button
@@ -1043,6 +1060,21 @@ export function ItemViewer({
         />
       )}
       </div>
+
+      {/* Phone: the mode switch lives where a thumb actually reaches. It sits
+          below the formatting bar, which takes over while the keyboard is up. */}
+      {isNote && (
+        <button
+          onClick={() => (mode === "edit" ? leaveEdit() : setMode("edit"))}
+          title={mode === "edit" ? "Preview" : "Edit"}
+          aria-label={mode === "edit" ? "Preview" : "Edit"}
+          className="fixed right-4 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-lg active:bg-accent sm:hidden"
+          style={{ bottom: "calc(4.25rem + env(safe-area-inset-bottom))" }}
+        >
+          {mode === "edit" ? <Eye className="h-5 w-5" /> : <Pencil className="h-5 w-5" />}
+        </button>
+      )}
+
       <DocQueryPanel
         open={queryOpen}
         docId={item.id}

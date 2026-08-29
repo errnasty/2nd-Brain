@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { EditorState, Prec, type Extension, type Range } from "@codemirror/state";
 import {
   Decoration,
@@ -12,18 +12,29 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { HighlightStyle, indentUnit, syntaxHighlighting, syntaxTree } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { insertNewlineContinueMarkup, markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import {
   autocompletion,
   closeBrackets,
-  startCompletion,
   type Completion,
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
 import { tags as t } from "@lezer/highlight";
 import type { NoteEditorProps, TitleSuggestion } from "./note-editor";
+import { NoteFormatBar } from "./note-format-bar";
+import {
+  cycleHeading,
+  insertLink,
+  insertWikilink,
+  shiftTabIndent,
+  tabIndent,
+  toggleBullet,
+  toggleQuote,
+  toggleTaskLine,
+  toggleWrap,
+} from "./note-commands";
 
 /* ── Live preview ─────────────────────────────────────────────────────
    Obsidian-style: the document is always literal markdown (that text is what
@@ -167,110 +178,6 @@ const livePreview = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations },
 );
 
-/* ── Formatting commands ─────────────────────────────────────────────── */
-
-/** Toggle a symmetric wrapper (`**`, `_`, `` ` ``) around the selection. */
-function toggleWrap(before: string, after = before) {
-  return (view: EditorView): boolean => {
-    const { state } = view;
-    const r = state.selection.main;
-    const bLen = before.length;
-    const aLen = after.length;
-    const selected = state.sliceDoc(r.from, r.to);
-
-    // Markers inside the selection → unwrap.
-    if (selected.length >= bLen + aLen && selected.startsWith(before) && selected.endsWith(after)) {
-      const inner = selected.slice(bLen, selected.length - aLen);
-      view.dispatch({
-        changes: { from: r.from, to: r.to, insert: inner },
-        selection: { anchor: r.from, head: r.from + inner.length },
-        userEvent: "input",
-      });
-      return true;
-    }
-
-    // Markers hugging the selection → unwrap those instead.
-    const outerBefore = state.sliceDoc(Math.max(0, r.from - bLen), r.from);
-    const outerAfter = state.sliceDoc(r.to, Math.min(state.doc.length, r.to + aLen));
-    if (outerBefore === before && outerAfter === after) {
-      view.dispatch({
-        changes: [
-          { from: r.from - bLen, to: r.from },
-          { from: r.to, to: r.to + aLen },
-        ],
-        selection: { anchor: r.from - bLen, head: r.to - bLen },
-        userEvent: "input",
-      });
-      return true;
-    }
-
-    view.dispatch({
-      changes: [
-        { from: r.from, insert: before },
-        { from: r.to, insert: after },
-      ],
-      selection: r.empty
-        ? { anchor: r.from + bLen }
-        : { anchor: r.from + bLen, head: r.to + bLen },
-      scrollIntoView: true,
-      userEvent: "input",
-    });
-    return true;
-  };
-}
-
-/** Cmd/Ctrl+K — wrap the selection as a link, cursor left where you'd type. */
-function insertLink(view: EditorView): boolean {
-  const { state } = view;
-  const r = state.selection.main;
-  const selected = state.sliceDoc(r.from, r.to).trim();
-  const looksLikeUrl = /^(https?:\/\/|mailto:)\S+$/i.test(selected);
-  const text = looksLikeUrl ? "" : selected;
-  const url = looksLikeUrl ? selected : "";
-  const insert = `[${text}](${url})`;
-  // Cursor into the empty half: the URL when we have text, the text otherwise.
-  const anchor = looksLikeUrl ? r.from + 1 : r.from + text.length + 3;
-  view.dispatch({
-    changes: { from: r.from, to: r.to, insert },
-    selection: { anchor },
-    scrollIntoView: true,
-    userEvent: "input",
-  });
-  return true;
-}
-
-/** Cmd/Ctrl+Shift+K — start a `[[wikilink]]` and open the title picker. */
-function insertWikilink(view: EditorView): boolean {
-  const r = view.state.selection.main;
-  const selected = view.state.sliceDoc(r.from, r.to);
-  view.dispatch({
-    changes: { from: r.from, to: r.to, insert: `[[${selected}]]` },
-    selection: { anchor: r.from + 2 + selected.length },
-    scrollIntoView: true,
-    userEvent: "input",
-  });
-  startCompletion(view);
-  return true;
-}
-
-const LIST_LINE_RE = /^\s*(?:[-*+]|\d+[.)])\s/;
-
-/** Tab indents list items. Outside a list with no selection it does nothing,
- *  so Tab still moves focus out of the editor for keyboard users. */
-function tabIndent(view: EditorView): boolean {
-  const r = view.state.selection.main;
-  const line = view.state.doc.lineAt(r.head);
-  if (r.empty && !LIST_LINE_RE.test(line.text)) return false;
-  return indentMore(view);
-}
-
-function shiftTabIndent(view: EditorView): boolean {
-  const r = view.state.selection.main;
-  const line = view.state.doc.lineAt(r.head);
-  if (r.empty && !LIST_LINE_RE.test(line.text)) return false;
-  return indentLess(view);
-}
-
 /* ── Wikilink autocomplete ───────────────────────────────────────────── */
 
 function wikilinkCompletions(
@@ -394,9 +301,18 @@ export default function NoteEditorImpl({
   placeholder,
   autoFocus = false,
   className,
+  onDone,
 }: NoteEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  // The formatting bar needs the live view and the focus state to render, so
+  // both have to be state rather than refs.
+  const [view, setView] = useState<EditorView | null>(null);
+  const [focused, setFocused] = useState(false);
+  // Pointer class doesn't change mid-session; resolve it once.
+  const [coarse] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches,
+  );
 
   // Callbacks live in refs so a re-render never tears down the editor (which
   // would lose undo history, scroll position and the caret).
@@ -431,6 +347,10 @@ export default function NoteEditorImpl({
           { key: "Mod-e", run: toggleWrap("`"), preventDefault: true },
           { key: "Mod-k", run: insertLink, preventDefault: true },
           { key: "Mod-Shift-k", run: insertWikilink, preventDefault: true },
+          { key: "Mod-Alt-1", run: cycleHeading, preventDefault: true },
+          { key: "Mod-Shift-8", run: toggleBullet, preventDefault: true },
+          { key: "Mod-Shift-9", run: toggleTaskLine, preventDefault: true },
+          { key: "Mod-Shift-.", run: toggleQuote, preventDefault: true },
           { key: "Tab", run: tabIndent },
           { key: "Shift-Tab", run: shiftTabIndent },
         ]),
@@ -438,6 +358,7 @@ export default function NoteEditorImpl({
       keymap.of([...historyKeymap, ...defaultKeymap]),
       theme,
       EditorView.updateListener.of((u) => {
+        if (u.focusChanged) setFocused(u.view.hasFocus);
         if (u.docChanged) onChangeRef.current(u.state.doc.toString());
         if (u.docChanged || u.selectionSet) {
           const r = u.state.selection.main;
@@ -452,11 +373,14 @@ export default function NoteEditorImpl({
       parent: hostRef.current,
     });
     viewRef.current = view;
+    setView(view);
     if (autoFocus) view.focus();
 
     return () => {
       view.destroy();
       viewRef.current = null;
+      setView(null);
+      setFocused(false);
     };
     // Built once per mount. `value` is synced by the effect below; rebuilding
     // on every keystroke would destroy undo history.
@@ -492,5 +416,10 @@ export default function NoteEditorImpl({
     });
   }, [value]);
 
-  return <div ref={hostRef} className={className} />;
+  return (
+    <>
+      <div ref={hostRef} className={className} />
+      <NoteFormatBar view={view} visible={coarse && focused} onDone={onDone} />
+    </>
+  );
 }
