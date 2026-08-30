@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightCircle, Brain, ChevronDown, Tag, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -146,6 +146,7 @@ export function ItemViewer({
   const [distilling, setDistilling] = useState(false);
   const [makingCards, setMakingCards] = useState(false);
   const [makingQuiz, setMakingQuiz] = useState(false);
+  const [tagging, setTagging] = useState(false);
   const [essenceOpen, setEssenceOpen] = useState(true);
   // Phone only — at sm+ the list is always shown and the header is inert.
   const [backlinksOpen, setBacklinksOpen] = useState(false);
@@ -388,6 +389,35 @@ export function ItemViewer({
         onClose();
       } catch (err) {
         toast.error(`Delete failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
+    });
+  }
+
+  /**
+   * Tag on demand.
+   *
+   * Uploads tag themselves, but that call is fire-and-forget and depends on a
+   * model being reachable at that moment — a provider outage leaves an item
+   * permanently untagged with nothing in the interface admitting it. This is
+   * the way back. It no-ops server-side on anything already tagged.
+   */
+  function runAutoTag() {
+    if (!item || tagging) return;
+    setTagging(true);
+    startTransition(async () => {
+      try {
+        const r = await autoTagItemAction(item.id);
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
+        if (r.tags.length === 0) toast.info("Nothing worth tagging here.");
+        else toast.success(`Tagged: ${r.tags.map((t) => `#${t}`).join(" ")}`);
+        router.refresh();
+      } catch {
+        toast.error("Couldn't tag this item");
+      } finally {
+        setTagging(false);
       }
     });
   }
@@ -744,6 +774,14 @@ export function ItemViewer({
                 <Wand2 className="mr-2 h-3.5 w-3.5" />
               )}
               {full?.summary ? "Re-distill the essence" : "Distill the essence"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={runAutoTag} disabled={tagging}>
+              {tagging ? (
+                <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Tag className="mr-2 h-3.5 w-3.5" />
+              )}
+              Tag with AI
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={runMakeFlashcards} disabled={makingCards}>
