@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightCircle, BookOpen, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -56,6 +56,10 @@ type FullItem = {
   articleId: string | null;
   documentId: string | null;
   docKind: "pdf" | "markdown" | "text" | "epub" | null;
+  /** An ePub with bytes in the bucket — openable in the paginated reader. */
+  isBook?: boolean;
+  /** An ePub from before the reader existed: text only, no file to page. */
+  isLegacyEpub?: boolean;
   docFullText: string | null;
   breadcrumb: { id: string; name: string }[];
   outgoingLinks?: ResolvedLink[];
@@ -881,6 +885,27 @@ export function ItemViewer({
           )}
 
           <Separator className="my-4 sm:my-6" />
+
+          {/* A book opens in its own full-screen reader; the text below stays
+              as it is, because Ask, Distill and search all work off it. */}
+          {full?.isBook && full.documentId && (
+            <div className="not-prose mb-6 flex flex-wrap items-center gap-3">
+              <Button onClick={() => router.push(`/read/${full.documentId}`)} className="gap-2">
+                <BookOpen className="h-4 w-4" />
+                Read book
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Picks up where you left off.
+              </span>
+            </div>
+          )}
+
+          {full?.isLegacyEpub && (
+            <p className="not-prose mb-6 rounded-md border border-border p-3 text-xs leading-relaxed text-muted-foreground">
+              This ePub was uploaded before the reader existed, so only its text was kept — the
+              file itself wasn&apos;t stored. Upload it again to read it as a book.
+            </p>
+          )}
 
           {/* Body */}
           {fullLoading && !isNote && (

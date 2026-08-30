@@ -14,6 +14,13 @@
 export const DESKTOP_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 export const WEB_MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 
+// Books get their own, higher ceiling. An illustrated non-fiction title or a
+// textbook routinely runs past 20MB, and unlike every other kind the bytes are
+// not held in Postgres — they go straight to the bucket, and the browser only
+// ever fetches one chapter of them. The cost of a large book is storage quota,
+// not memory or request size, so the cap can be looser.
+export const EPUB_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
 /** True when running inside the Electron desktop shell (preload sets this). */
 export function isDesktopRuntime(): boolean {
   return typeof window !== "undefined" && !!(window as { desktop?: { isDesktop?: boolean } }).desktop?.isDesktop;
@@ -26,6 +33,23 @@ export function maxUploadBytes(): number {
 
 /** Human label for hints/toasts, e.g. "20MB". */
 export function maxUploadLabel(): string {
-  const mb = maxUploadBytes() / 1024 / 1024;
+  return formatBytesLabel(maxUploadBytes());
+}
+
+export function isEpubFilename(filename: string): boolean {
+  return /.epub$/i.test(filename.trim());
+}
+
+/** The cap that applies to one specific file. */
+export function maxUploadBytesFor(filename: string): number {
+  return isEpubFilename(filename) ? EPUB_MAX_UPLOAD_BYTES : maxUploadBytes();
+}
+
+export function maxUploadLabelFor(filename: string): string {
+  return formatBytesLabel(maxUploadBytesFor(filename));
+}
+
+function formatBytesLabel(bytes: number): string {
+  const mb = bytes / 1024 / 1024;
   return Number.isInteger(mb) ? `${mb}MB` : `${mb.toFixed(1)}MB`;
 }

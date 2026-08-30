@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { ArrowDownUp, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDownUp, BookOpen, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -38,7 +38,7 @@ import {
   ItemRowMenuItems,
 } from "./item-row-menu";
 import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
-import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
+import { maxUploadBytesFor, maxUploadLabelFor } from "@/lib/upload-limits";
 import { toast } from "sonner";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { pushRecent } from "@/lib/directory/recently-viewed";
@@ -93,6 +93,8 @@ export type DirectoryListItem = {
   sourceUrl: string | null;
   articleId: string | null;
   documentId: string | null;
+  /** An ePub the reader can open. See DirItem for why this is not just kind. */
+  isBook?: boolean;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -103,6 +105,32 @@ const KIND_META: Record<DirectoryListItem["kind"], { label: string; icon: React.
   uploaded_document: { label: "Document", icon: <FileText className="h-3 w-3" /> },
   user_note: { label: "Note", icon: <NotebookPen className="h-3 w-3" /> },
 };
+
+/**
+ * A book's cover, where it has one.
+ *
+ * There is no flag saying whether a cover was extracted — plenty of ePubs ship
+ * without one — so the image is simply attempted and hidden if it 404s. That
+ * costs one failed request per coverless book and saves carrying the fact
+ * through three queries.
+ */
+function BookCover({ documentId, title }: { documentId: string; title: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return null;
+  return (
+    /* eslint-disable-next-line @next/next/no-img-element */
+    <img
+      src={`/api/book/${documentId}/cover`}
+      alt=""
+      aria-hidden
+      loading="lazy"
+      decoding="async"
+      onError={() => setFailed(true)}
+      title={title}
+      className="mt-0.5 h-14 w-10 shrink-0 rounded-sm border border-border object-cover shadow-sm"
+    />
+  );
+}
 
 export function DirectoryShell({
   items,
@@ -488,10 +516,13 @@ export function DirectoryShell({
   }
 
   function onFilesPicked(files: FileList) {
-    const max = maxUploadBytes();
     Array.from(files).forEach((file) => {
-      if (file.size > max) {
-        toast.error(`${file.name} is ${(file.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabel()} limit.`);
+      // Per file, not per batch: books are allowed to be larger than anything
+      // else, so one shared ceiling would reject a legitimate 30MB ePub.
+      if (file.size > maxUploadBytesFor(file.name)) {
+        toast.error(
+          `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabelFor(file.name)} limit.`,
+        );
         return;
       }
       const fd = new FormData();
@@ -1132,10 +1163,14 @@ function DraggableItemRow({
             />
           </div>
 
+          {item.isBook && item.documentId && (
+            <BookCover documentId={item.documentId} title={item.title} />
+          )}
+
           <button onClick={onOpen} className="min-w-0 flex-1 text-left">
             <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
-              {KIND_META[item.kind].icon}
-              <span>{KIND_META[item.kind].label}</span>
+              {item.isBook ? <BookOpen className="h-3 w-3" /> : KIND_META[item.kind].icon}
+              <span>{item.isBook ? "Book" : KIND_META[item.kind].label}</span>
               <span className="opacity-50">·</span>
               <span className="normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.updatedAt)}</span>
             </div>

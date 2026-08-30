@@ -2,6 +2,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+import { spoilerClampSql } from "@/lib/books/spoiler-clamp";
 
 /**
  * A lightweight, content-free map of the user's Directory — folder hierarchy
@@ -163,6 +164,7 @@ export async function retrieveFromDirectory(
         where di.user_id = ${userId}
           and di.kind = 'uploaded_document'
           and c.embedding is not null
+          and ${spoilerClampSql("c")}
         order by c.embedding <=> ${lit}::vector
         limit ${limit * 2}
       `),
@@ -319,6 +321,16 @@ export type ItemContent = {
 
 const MAX_DOC_CHARS = 6000; // per-document budget so a few big files don't blow the prompt
 
+// How many chunks the aggregate below bothers to read.
+//
+// It concatenates chunks in order and then throws away everything past
+// MAX_DOC_CHARS. That was harmless when a document meant a PDF, but a book runs
+// to hundreds of chunks, so the query was assembling megabytes to keep 6KB —
+// on every Ask that touched one. Chunks target 4000 characters, so thirty of
+// them is many times the budget and the result is the same string; the limit
+// only stops the database doing work whose output is discarded.
+const DOC_TEXT_CHUNK_LIMIT = 30;
+
 /**
  * Fetch the ACTUAL text for matched items (not just the 400-char snippet from
  * retrieval). Notes use their own content; documents concatenate their chunks
@@ -356,7 +368,10 @@ export async function fetchItemContents(
       left(di.content, ${MAX_DOC_CHARS}) as note_content,
       left(coalesce(
         (select string_agg(c.content, E'\n\n' order by c.chunk_index)
-         from document_chunks c where c.document_id = di.document_id),
+         from document_chunks c
+         where c.document_id = di.document_id
+           and c.chunk_index < ${DOC_TEXT_CHUNK_LIMIT}
+           and ${spoilerClampSql("c")}),
         d.full_text
       ), ${MAX_DOC_CHARS}) as doc_text,
       left(coalesce(a.full_text, a.excerpt), ${MAX_DOC_CHARS}) as article_text

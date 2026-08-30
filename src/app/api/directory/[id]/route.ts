@@ -28,6 +28,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       createdAt: directoryItems.createdAt,
       updatedAt: directoryItems.updatedAt,
       docKind: documents.kind,
+      docStoragePath: documents.storagePath,
       docFullText: documents.fullText,
     })
     .from(directoryItems)
@@ -90,9 +91,13 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
   const resolved = await getDirectoryItemStudyText(user.id, id);
   const preview = (resolved?.text ?? "").replace(/\s+/g, " ").trim().slice(0, 600) || null;
 
-  const { metadata: _metadata, ...rest } = row;
+  const { metadata: _metadata, docStoragePath, ...rest } = row;
   return NextResponse.json({
     ...rest,
+    // An ePub with bytes in the bucket can be opened in the reader. One
+    // uploaded before the reader existed cannot — its file was discarded.
+    isBook: row.docKind === "epub" && !!docStoragePath,
+    isLegacyEpub: row.docKind === "epub" && !docStoragePath,
     summary,
     preview,
     breadcrumb,

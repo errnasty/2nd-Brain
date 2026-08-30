@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { documentChunks, documents } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
+import { removeBookObjects } from "@/lib/books/storage";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { chunkText } from "@/lib/documents/chunker";
 
@@ -76,7 +77,20 @@ export async function uploadDocumentAction(formData: FormData): Promise<UploadRe
 
 export async function deleteDocumentAction(id: string) {
   const { user } = await requireUser();
+  const [row] = await db
+    .select({ kind: documents.kind, storagePath: documents.storagePath })
+    .from(documents)
+    .where(and(eq(documents.id, id), eq(documents.userId, user.id)))
+    .limit(1);
+
   await db.delete(documents).where(and(eq(documents.id, id), eq(documents.userId, user.id)));
+
+  // A book also owns its chapters, assets and original file in the bucket.
+  // Best-effort: an orphaned object costs a little quota, but a storage error
+  // must not make a delete look like it failed after the row is already gone.
+  if (row?.kind === "epub" && row.storagePath) {
+    await removeBookObjects(user.id, id).catch(() => {});
+  }
   revalidatePath("/documents");
 }
 

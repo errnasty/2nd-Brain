@@ -246,6 +246,9 @@ export const documentChunks = pgTable(
     chunkIndex: integer("chunk_index").notNull(),
     content: text("content").notNull(),
     tokenCount: integer("token_count"),
+    /** Spine position this chunk came from — books only. Null for every other
+     *  document kind, and the spoiler clamp reads null as "always visible". */
+    chapterIndex: integer("chapter_index"),
     embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -255,6 +258,73 @@ export const documentChunks = pgTable(
     embeddingIdx: index("document_chunks_embedding_idx")
       .using("hnsw", t.embedding.op("vector_cosine_ops")),
     userIdx: index("document_chunks_user_idx").on(t.userId),
+  }),
+);
+
+/**
+ * A book's spine, in reading order.
+ *
+ * `idx` is the only identifier the reader uses: hrefs are not unique across a
+ * book, and a manifest id means nothing in a URL. `charCount` is stored rather
+ * than derived so progress cannot depend on layout — a book's length must not
+ * change when the reader picks a bigger font.
+ */
+export const bookChapters = pgTable(
+  "book_chapters",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    idx: integer("idx").notNull(),
+    href: text("href").notNull(),
+    title: text("title"),
+    charCount: integer("char_count").default(0).notNull(),
+    navLevel: integer("nav_level").default(1).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    docIdxUnique: uniqueIndex("book_chapters_doc_idx_unique").on(t.documentId, t.idx),
+    userIdx: index("book_chapters_user_idx").on(t.userId),
+  }),
+);
+
+/**
+ * Where a reader is in a book, plus the preferences that belong to this book
+ * rather than to the account.
+ *
+ * The anchor is (chapterIdx, charOffset), never a page number — the same book
+ * paginates differently at another font size or on a rotated phone, so a page
+ * number would resume in the wrong place every time one of those changed.
+ *
+ * `furthestChapterIdx` is separate from `chapterIdx` on purpose: flipping back
+ * to re-read chapter 2 must not re-hide chapter 9 from the spoiler clamp, which
+ * asks how far you have been rather than where you are.
+ */
+export const bookReadingState = pgTable(
+  "book_reading_state",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    chapterIdx: integer("chapter_idx").default(0).notNull(),
+    charOffset: integer("char_offset").default(0).notNull(),
+    furthestChapterIdx: integer("furthest_chapter_idx").default(0).notNull(),
+    progressPct: real("progress_pct").default(0).notNull(),
+    spoilerSafe: boolean("spoiler_safe").default(false).notNull(),
+    fontScale: real("font_scale").default(1).notNull(),
+    theme: text("theme"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.documentId] }),
+    userIdx: index("book_reading_state_user_idx").on(t.userId, t.updatedAt),
   }),
 );
 

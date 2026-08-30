@@ -5,7 +5,7 @@ import { Upload, FileText } from "lucide-react";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { uploadDocumentAction } from "@/app/(app)/documents/actions";
-import { maxUploadBytes, maxUploadLabel } from "@/lib/upload-limits";
+import { maxUploadBytesFor, maxUploadLabel, maxUploadLabelFor } from "@/lib/upload-limits";
 import { toast } from "sonner";
 
 const ACCEPT = ".pdf,.md,.markdown,.txt,.epub,application/pdf,application/epub+zip,text/markdown,text/plain";
@@ -26,10 +26,11 @@ export function UploadZone({ folderId }: { folderId?: string | null }) {
     // Reject oversized files up front, so an over-limit file fails with a
     // sentence naming the file and the cap rather than a 413 from deep inside
     // the Server Action machinery.
-    const max = maxUploadBytes();
     const list = all.filter((f) => {
-      if (f.size > max) {
-        toast.error(`${f.name} is ${(f.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabel()} limit.`);
+      if (f.size > maxUploadBytesFor(f.name)) {
+        toast.error(
+          `${f.name} is ${(f.size / 1024 / 1024).toFixed(1)}MB — over the ${maxUploadLabelFor(f.name)} limit.`,
+        );
         return false;
       }
       return true;
