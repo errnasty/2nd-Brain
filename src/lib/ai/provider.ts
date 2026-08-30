@@ -31,6 +31,26 @@ export function openrouterKey(): string | undefined {
   return process.env.OPENROUTER_API_KEY;
 }
 
+/**
+ * The Anthropic fast model, offered as a rescue when the *active* provider's
+ * model turns out to be unusable.
+ *
+ * Model slugs go stale. An OpenRouter route can be retired without notice, and
+ * because setting OPENROUTER_API_KEY makes OpenRouter the provider for every
+ * tier, one dead slug takes down every background feature at once — tagging,
+ * distilling, flashcards — while a perfectly good Anthropic key sits unused.
+ * That is a configuration problem the code should survive, not one it should
+ * be taken down by.
+ *
+ * Null when there is nothing to rescue with, or when Anthropic is already the
+ * active provider and has therefore just failed on its own account.
+ */
+export function anthropicRescueModel(): LanguageModelV1 | null {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (activeProvider() === "anthropic") return null;
+  return anthropic(ANTHROPIC_FAST);
+}
+
 export function activeProvider(): "openrouter" | "anthropic" {
   const forced = process.env.AI_PROVIDER;
   if (forced === "anthropic") return "anthropic";

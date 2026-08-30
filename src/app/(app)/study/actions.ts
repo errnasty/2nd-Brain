@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, gte, isNotNull, lte, sql } from "drizzle-orm";
+import { and, eq, gt, gte, isNotNull, lte, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryItems, directoryTasks, directoryFlashcards, directoryFolders } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
@@ -64,7 +64,11 @@ export async function fetchStudyStats(userId: string): Promise<StudyStats> {
   const weekAgo = new Date(Date.now() - WEEK_MS);
   const sixtyAgo = new Date(Date.now() - SIXTY_DAYS_MS);
 
-  const [itemRow, cardRow, itemDates, reviewDates, cardStates, taskRow] = await Promise.all([
+  // allSettled, for the same reason the page uses it around this function: one
+  // failing query must not blank the rest. It previously did — a single broken
+  // count took out items-this-week, the streak, retention by subject and the
+  // due-task count along with it, and the whole Overview tab read as zero.
+  const settled = await Promise.allSettled([
     db
       .select({
         itemsWeek: sql<number>`count(*)::int`,
@@ -76,7 +80,10 @@ export async function fetchStudyStats(userId: string): Promise<StudyStats> {
       .select({
         total: sql<number>`count(*)::int`,
         due: sql<number>`count(*) filter (where ${directoryFlashcards.dueDate} <= now())::int`,
-        reviewedWeek: sql<number>`count(*) filter (where ${directoryFlashcards.updatedAt} >= ${weekAgo} and ${directoryFlashcards.updatedAt} > ${directoryFlashcards.createdAt})::int`,
+        // Composed from the typed comparators so the date is encoded by the
+        // column's own mapper. Interpolating a bare JS Date leaves Postgres to
+        // infer the parameter's type from position, which it cannot always do.
+        reviewedWeek: sql<number>`count(*) filter (where ${gte(directoryFlashcards.updatedAt, weekAgo)} and ${gt(directoryFlashcards.updatedAt, directoryFlashcards.createdAt)})::int`,
       })
       .from(directoryFlashcards)
       .where(eq(directoryFlashcards.userId, userId)),
@@ -91,7 +98,7 @@ export async function fetchStudyStats(userId: string): Promise<StudyStats> {
         and(
           eq(directoryFlashcards.userId, userId),
           gte(directoryFlashcards.updatedAt, sixtyAgo),
-          sql`${directoryFlashcards.updatedAt} > ${directoryFlashcards.createdAt}`,
+          gt(directoryFlashcards.updatedAt, directoryFlashcards.createdAt),
         ),
       ),
     // #26/#27 per-card SM-2 state + host folder (subject). Capped for power users.
@@ -120,6 +127,43 @@ export async function fetchStudyStats(userId: string): Promise<StudyStats> {
         ),
       ),
   ]);
+
+  for (const [name, r] of [
+    ["items", settled[0]],
+    ["cards", settled[1]],
+    ["itemDates", settled[2]],
+    ["reviewDates", settled[3]],
+    ["cardStates", settled[4]],
+    ["tasks", settled[5]],
+  ] as const) {
+    if (r.status === "rejected") {
+      // The cause carries the Postgres code and the column it objected to;
+      // Drizzle's own message is only the SQL it tried, which never says why.
+      const err = r.reason;
+      const cause = err instanceof Error ? err.cause : undefined;
+      console.error(
+        `fetchStudyStats ${name} failed:`,
+        err instanceof Error ? err.message : err,
+        cause ? `| cause: ${cause instanceof Error ? cause.message : String(cause)}` : "",
+        cause && typeof cause === "object" && "code" in cause ? `| code: ${String((cause as { code: unknown }).code)}` : "",
+      );
+    }
+  }
+
+  const value = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
+    r.status === "fulfilled" ? r.value : fallback;
+
+  const itemRow = value(settled[0], [] as { itemsWeek: number; notesWeek: number }[]);
+  const cardRow = value(settled[1], [] as { total: number; due: number; reviewedWeek: number }[]);
+  const itemDates = value(settled[2], [] as { at: Date | null }[]);
+  const reviewDates = value(settled[3], [] as { at: Date | null }[]);
+  const cardStates = value(settled[4], [] as {
+    ease: number;
+    reps: number;
+    due: Date | null;
+    folder: string | null;
+  }[]);
+  const taskRow = value(settled[5], [] as { due: number }[]);
 
   const activeDays = new Set<string>();
   for (const r of itemDates) if (r.at) activeDays.add(dayKey(r.at));
