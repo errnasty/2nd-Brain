@@ -27,7 +27,7 @@ import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { subtreeFolderIds } from "@/lib/directory/folder-tree";
 import { ingestEpub } from "@/lib/books/ingest";
 import { EpubError } from "@/lib/books/epub";
-import { bookPaths, bookStorageConfigured, removeBookObjects } from "@/lib/books/storage";
+import { bookIngestPreflight, bookPaths, removeBookObjects } from "@/lib/books/storage";
 import { EPUB_MAX_UPLOAD_BYTES } from "@/lib/upload-limits";
 import { distill } from "@/lib/ai/distill";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
@@ -819,7 +819,20 @@ export type DirectoryUploadResult =
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export async function uploadToDirectoryAction(formData: FormData): Promise<DirectoryUploadResult> {
+export async function uploadToDirectoryAction(
+  formData: FormData,
+): Promise<DirectoryUploadResult> {
+  try {
+    return await runDirectoryUpload(formData);
+  } catch (err) {
+    // redirect() and notFound() throw control-flow errors that Next must see.
+    if (err && typeof err === "object" && "digest" in err) throw err;
+    console.error("[uploadToDirectoryAction]", err);
+    return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
+  }
+}
+
+async function runDirectoryUpload(formData: FormData): Promise<DirectoryUploadResult> {
   const file = formData.get("file");
   const rawFolder = (formData.get("folderId") as string | null) || null;
   // Only accept a real uuid; the "unsorted" view sentinel (or any junk) → null.
@@ -940,12 +953,11 @@ async function uploadBookToDirectory(
   file: File,
   folderId: string | null,
 ): Promise<DirectoryUploadResult> {
-  if (!bookStorageConfigured()) {
-    return {
-      ok: false,
-      error: "Book storage isn't configured on this server, so ePubs can't be opened as books yet.",
-    };
-  }
+  // Checked before anything is written: the tables and the bucket are created
+  // by a migration, not by this code, and finding out halfway through leaves a
+  // document row pointing at nothing.
+  const notReady = await bookIngestPreflight();
+  if (notReady) return { ok: false, error: notReady };
 
   const fallbackTitle = file.name.replace(/.[^.]+$/, "");
   let documentId: string | null = null;
@@ -1067,9 +1079,18 @@ async function uploadBookToDirectory(
     // cleanups are best-effort: failing to tidy up must not replace the real
     // error with a second one.
     if (documentId) {
-      await db.delete(documents).where(eq(documents.id, documentId)).catch(() => {});
-      await removeBookObjects(userId, documentId).catch(() => {});
+      try {
+        await db.delete(documents).where(eq(documents.id, documentId));
+      } catch {
+        // ignored: tidying up must never replace the real error
+      }
+      try {
+        await removeBookObjects(userId, documentId);
+      } catch {
+        // ignored, as above
+      }
     }
+    console.error("[uploadBookToDirectory]", err);
     if (err instanceof EpubError) return { ok: false, error: err.message };
     return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
   }
