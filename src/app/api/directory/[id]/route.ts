@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import {
   bookChapters,
+  bookHighlights,
   bookReadingState,
   directoryFolders,
   directoryItems,
@@ -112,6 +113,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     chapterTitle: string | null;
     started: boolean;
     finishedAt: string | null;
+    highlightCount: number;
   } | null = null;
 
   if (isBook && row.documentId) {
@@ -131,6 +133,16 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         ),
       )
       .limit(1);
+
+    const highlightRows = await db
+      .select({ id: bookHighlights.id })
+      .from(bookHighlights)
+      .where(
+        and(
+          eq(bookHighlights.documentId, row.documentId),
+          eq(bookHighlights.userId, user.id),
+        ),
+      );
 
     const chapterIdx = state?.chapterIdx ?? 0;
     const [chapter] = await db
@@ -159,6 +171,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       // "Continue" only once there is somewhere to continue from.
       started: !!state && (state.chapterIdx > 0 || state.charOffset > 0),
       finishedAt: state?.finishedAt?.toISOString() ?? null,
+      highlightCount: highlightRows.length,
     };
   }
 

@@ -177,3 +177,81 @@ export function offsetAtX(index: ChapterIndex, root: HTMLElement, x: number): nu
 
   return starts[lo] + charLo;
 }
+
+/**
+ * A DOM Range covering a character span of the chapter.
+ *
+ * Highlights are drawn as overlay rectangles from this rather than by wrapping
+ * the text in `<mark>`. Wrapping would split text nodes, which changes the very
+ * offsets every anchor in the reader is measured in — the reading position, the
+ * highlights themselves, the page restore. Overlays touch nothing.
+ */
+export function rangeForOffsets(
+  index: ChapterIndex,
+  start: number,
+  end: number,
+): Range | null {
+  const from = offsetToPosition(index, start);
+  const to = offsetToPosition(index, Math.max(start, end));
+  if (!from || !to) return null;
+
+  const range = document.createRange();
+  try {
+    range.setStart(from.node, Math.min(from.offset, from.node.data.length));
+    range.setEnd(to.node, Math.min(to.offset, to.node.data.length));
+  } catch {
+    return null;
+  }
+  return range.collapsed ? null : range;
+}
+
+export type OverlayRect = { left: number; top: number; width: number; height: number };
+
+/** Client rects of a range, in the root's own (untransformed) coordinates. */
+export function rectsForRange(root: HTMLElement, range: Range): OverlayRect[] {
+  const origin = root.getBoundingClientRect();
+  const out: OverlayRect[] = [];
+  for (const r of Array.from(range.getClientRects())) {
+    // Zero-area rects come from collapsed whitespace at line and column breaks.
+    if (r.width <= 0 || r.height <= 0) continue;
+    out.push({
+      left: r.left - origin.left,
+      top: r.top - origin.top,
+      width: r.width,
+      height: r.height,
+    });
+  }
+  return out;
+}
+
+/**
+ * Where the current selection sits in the chapter, if it sits in it at all.
+ *
+ * Returns null for a collapsed selection, and for one whose ends are not text
+ * inside `root` — a selection that started in the chapter and ended in the
+ * toolbar is not a highlight.
+ */
+export function selectionOffsets(
+  index: ChapterIndex,
+  root: HTMLElement,
+): { start: number; end: number; text: string; rect: OverlayRect } | null {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+
+  const range = selection.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+  if (range.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  if (range.endContainer.nodeType !== Node.TEXT_NODE) return null;
+
+  const text = selection.toString().trim();
+  if (!text) return null;
+
+  const start = positionToOffset(index, range.startContainer as Text, range.startOffset);
+  const end = positionToOffset(index, range.endContainer as Text, range.endOffset);
+  if (end <= start) return null;
+
+  const rects = rectsForRange(root, range);
+  if (rects.length === 0) return null;
+
+  return { start, end, text, rect: rects[0] };
+}

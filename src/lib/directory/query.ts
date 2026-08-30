@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { directoryItems, itemTags, tags } from "@/lib/db/schema";
+import { bookReadingState, directoryItems, documents, itemTags, tags } from "@/lib/db/schema";
 
 export type ReadingStatus = "inbox" | "reading" | "done" | "review";
 
@@ -19,6 +19,9 @@ export type DirItem = {
   isBook: boolean;
   /** A book the reader has marked read. */
   bookFinished: boolean;
+  /** 0..1. Zero for anything that is not a book, or has not been opened. */
+  bookProgress: number;
+  bookAuthor: string | null;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -167,23 +170,33 @@ export async function fetchDirectoryPage(
         sourceUrl: directoryItems.sourceUrl,
         articleId: directoryItems.articleId,
         documentId: directoryItems.documentId,
-        isBook: sql<boolean>`exists (
-          select 1 from documents d
-          where d.id = ${directoryItems.documentId}
-            and d.kind = 'epub'
-            and d.storage_path is not null
+        // Joined rather than four correlated subqueries: both tables are
+        // reached by primary key, so one pass gets everything the shelf needs.
+        // coalesce because a left join on a row with no document yields null,
+        // and the shelf wants false.
+        isBook: sql<boolean>`coalesce(
+          ${documents.kind} = 'epub' and ${documents.storagePath} is not null, false
         )`.as("is_book"),
-        bookFinished: sql<boolean>`exists (
-          select 1 from book_reading_state s
-          where s.document_id = ${directoryItems.documentId}
-            and s.user_id = ${directoryItems.userId}
-            and s.finished_at is not null
-        )`.as("book_finished"),
+        bookFinished: sql<boolean>`(${bookReadingState.finishedAt} is not null)`.as(
+          "book_finished",
+        ),
+        bookProgress: sql<number>`coalesce(${bookReadingState.progressPct}, 0)`.as(
+          "book_progress",
+        ),
+        bookAuthor: sql<string | null>`${documents.metadata} ->> 'author'`.as("book_author"),
         readingStatus: directoryItems.readingStatus,
         createdAt: directoryItems.createdAt,
         updatedAt: directoryItems.updatedAt,
       })
       .from(directoryItems)
+      .leftJoin(documents, eq(documents.id, directoryItems.documentId))
+      .leftJoin(
+        bookReadingState,
+        and(
+          eq(bookReadingState.documentId, directoryItems.documentId),
+          eq(bookReadingState.userId, directoryItems.userId),
+        ),
+      )
       .where(and(...conds))
       .orderBy(...orderBy)
       .limit(limit + 1) // +1 sentinel to detect more

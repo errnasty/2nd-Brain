@@ -892,7 +892,12 @@ export function ItemViewer({
           {/* A book shows what it is, not what it says. The text still backs
               Ask, Distill and search — it just is not the thing to read here. */}
           {full?.isBook && full.documentId && full.book && (
-            <BookInfo documentId={full.documentId} title={title} book={full.book} />
+            <BookInfo
+              documentId={full.documentId}
+              itemId={item.id}
+              title={title}
+              book={full.book}
+            />
           )}
 
           {full?.isLegacyEpub && (

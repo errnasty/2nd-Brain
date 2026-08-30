@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { ArrowDownUp, BookOpen, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDownUp, BookOpen, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Library, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -70,6 +70,12 @@ const DirectoryBoard = dynamic(() => import("./directory-board").then((m) => m.D
   ssr: false,
   loading: () => <div className="flex-1" aria-busy="true" />,
 });
+// Lazy like the board: most visits never switch view, and the shelf pulls in
+// its own cover loading on top of the grid.
+const DirectoryShelf = dynamic(() => import("./directory-shelf").then((m) => m.DirectoryShelf), {
+  ssr: false,
+  loading: () => <div className="flex-1" aria-busy="true" />,
+});
 const GapsDialog = dynamic(() => import("./gaps-dialog").then((m) => m.GapsDialog), { ssr: false });
 const CurriculumDialog = dynamic(
   () => import("./curriculum-dialog").then((m) => m.CurriculumDialog),
@@ -96,6 +102,9 @@ export type DirectoryListItem = {
   /** An ePub the reader can open. See DirItem for why this is not just kind. */
   isBook?: boolean;
   bookFinished?: boolean;
+  /** 0..1. Zero for anything that is not a book, or has not been opened. */
+  bookProgress?: number;
+  bookAuthor?: string | null;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -168,7 +177,7 @@ export function DirectoryShell({
   // instead of requiring a rename + mode-switch first.
   const [freshItemId, setFreshItemId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [view, setView] = useState<"list" | "board">("list");
+  const [view, setView] = useState<"list" | "board" | "shelf">("list");
   const [listCollapsed, toggleListCollapsed] = useListCollapse("directory.listCollapsed.v1");
   const [gapsOpen, setGapsOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
@@ -737,6 +746,18 @@ export function DirectoryShell({
                 <List className="h-3.5 w-3.5" />
               </button>
               <button
+                onClick={() => setView("shelf")}
+                title="Shelf view (books by cover)"
+                className={cn(
+                  "rounded p-1 transition-colors",
+                  view === "shelf"
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Library className="h-3.5 w-3.5" />
+              </button>
+              <button
                 onClick={() => setView("board")}
                 title="Board view (reading pipeline)"
                 className={cn(
@@ -844,6 +865,12 @@ export function DirectoryShell({
                   Reset filters
                 </Button>
               </div>
+            ) : view === "shelf" ? (
+              <DirectoryShelf
+                items={filteredItems}
+                selectedId={selectedId}
+                onOpen={selectItem}
+              />
             ) : view === "board" ? (
               <DirectoryBoard
                 items={filteredItems}

@@ -2,11 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen, Check } from "lucide-react";
+import { BookOpen, Check, Highlighter, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { setBookFinishedAction } from "@/app/read/actions";
+import { exportHighlightsAction } from "@/app/read/highlights";
 
 /**
  * What the Directory shows for a book: the book, not its text.
@@ -31,6 +32,7 @@ export type BookInfoData = {
   started: boolean;
   /** ISO timestamp of when it was marked read, or null. */
   finishedAt: string | null;
+  highlightCount: number;
 };
 
 function formatSize(bytes: number | null): string | null {
@@ -55,10 +57,13 @@ function formatLanguage(tag: string | null): string | null {
 
 export function BookInfo({
   documentId,
+  itemId,
   title,
   book,
 }: {
   documentId: string;
+  /** The Directory item, so exported highlights are filed beside the book. */
+  itemId: string;
   title: string;
   book: BookInfoData;
 }) {
@@ -79,6 +84,25 @@ export function BookInfo({
         return;
       }
       router.refresh();
+    });
+  }
+
+  const [exporting, setExporting] = useState(false);
+
+  function exportHighlights() {
+    setExporting(true);
+    startTransition(async () => {
+      try {
+        const r = await exportHighlightsAction({ documentId, itemId });
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
+        toast.success(`Saved ${r.count} highlight${r.count === 1 ? "" : "s"} to a note.`);
+        router.push(`/directory?item=${r.noteId}`);
+      } finally {
+        setExporting(false);
+      }
     });
   }
 
@@ -155,6 +179,23 @@ export function BookInfo({
                 <span className="italic"> — {book.chapterTitle}</span>
               )}
             </p>
+          </div>
+        )}
+
+        {book.highlightCount > 0 && (
+          <div className="mt-5 flex flex-wrap items-center gap-2 rounded-md border border-border p-3">
+            <Highlighter className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="flex-1 text-sm text-muted-foreground">
+              {book.highlightCount} highlight{book.highlightCount === 1 ? "" : "s"}
+            </span>
+            <button
+              onClick={exportHighlights}
+              disabled={exporting}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-60"
+            >
+              {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Save to a note
+            </button>
           </div>
         )}
 

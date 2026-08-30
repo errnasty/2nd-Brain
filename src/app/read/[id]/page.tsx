@@ -1,10 +1,17 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
-import { loadBookDoc, loadChapters, loadNav, loadReadingState } from "@/lib/books/access";
+import {
+  loadBookDoc,
+  loadChapters,
+  loadHighlights,
+  loadNav,
+  loadReadingState,
+} from "@/lib/books/access";
 import { clampAnchor, progressFor } from "@/lib/books/progress";
 import { bookPaths, getBookObject } from "@/lib/books/storage";
 import { BookReader, type BookReaderTheme } from "@/components/reader/book/book-reader";
+import type { BookHighlight } from "@/app/read/highlights";
 
 export const dynamic = "force-dynamic";
 
@@ -34,10 +41,11 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
   const doc = await loadBookDoc(id, user.id);
   if (!doc) notFound();
 
-  const [chapters, nav, state] = await Promise.all([
+  const [chapters, nav, state, highlights] = await Promise.all([
     loadChapters(id, user.id),
     loadNav(id, user.id),
     loadReadingState(id, user.id),
+    loadHighlights(id, user.id),
   ]);
   if (chapters.length === 0) notFound();
 
@@ -57,6 +65,10 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
   return (
     <BookReader
       initialHtml={first ? first.body.toString("utf8") : null}
+      initialHighlights={highlights.map((h) => ({
+        ...h,
+        color: (h.color as BookHighlight["color"]) ?? "yellow",
+      }))}
       book={{
         id: doc.id,
         title: doc.title,

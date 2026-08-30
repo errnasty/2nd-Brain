@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-30-c",
+    date: "August 30, 2026",
+    title: "Mark up a book, search it, and see your library",
+    tag: "feature",
+    summary:
+      "Highlights and margin notes that leave the book as a real note, a search across the whole book that lands on the page, and a shelf of your library by cover.",
+    items: [
+      "Select any passage to highlight it in one of four colours, and add a note to it. Tap a highlight to recolour it, write on it, or remove it.",
+      "Highlights do not stay stuck in the reader: one press writes every one of them into an ordinary note in your Directory, grouped by chapter with your own notes underneath and a link back to the book — so they are searchable, linkable, and answerable by Ask like anything else.",
+      "Search the whole book from the reader. A result opens the chapter and turns to the page the phrase is actually on.",
+      "A shelf view for the Directory: your books as covers, with how far through each one you are, and a tick on the ones you have finished.",
+      "Turn the last page and the reader asks whether you have finished, instead of leaving you to find the setting.",
+    ],
+  },
+  {
     id: "2026-08-30-b",
     date: "August 30, 2026",
     title: "A proper contents list, and a two-page spread",
