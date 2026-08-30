@@ -529,9 +529,19 @@ export function DirectoryShell({
       fd.set("file", file);
       if (targetFolderId) fd.set("folderId", targetFolderId);
       startTransition(async () => {
-        const r = await uploadToDirectoryAction(fd);
-        if (r.ok) toast.success(`${file.name} uploaded`);
-        else toast.error(`${file.name}: ${r.error}`);
+        try {
+          const r = await uploadToDirectoryAction(fd);
+          if (r.ok) toast.success(`${file.name} uploaded`);
+          else toast.error(`${file.name}: ${r.error}`);
+        } catch (err) {
+          // The action returns a typed result, so a rejection here is the
+          // framework failing around it — a body over the configured limit, a
+          // dropped connection. Unhandled inside a transition it takes the
+          // whole route down with an error boundary, which tells the user
+          // nothing at all.
+          const message = err instanceof Error ? err.message : "Upload failed";
+          toast.error(`${file.name}: ${message}`);
+        }
       });
     });
   }

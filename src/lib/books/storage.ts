@@ -97,3 +97,46 @@ export async function removeBookObjects(userId: string, documentId: string): Pro
     await b.remove(paths.slice(i, i + 1000));
   }
 }
+
+/**
+ * Is this deployment actually able to store a book?
+ *
+ * The reader has two hard prerequisites that live outside the codebase — the
+ * tables and the bucket, both created by migration 0034 — and neither can be
+ * created from application code at runtime. Without this check the first
+ * missing one surfaces as a raw Postgres or storage error halfway through an
+ * upload, after a document row has already been written.
+ *
+ * Cached after the first success: this is deployment state, so it cannot become
+ * false again while the process is alive. Failures are not cached, so applying
+ * the migration fixes uploads without a restart.
+ */
+let schemaReady = false;
+
+export async function bookIngestPreflight(): Promise<string | null> {
+  if (!bookStorageConfigured()) {
+    return "Book storage isn't configured on this server: SUPABASE_SERVICE_ROLE_KEY is missing.";
+  }
+  if (schemaReady) return null;
+
+  const { db } = await import("@/lib/db");
+  const { sql } = await import("drizzle-orm");
+  try {
+    await db.execute(sql`select 1 from book_chapters limit 1`);
+    await db.execute(sql`select chapter_index from document_chunks limit 1`);
+  } catch {
+    return "The book tables aren't set up yet. Apply supabase/migrations/0034_epub_reader.sql in the Supabase SQL editor, then try again.";
+  }
+
+  const admin = createSupabaseAdminClient();
+  if (!admin) {
+    return "Book storage isn't configured on this server: SUPABASE_SERVICE_ROLE_KEY is missing.";
+  }
+  const { error } = await admin.storage.getBucket(BOOKS_BUCKET);
+  if (error) {
+    return `The "${BOOKS_BUCKET}" storage bucket doesn't exist. Migration 0034 creates it — apply supabase/migrations/0034_epub_reader.sql, or create a private bucket named "${BOOKS_BUCKET}" in the Supabase dashboard.`;
+  }
+
+  schemaReady = true;
+  return null;
+}
