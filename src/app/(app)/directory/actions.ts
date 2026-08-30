@@ -6,6 +6,8 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import {
   articles,
+  bookChapters,
+  bookReadingState,
   directoryFolders,
   directoryItems,
   documentChunks,
@@ -23,6 +25,10 @@ import { embedNote, embedDocument } from "@/lib/embeddings/backfill";
 import { syncWikilinks } from "@/lib/directory/wikilinks";
 import { getDirectoryItemStudyText } from "@/lib/directory/item-text";
 import { subtreeFolderIds } from "@/lib/directory/folder-tree";
+import { ingestEpub } from "@/lib/books/ingest";
+import { EpubError } from "@/lib/books/epub";
+import { bookPaths, bookStorageConfigured, removeBookObjects } from "@/lib/books/storage";
+import { EPUB_MAX_UPLOAD_BYTES } from "@/lib/upload-limits";
 import { distill } from "@/lib/ai/distill";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
 import { syncDirectoryTasks } from "@/lib/tasks/sync";
@@ -820,13 +826,18 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
   const folderId = rawFolder && UUID_RE.test(rawFolder) ? rawFolder : null;
 
   if (!file || !(file instanceof File)) return { ok: false, error: "No file provided" };
-  if (file.size > MAX_UPLOAD_BYTES)
-    return { ok: false, error: `File exceeds ${MAX_UPLOAD_BYTES / 1024 / 1024}MB` };
-
   const kind = detectKind(file.name, file.type);
   if (!kind) return { ok: false, error: "Unsupported file type. Allowed: .pdf, .md, .txt, .epub" };
 
+  // Books are allowed to be larger than anything else: their bytes go to the
+  // bucket rather than into Postgres, and the browser only ever fetches one
+  // chapter at a time.
+  const cap = kind === "epub" ? EPUB_MAX_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
+  if (file.size > cap) return { ok: false, error: `File exceeds ${cap / 1024 / 1024}MB` };
+
   const { user } = await requireUser();
+
+  if (kind === "epub") return uploadBookToDirectory(user.id, file, folderId);
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
     const { text, pageCount } = await extractByKind(kind, buffer);
@@ -900,6 +911,150 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
   revalidatePath("/directory");
     return { ok: true, itemId: item.id, chunkCount: chunks.length };
   } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
+  }
+}
+
+/**
+ * Ingest an ePub as a readable book rather than a wall of text.
+ *
+ * Ordering matters. The document row has to exist before ingest runs, because
+ * every bucket path is keyed by its id — so the row is written first and
+ * completed afterwards. If ingest throws (a DRM-locked book, a malformed
+ * archive), the half-made row and anything already uploaded are removed rather
+ * than left as a document that opens to nothing.
+ */
+async function uploadBookToDirectory(
+  userId: string,
+  file: File,
+  folderId: string | null,
+): Promise<DirectoryUploadResult> {
+  if (!bookStorageConfigured()) {
+    return {
+      ok: false,
+      error: "Book storage isn't configured on this server, so ePubs can't be opened as books yet.",
+    };
+  }
+
+  const fallbackTitle = file.name.replace(/.[^.]+$/, "");
+  let documentId: string | null = null;
+
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+
+    const [doc] = await db
+      .insert(documents)
+      .values({
+        userId,
+        folderId: null,
+        title: fallbackTitle,
+        kind: "epub",
+        sizeBytes: file.size,
+        metadata: { originalName: file.name, mimeType: file.type },
+      })
+      .returning({ id: documents.id });
+    documentId = doc.id;
+
+    const book = await ingestEpub({ buffer, userId, documentId: doc.id });
+
+    // The book's own title beats the filename, which is often an ISBN or a
+    // torrent-shaped string.
+    const title = book.meta.title?.trim() || fallbackTitle;
+
+    await db
+      .update(documents)
+      .set({
+        title,
+        fullText: book.text,
+        pageCount: book.chapters.length,
+        storagePath: bookPaths(userId, doc.id).epub,
+        metadata: {
+          originalName: file.name,
+          mimeType: file.type,
+          author: book.meta.creator,
+          language: book.meta.language,
+          publisher: book.meta.publisher,
+          fixedLayout: book.fixedLayout,
+          hasCover: book.hasCover,
+          coverContentType: book.coverContentType,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(documents.id, doc.id));
+
+    await db.insert(bookChapters).values(
+      book.chapters.map((c) => ({
+        documentId: doc.id,
+        userId,
+        idx: c.idx,
+        href: c.href,
+        title: c.title,
+        charCount: c.charCount,
+        navLevel: c.navLevel,
+      })),
+    );
+
+    if (book.chunks.length > 0) {
+      // Chunked per chapter, so the spoiler clamp has an honest column to
+      // filter on rather than a guess at where chapter boundaries fell.
+      await db.insert(documentChunks).values(
+        book.chunks.map((c) => ({
+          documentId: doc.id,
+          userId,
+          chunkIndex: c.index,
+          content: c.text,
+          tokenCount: c.approxTokens,
+          chapterIndex: c.chapterIndex,
+        })),
+      );
+    }
+
+    const [item] = await db
+      .insert(directoryItems)
+      .values({
+        userId,
+        folderId,
+        kind: "uploaded_document",
+        title,
+        documentId: doc.id,
+        sourceUrl: null,
+        content: book.text.length > 10_000 ? book.text.slice(0, 10_000) : book.text,
+        metadata: {
+          originalName: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          isBook: true,
+          chapterCount: book.chapters.length,
+          hasCover: book.hasCover,
+          author: book.meta.creator,
+        },
+        updatedAt: new Date(),
+      })
+      .returning({ id: directoryItems.id });
+
+    await db.insert(bookReadingState).values({ userId, documentId: doc.id }).onConflictDoNothing();
+
+    void autoTagDirectoryItem(userId, item.id);
+    void embedDocument(doc.id, userId);
+    await awardXp(userId, {
+      source: "doc_uploaded",
+      itemId: item.id,
+      refKind: "doc_uploaded",
+      refId: item.id,
+    });
+
+    bustMapCache(userId);
+    revalidatePath("/directory");
+    return { ok: true, itemId: item.id, chunkCount: book.chunks.length };
+  } catch (err) {
+    // Roll back rather than leave a document that opens to nothing. Both
+    // cleanups are best-effort: failing to tidy up must not replace the real
+    // error with a second one.
+    if (documentId) {
+      await db.delete(documents).where(eq(documents.id, documentId)).catch(() => {});
+      await removeBookObjects(userId, documentId).catch(() => {});
+    }
+    if (err instanceof EpubError) return { ok: false, error: err.message };
     return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
   }
 }

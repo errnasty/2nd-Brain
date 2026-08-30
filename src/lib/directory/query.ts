@@ -13,6 +13,10 @@ export type DirItem = {
   sourceUrl: string | null;
   articleId: string | null;
   documentId: string | null;
+  /** An ePub with bytes in the bucket — i.e. one the reader can actually open.
+   *  False for ePubs uploaded before the reader existed: their file was
+   *  discarded at upload and only the extracted text survives. */
+  isBook: boolean;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -161,6 +165,12 @@ export async function fetchDirectoryPage(
         sourceUrl: directoryItems.sourceUrl,
         articleId: directoryItems.articleId,
         documentId: directoryItems.documentId,
+        isBook: sql<boolean>`exists (
+          select 1 from documents d
+          where d.id = ${directoryItems.documentId}
+            and d.kind = 'epub'
+            and d.storage_path is not null
+        )`.as("is_book"),
         readingStatus: directoryItems.readingStatus,
         createdAt: directoryItems.createdAt,
         updatedAt: directoryItems.updatedAt,

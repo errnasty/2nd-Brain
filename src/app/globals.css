@@ -741,6 +741,165 @@
   }
 }
 
+
+/* ── Book reader ────────────────────────────────────────────────────
+   A chapter is laid out into CSS columns of exactly one viewport width, so
+   "turning a page" is a transform rather than a scroll. Two things about that
+   are load-bearing:
+
+   • Nothing may be taller than the column. An image at its natural height
+     pushes the column past the box and the page after it renders blank, so
+     every replaced element is capped at the column height.
+   • Headings and figures must not be split down the middle by a column break.
+
+   The book's own stylesheet is dropped at ingest, so this is the whole of a
+   book's typography. `--book-font-scale` is the reader's type-size control and
+   multiplies everything, which is why the sizes below are all in em.
+   ─────────────────────────────────────────────────────────────────── */
+.prose-book {
+  font-family: var(--reader-font, Georgia), "Times New Roman", serif;
+  font-size: calc(19px * var(--book-font-scale, 1));
+  line-height: 1.65;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  text-align: left;
+}
+
+.prose-book > :first-child {
+  margin-top: 0;
+}
+.prose-book p {
+  margin: 0 0 0.9em;
+  orphans: 2;
+  widows: 2;
+}
+.prose-book h1,
+.prose-book h2,
+.prose-book h3,
+.prose-book h4,
+.prose-book h5,
+.prose-book h6 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.4em 0 0.6em;
+  /* A heading stranded at the foot of a column with its section overleaf is
+     the single ugliest thing a paginated reader can do. */
+  break-after: avoid;
+  break-inside: avoid;
+}
+.prose-book h1 {
+  font-size: 1.5em;
+}
+.prose-book h2 {
+  font-size: 1.3em;
+}
+.prose-book h3 {
+  font-size: 1.12em;
+}
+.prose-book h4,
+.prose-book h5,
+.prose-book h6 {
+  font-size: 1em;
+}
+
+.prose-book img,
+.prose-book svg,
+.prose-book video {
+  display: block;
+  max-width: 100%;
+  /* Capped against the column, not the page: an over-tall image is the usual
+     cause of a blank page in a columnised reader. */
+  max-height: 82%;
+  height: auto;
+  margin: 1em auto;
+  object-fit: contain;
+}
+.prose-book figure {
+  margin: 1.2em 0;
+  break-inside: avoid;
+}
+.prose-book figcaption {
+  font-size: 0.8em;
+  opacity: 0.7;
+  text-align: center;
+  margin-top: 0.4em;
+}
+
+.prose-book blockquote {
+  margin: 1.1em 0;
+  padding-left: 1em;
+  border-left: 2px solid currentColor;
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  font-style: italic;
+}
+.prose-book ul {
+  list-style: disc;
+  padding-left: 1.4em;
+  margin: 0.9em 0;
+}
+.prose-book ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+  margin: 0.9em 0;
+}
+.prose-book li {
+  margin: 0.3em 0;
+}
+.prose-book a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.prose-book hr {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  margin: 1.6em auto;
+  width: 40%;
+}
+.prose-book table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  margin: 1em 0;
+  break-inside: avoid;
+}
+.prose-book th,
+.prose-book td {
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  padding: 0.35em 0.5em;
+  text-align: left;
+}
+.prose-book pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8em;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  margin: 1em 0;
+}
+.prose-book code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+@media (max-width: 640px) {
+  .prose-book {
+    font-size: calc(17.5px * var(--book-font-scale, 1));
+    line-height: 1.6;
+  }
+}
+
+/* Reader page colours. Deliberately fixed rather than themed: someone who
+   picks Paper wants paper whichever way the app is set, and the app's own
+   palette is available as the third option. */
+.book-theme-paper {
+  background: #f4ecd8;
+  color: #3b3229;
+}
+.book-theme-night {
+  background: #0d0d0f;
+  color: #b9b4ac;
+}
 /* ── Brief markdown overrides ───────────────────────────────────────
    The Daily Brief content streams as Markdown. Promote the H3 section
    markers ("### High-Priority") into editorial section dividers and

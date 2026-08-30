@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-30",
+    date: "August 30, 2026",
+    title: "Read ePubs as books",
+    tag: "feature",
+    summary:
+      "An ePub used to arrive as one long wall of text with the book itself thrown away. Now it opens in a proper reader: real pages you turn, a contents list, your place kept, and the cover on the shelf.",
+    items: [
+      "Turn pages: arrow keys, a swipe, or a tap near either edge. Where you stopped is remembered and is still right after you change the type size, rotate the phone, or pick the book up on another device — it remembers the words you were on, not the page number.",
+      "Find your way: the book’s own contents list, a progress bar, and a page count. Footnote and cross-reference links inside the book work, and take you to the right chapter.",
+      "Read how you like: seven type sizes, and a page that can follow the app, or be paper, or be night.",
+      "Ask about the book: everything you already had for documents — Ask, Distill, flashcards, Rabbithole — works on a book. If you are reading fiction, one switch keeps the assistant to the chapters you have actually reached, so a question cannot spoil the ending.",
+      "Bigger books are welcome: ePubs can now be up to 50MB, because only the chapter you are reading is ever sent to you. Books with their own fixed page designs, like comics, scroll instead of paginating. A book locked with DRM says so plainly rather than failing.",
+    ],
+  },
+  {
     id: "2026-08-29",
     date: "August 29, 2026",
     title: "Notes that read like notes",

@@ -1,6 +1,7 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, directoryItems, documents } from "@/lib/db/schema";
+import { spoilerClampSql } from "@/lib/books/spoiler-clamp";
 
 /** Strip HTML to plain text (mirrors the helper in directory/actions). */
 function stripHtml(html: string): string {
@@ -55,11 +56,27 @@ export async function getDirectoryItemStudyText(
     if (art) text = art.fullText ? stripHtml(art.fullText) : art.excerpt ?? "";
   } else if (item.kind === "uploaded_document" && item.documentId) {
     const [doc] = await db
-      .select({ fullText: documents.fullText })
+      .select({ fullText: documents.fullText, kind: documents.kind })
       .from(documents)
       .where(and(eq(documents.id, item.documentId), eq(documents.userId, userId)))
       .limit(1);
-    if (doc?.fullText) text = doc.fullText;
+
+    if (doc?.kind === "epub") {
+      // A book's full_text is the whole book, so distilling it or making cards
+      // from it would spoil a reader who asked not to be. A clamped book is
+      // reassembled from the chapters they have actually reached; with the
+      // toggle off the clamp passes everything and this matches full_text.
+      const rows = (await db.execute(sql`
+        select string_agg(c.content, E'\n\n' order by c.chunk_index) as text
+        from document_chunks c
+        where c.document_id = ${item.documentId}
+          and c.user_id = ${userId}
+          and ${spoilerClampSql("c")}
+      `)) as unknown as { text: string | null }[];
+      text = rows[0]?.text ?? doc.fullText ?? "";
+    } else if (doc?.fullText) {
+      text = doc.fullText;
+    }
   }
 
   return { title: item.title, text };

@@ -54,7 +54,11 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@xenova/transformers", "officeparser", "@electric-sql/pglite"],
   experimental: {
     serverActions: {
-      bodySizeLimit: "20mb",
+      // Sized for the largest thing that can be posted: a 50MB ePub. Every
+      // other upload kind is capped at 20MB by lib/upload-limits, which is
+      // enforced in the action itself — this only has to be big enough not to
+      // reject the body before that check can run.
+      bodySizeLimit: "52mb",
     },
     // Cache the RSC payload for visited dynamic routes in the router cache so
     // navigating away and back is instant. 5 minutes for dynamic pages (like

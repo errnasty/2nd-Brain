@@ -2,6 +2,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryFolders, directoryItems } from "@/lib/db/schema";
 import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+import { spoilerClampSql } from "@/lib/books/spoiler-clamp";
 
 /**
  * A lightweight, content-free map of the user's Directory — folder hierarchy
@@ -163,6 +164,7 @@ export async function retrieveFromDirectory(
         where di.user_id = ${userId}
           and di.kind = 'uploaded_document'
           and c.embedding is not null
+          and ${spoilerClampSql("c")}
         order by c.embedding <=> ${lit}::vector
         limit ${limit * 2}
       `),
@@ -356,7 +358,8 @@ export async function fetchItemContents(
       left(di.content, ${MAX_DOC_CHARS}) as note_content,
       left(coalesce(
         (select string_agg(c.content, E'\n\n' order by c.chunk_index)
-         from document_chunks c where c.document_id = di.document_id),
+         from document_chunks c
+         where c.document_id = di.document_id and ${spoilerClampSql("c")}),
         d.full_text
       ), ${MAX_DOC_CHARS}) as doc_text,
       left(coalesce(a.full_text, a.excerpt), ${MAX_DOC_CHARS}) as article_text
