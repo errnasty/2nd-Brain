@@ -26,6 +26,8 @@ export function bookPaths(userId: string, documentId: string) {
     chapter: (idx: number) => `${prefix}/ch/${idx}.html`,
     asset: (zipPath: string) => `${prefix}/assets/${zipPath}`,
     cover: `${prefix}/cover`,
+    /** Shelf-sized rendition, generated on first view and kept. */
+    coverThumb: `${prefix}/cover-thumb`,
   };
 }
 

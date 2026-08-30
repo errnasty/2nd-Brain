@@ -51,7 +51,7 @@ const nextConfig: NextConfig = {
   // Keep heavy native/WASM deps out of the bundler — loaded at runtime only
   // when EMBEDDINGS_PROVIDER=local actually selects them. PGlite (desktop local
   // DB) is also externalized so it loads at runtime, not bundled in the cloud build.
-  serverExternalPackages: ["@xenova/transformers", "officeparser", "@electric-sql/pglite"],
+  serverExternalPackages: ["@xenova/transformers", "officeparser", "@electric-sql/pglite", "sharp"],
   experimental: {
     serverActions: {
       // Sized for the largest thing that can be posted: a 50MB ePub. Every

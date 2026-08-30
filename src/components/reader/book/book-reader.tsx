@@ -66,7 +66,13 @@ export function BookReader({
   const contentRef = useRef<HTMLDivElement>(null);
 
   const [chapterIdx, setChapterIdx] = useState(book.state.chapterIdx);
-  const [html, setHtml] = useState<string | null>(initialHtml);
+  const [loaded, setLoaded] = useState<{ idx: number; html: string } | null>(
+    initialHtml === null ? null : { idx: book.state.chapterIdx, html: initialHtml },
+  );
+  // Never the previous chapter's markup: a mismatch means the new chapter has
+  // not arrived yet, and everything downstream must wait rather than measure
+  // the wrong document.
+  const html = loaded !== null && loaded.idx === chapterIdx ? loaded.html : null;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageCount, setPageCount] = useState(1);
@@ -85,6 +91,9 @@ export function BookReader({
   // Measured once per reflow and reused for every page turn. Rebuilding it per
   // turn would mean a getBoundingClientRect for every text node in the chapter.
   const indexRef = useRef<ChapterIndex | null>(null);
+  // Which chapter indexRef actually describes. The page effect refuses to read
+  // an index built from a different chapter's DOM.
+  const measuredChapterRef = useRef<number | null>(null);
 
   // Progress is asked for on every page turn and every scroll tick, and the
   // naive form sorts the chapter list each time.
@@ -135,13 +144,12 @@ export function BookReader({
     // not flash a spinner for content already in memory.
     const cached = cacheRef.current.get(chapterIdx);
     if (cached !== undefined) {
-      setHtml(cached);
+      setLoaded({ idx: chapterIdx, html: cached });
       setLoadError(null);
     } else {
-      setHtml(null);
       setLoadError(null);
       loadChapter(chapterIdx, ac.signal)
-        .then(setHtml)
+        .then((text) => setLoaded({ idx: chapterIdx, html: text }))
         .catch((err: unknown) => {
           if (ac.signal.aborted) return;
           setLoadError(err instanceof Error ? err.message : "Couldn't load this chapter.");
@@ -192,10 +200,11 @@ export function BookReader({
     // Measure everything once, here, while the layout is already being read.
     const index = indexChapter(content);
     indexRef.current = index;
+    measuredChapterRef.current = chapterIdx;
 
     const x = xOfOffset(index, content, anchorRef.current);
     setPage(x === null ? 0 : clamp(Math.floor((x + 1) / stride), 0, count - 1));
-  }, [html, size.w, size.h, fontScale, scrollMode]);
+  }, [html, size.w, size.h, fontScale, scrollMode, chapterIdx]);
 
   // Scroll mode (fixed-layout books) anchors by proportion rather than by
   // character: those books are images with almost no text to anchor to.
@@ -228,7 +237,7 @@ export function BookReader({
     if (!content || !html || scrollMode) return;
 
     const index = indexRef.current;
-    if (!index) return;
+    if (!index || measuredChapterRef.current !== chapterIdx) return;
 
     anchorRef.current = offsetAtX(index, content, page * (size.w + COLUMN_GAP));
     setProgress(progressAt({ chapterIdx, charOffset: anchorRef.current }));
@@ -288,6 +297,11 @@ export function BookReader({
       // layout pass lands on the last page — which is what going backwards
       // through a chapter boundary should feel like.
       anchorRef.current = land === "start" ? 0 : Number.MAX_SAFE_INTEGER;
+      // Reset the page with the chapter. Left at its old value it is both a
+      // flash of the wrong page and a stale number for the effects to read.
+      setPage(0);
+      setPageCount(1);
+      measuredChapterRef.current = null;
       setChapterIdx(idx);
       setPanel(null);
     },
