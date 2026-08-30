@@ -1,6 +1,6 @@
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookChapters, bookReadingState, documents } from "@/lib/db/schema";
+import { bookChapters, bookNav, bookReadingState, documents } from "@/lib/db/schema";
 
 /**
  * Ownership and shape checks every book route repeats.
@@ -66,6 +66,27 @@ export async function loadChapters(documentId: string, userId: string) {
     .from(bookChapters)
     .where(and(eq(bookChapters.documentId, documentId), eq(bookChapters.userId, userId)))
     .orderBy(asc(bookChapters.idx));
+}
+
+/**
+ * The book's contents, in the book's order.
+ *
+ * Empty for a book that shipped no nav, and for every book ingested before the
+ * nav was stored — the reader falls back to listing the spine, which is a worse
+ * contents list but still a usable one.
+ */
+export async function loadNav(documentId: string, userId: string) {
+  return db
+    .select({
+      idx: bookNav.idx,
+      title: bookNav.title,
+      level: bookNav.level,
+      chapterIdx: bookNav.chapterIdx,
+      fragment: bookNav.fragment,
+    })
+    .from(bookNav)
+    .where(and(eq(bookNav.documentId, documentId), eq(bookNav.userId, userId)))
+    .orderBy(asc(bookNav.idx));
 }
 
 export async function loadReadingState(documentId: string, userId: string) {

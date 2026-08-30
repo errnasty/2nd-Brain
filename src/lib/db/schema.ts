@@ -293,6 +293,40 @@ export const bookChapters = pgTable(
 );
 
 /**
+ * The book's own table of contents, in the book's own order.
+ *
+ * Deliberately not the spine. `bookChapters` is reading order and the unit the
+ * reader pages through; this is what the author called the contents, which
+ * nests differently, orders differently, and frequently points at an anchor
+ * inside a chapter rather than at its start.
+ */
+export const bookNav = pgTable(
+  "book_nav",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    /** Position in the contents — the order it must be displayed in. */
+    idx: integer("idx").notNull(),
+    title: text("title").notNull(),
+    level: integer("level").default(1).notNull(),
+    /** Spine entry this line opens. */
+    chapterIdx: integer("chapter_idx").notNull(),
+    /** Anchor within that entry, when the line points into the middle of one. */
+    fragment: text("fragment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    docIdxUnique: uniqueIndex("book_nav_doc_idx_unique").on(t.documentId, t.idx),
+    userIdx: index("book_nav_user_idx").on(t.userId),
+  }),
+);
+
+/**
  * Where a reader is in a book, plus the preferences that belong to this book
  * rather than to the account.
  *
@@ -320,6 +354,8 @@ export const bookReadingState = pgTable(
     spoilerSafe: boolean("spoiler_safe").default(false).notNull(),
     fontScale: real("font_scale").default(1).notNull(),
     theme: text("theme"),
+    /** When the reader marked it read. Null while unread or in progress. */
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({

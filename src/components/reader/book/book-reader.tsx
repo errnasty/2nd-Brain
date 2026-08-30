@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   List,
@@ -16,7 +17,11 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { indexChapter, offsetAtX, xOfOffset, type ChapterIndex } from "@/lib/books/dom-anchor";
 import { createProgressCalculator } from "@/lib/books/progress";
-import { saveBookPositionAction, setBookPrefsAction } from "@/app/read/actions";
+import {
+  setBookFinishedAction,
+  saveBookPositionAction,
+  setBookPrefsAction,
+} from "@/app/read/actions";
 
 export type BookChapterMeta = {
   idx: number;
@@ -27,12 +32,23 @@ export type BookChapterMeta = {
 
 export type BookReaderTheme = "app" | "paper" | "night";
 
+export type BookNavEntry = {
+  idx: number;
+  title: string;
+  level: number;
+  chapterIdx: number;
+  fragment: string | null;
+};
+
 export type BookPayload = {
   id: string;
   title: string;
   author: string | null;
   fixedLayout: boolean;
   chapters: BookChapterMeta[];
+  /** The book's own contents. Empty falls back to listing the spine. */
+  nav: BookNavEntry[];
+  finishedAt: string | null;
   state: {
     chapterIdx: number;
     charOffset: number;
@@ -45,6 +61,15 @@ export type BookPayload = {
 
 /** Gap between pages. Also the gutter, so text never runs to the screen edge. */
 const COLUMN_GAP = 48;
+
+/**
+ * Above this, the page splits into a two-column spread.
+ *
+ * A single column across a desktop window is 150-plus characters a line, which
+ * is genuinely hard to read — the eye loses its place on the return sweep. Two
+ * columns is also what the paginated metaphor is already shaped like.
+ */
+const SPREAD_MIN_WIDTH = 900;
 
 const FONT_STEPS = [0.8, 0.9, 1, 1.15, 1.3, 1.5, 1.75];
 
@@ -81,6 +106,11 @@ export function BookReader({
   const [theme, setTheme] = useState<BookReaderTheme>(book.state.theme ?? "app");
   const [spoilerSafe, setSpoilerSafe] = useState(book.state.spoilerSafe);
   const [panel, setPanel] = useState<"toc" | "settings" | null>(null);
+  const [finishedAt, setFinishedAt] = useState<string | null>(book.finishedAt);
+
+  // A nav entry can point at an anchor inside a chapter; the jump is queued
+  // here and consumed once that chapter has been laid out.
+  const pendingFragmentRef = useRef<string | null>(null);
 
   // The character offset the reader is at. Everything layout-dependent is
   // derived from this and re-derived after every reflow, which is what makes a
@@ -107,6 +137,7 @@ export function BookReader({
   );
 
   const scrollMode = book.fixedLayout;
+  const columns = !scrollMode && size.w >= SPREAD_MIN_WIDTH ? 2 : 1;
   const chapter = book.chapters.find((c) => c.idx === chapterIdx) ?? book.chapters[0];
 
   /* ── chapter loading ─────────────────────────────────────────────── */
@@ -202,6 +233,18 @@ export function BookReader({
     indexRef.current = index;
     measuredChapterRef.current = chapterIdx;
 
+    const fragment = pendingFragmentRef.current;
+    if (fragment) {
+      pendingFragmentRef.current = null;
+      const target = content.querySelector<HTMLElement>("#" + CSS.escape(fragment));
+      if (target) {
+        const fx = target.getBoundingClientRect().left - content.getBoundingClientRect().left;
+        setPage(clamp(Math.floor((fx + 1) / stride), 0, count - 1));
+        anchorRef.current = offsetAtX(index, content, Math.floor(fx / stride) * stride);
+        return;
+      }
+    }
+
     const x = xOfOffset(index, content, anchorRef.current);
     setPage(x === null ? 0 : clamp(Math.floor((x + 1) / stride), 0, count - 1));
   }, [html, size.w, size.h, fontScale, scrollMode, chapterIdx]);
@@ -290,9 +333,10 @@ export function BookReader({
   /* ── navigation ──────────────────────────────────────────────────── */
 
   const goChapter = useCallback(
-    (idx: number, land: "start" | "end" = "start") => {
+    (idx: number, land: "start" | "end" = "start", fragment: string | null = null) => {
       const target = book.chapters.find((c) => c.idx === idx);
       if (!target) return;
+      pendingFragmentRef.current = fragment;
       // MAX_SAFE_INTEGER resolves to the final character, and from there the
       // layout pass lands on the last page — which is what going backwards
       // through a chapter boundary should feel like.
@@ -402,6 +446,17 @@ export function BookReader({
     void setBookPrefsAction({ documentId: book.id, theme: next }).catch(() => {});
   }
 
+  function toggleFinished() {
+    const next = finishedAt === null;
+    setFinishedAt(next ? new Date().toISOString() : null);
+    void setBookFinishedAction({ documentId: book.id, finished: next })
+      .then((r) => {
+        if (!r.ok) return;
+        toast.success(next ? "Marked as read." : "Put back on the pile.");
+      })
+      .catch(() => {});
+  }
+
   function changeSpoiler(next: boolean) {
     setSpoilerSafe(next);
     void setBookPrefsAction({ documentId: book.id, spoilerSafe: next })
@@ -414,6 +469,40 @@ export function BookReader({
       )
       .catch(() => {});
   }
+
+  // The book's contents where it shipped any; the spine only as a fallback,
+  // because a spine listing is front matter and continuation files jumbled in
+  // with real chapters.
+  const contents = useMemo(
+    () =>
+      book.nav.length > 0
+        ? book.nav.map((e) => ({
+            key: `n${e.idx}`,
+            title: e.title,
+            level: e.level,
+            chapterIdx: e.chapterIdx,
+            fragment: e.fragment,
+          }))
+        : book.chapters.map((c) => ({
+            key: `c${c.idx}`,
+            title: c.title ?? `Section ${c.idx + 1}`,
+            level: c.navLevel,
+            chapterIdx: c.idx,
+            fragment: null as string | null,
+          })),
+    [book.nav, book.chapters],
+  );
+
+  // The line you are inside, which for a chapter split across several contents
+  // entries is the last one at or before where you are.
+  const activeKey = useMemo(() => {
+    let key: string | null = null;
+    for (const entry of contents) {
+      if (entry.chapterIdx <= chapterIdx) key = entry.key;
+      else break;
+    }
+    return key;
+  }, [contents, chapterIdx]);
 
   const atStart = chapterIdx === book.chapters[0]?.idx && page === 0;
   const lastIdx = book.chapters[book.chapters.length - 1]?.idx;
@@ -472,7 +561,7 @@ export function BookReader({
       <div
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
-        className="relative min-h-0 flex-1 px-5 py-4 sm:px-10 sm:py-6"
+        className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 px-5 py-4 sm:px-10 sm:py-6 lg:px-14"
       >
         {/* The measured box is deliberately the one WITHOUT the gutter padding:
             clientWidth on the padded element counts the padding, and columns
@@ -501,7 +590,10 @@ export function BookReader({
                     ["--book-font-scale" as string]: String(fontScale),
                     width: size.w ? `${size.w}px` : "100%",
                     height: size.h ? `${size.h}px` : "100%",
-                    columnWidth: size.w ? `${size.w}px` : undefined,
+                    // One column on a phone, a two-page spread on a desktop.
+                    columnWidth: size.w
+                      ? `${(size.w - COLUMN_GAP * (columns - 1)) / columns}px`
+                      : undefined,
                     columnGap: `${COLUMN_GAP}px`,
                     columnFill: "auto",
                     transform: `translateX(-${page * (size.w + COLUMN_GAP)}px)`,
@@ -598,20 +690,23 @@ export function BookReader({
             {panel === "toc" ? (
               <nav className="min-h-0 flex-1 overflow-y-auto p-2">
                 <ul className="space-y-0.5">
-                  {book.chapters.map((c) => (
-                    <li key={c.idx}>
+                  {contents.map((entry) => (
+                    <li key={entry.key}>
                       <button
-                        onClick={() => goChapter(c.idx, "start")}
+                        onClick={() => goChapter(entry.chapterIdx, "start", entry.fragment)}
                         className={cn(
-                          "block w-full truncate rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-                          c.idx === chapterIdx
+                          "block w-full rounded px-2 py-1.5 text-left text-sm leading-snug transition-colors hover:bg-accent",
+                          entry.key === activeKey
                             ? "bg-accent font-medium text-foreground"
                             : "text-muted-foreground",
+                          // Top-level lines are the book's structure; deeper
+                          // ones are sections within it and read as such.
+                          entry.level === 1 ? "font-medium" : "text-[13px]",
                         )}
-                        style={{ paddingLeft: `${0.5 + (Math.min(c.navLevel, 4) - 1) * 0.75}rem` }}
-                        title={c.title ?? undefined}
+                        style={{ paddingLeft: `${0.5 + (Math.min(entry.level, 5) - 1) * 0.85}rem` }}
+                        title={entry.title}
                       >
-                        {c.title ?? `Chapter ${c.idx + 1}`}
+                        {entry.title}
                       </button>
                     </li>
                   ))}
@@ -682,6 +777,26 @@ export function BookReader({
                       </span>
                     </span>
                   </label>
+                </section>
+
+                <section>
+                  <button
+                    onClick={toggleFinished}
+                    className={cn(
+                      "flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors",
+                      finishedAt
+                        ? "border-foreground bg-accent text-foreground"
+                        : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+                    )}
+                  >
+                    <Check className="h-4 w-4" />
+                    {finishedAt ? "Read" : "Mark as read"}
+                  </button>
+                  {finishedAt && (
+                    <p className="mt-1.5 text-center text-xs text-muted-foreground">
+                      Finished {new Date(finishedAt).toLocaleDateString()}
+                    </p>
+                  )}
                 </section>
 
                 {book.fixedLayout && (

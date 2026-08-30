@@ -95,6 +95,7 @@ export type DirectoryListItem = {
   documentId: string | null;
   /** An ePub the reader can open. See DirItem for why this is not just kind. */
   isBook?: boolean;
+  bookFinished?: boolean;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -132,7 +133,7 @@ function BookCover({ documentId, title }: { documentId: string; title: string })
       height={192}
       onError={() => setFailed(true)}
       title={title}
-      className="mt-0.5 aspect-[2/3] w-14 shrink-0 rounded-sm border border-border bg-muted object-cover shadow-sm sm:w-11"
+      className="mt-0.5 aspect-[2/3] w-20 shrink-0 self-start rounded border border-border bg-muted object-cover shadow-md sm:w-16"
     />
   );
 }
@@ -1186,6 +1187,14 @@ function DraggableItemRow({
             <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
               {item.isBook ? <BookOpen className="h-3 w-3" /> : KIND_META[item.kind].icon}
               <span>{item.isBook ? "Book" : KIND_META[item.kind].label}</span>
+              {item.bookFinished && (
+                <>
+                  <span className="opacity-50">·</span>
+                  <span className="inline-flex items-center gap-0.5 text-brand">
+                    <Check className="h-3 w-3" /> Read
+                  </span>
+                </>
+              )}
               <span className="opacity-50">·</span>
               <span className="normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.updatedAt)}</span>
             </div>

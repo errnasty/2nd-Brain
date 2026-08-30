@@ -25,6 +25,14 @@ export type IngestedChapter = {
   navLevel: number;
 };
 
+export type IngestedNavEntry = {
+  idx: number;
+  title: string;
+  level: number;
+  chapterIdx: number;
+  fragment: string | null;
+};
+
 export type IngestedChunk = {
   index: number;
   text: string;
@@ -35,6 +43,8 @@ export type IngestedChunk = {
 export type IngestResult = {
   meta: EpubMeta;
   chapters: IngestedChapter[];
+  /** The book's contents. Empty when it shipped none worth showing. */
+  nav: IngestedNavEntry[];
   chunks: IngestedChunk[];
   text: string;
   fixedLayout: boolean;
@@ -154,7 +164,9 @@ export async function ingestEpub(input: {
     const text = chapterText(raw);
     // A title from the book's own table of contents beats one scraped from the
     // markup; both beat "Chapter 12", which tells the reader nothing.
-    const title = entry.title ?? firstHeading(raw) ?? `Chapter ${entry.idx + 1}`;
+    // Numbering an unnamed file as "Chapter N" collides with the book's real
+    // chapter numbers — a cover page became "Chapter 1".
+    const title = entry.title ?? firstHeading(raw) ?? `Section ${entry.idx + 1}`;
 
     chapters.push({
       idx: entry.idx,
@@ -210,9 +222,27 @@ export async function ingestEpub(input: {
     }
   }
 
+  // Nav targets are files; the reader addresses spine positions. Entries whose
+  // file never made it into `chapters` (unreadable, or missing from the
+  // archive) are dropped rather than left pointing nowhere.
+  const chapterIdxByPath = new Map(chapters.map((c) => [c.href, c.idx]));
+  const nav: IngestedNavEntry[] = [];
+  for (const entry of book.nav) {
+    const chapterIdx = chapterIdxByPath.get(entry.zipPath);
+    if (chapterIdx === undefined) continue;
+    nav.push({
+      idx: nav.length,
+      title: entry.title,
+      level: entry.level,
+      chapterIdx,
+      fragment: entry.fragment,
+    });
+  }
+
   return {
     meta: book.meta,
     chapters,
+    nav,
     chunks,
     text: textParts.join("\n\n"),
     fixedLayout: book.fixedLayout,

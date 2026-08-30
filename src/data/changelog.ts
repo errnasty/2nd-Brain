@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-30-b",
+    date: "August 30, 2026",
+    title: "A proper contents list, and a two-page spread",
+    tag: "improvement",
+    summary:
+      "The reader now uses the book’s own table of contents instead of a list of its files, reads as two pages side by side on a wide screen, and lets you mark a book read when you finish it.",
+    items: [
+      "Contents: what the author called the contents, in their order and their nesting — not a list of the book’s internal files with the cover page numbered as Chapter 1. Entries that point partway into a chapter now land where they point.",
+      "On a wide screen a book opens as two pages side by side, with the text held to a readable width instead of running the whole way across the window.",
+      "Mark a book read when you finish it, from the book’s page or from the reader. Finished books show it on the shelf.",
+      "Books on the shelf lead with a larger cover, and show only what you need before opening one: cover, title and tags.",
+    ],
+  },
+  {
     id: "2026-08-30",
     date: "August 30, 2026",
     title: "Read ePubs as books",

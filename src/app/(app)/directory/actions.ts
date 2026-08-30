@@ -7,6 +7,7 @@ import { db } from "@/lib/db";
 import {
   articles,
   bookChapters,
+  bookNav,
   bookReadingState,
   directoryFolders,
   directoryItems,
@@ -1037,6 +1038,19 @@ async function uploadBookToDirectory(
         navLevel: c.navLevel,
       })),
       (rows) => db.insert(bookChapters).values(rows),
+    );
+
+    await insertInBatches(
+      book.nav.map((e) => ({
+        documentId: doc.id,
+        userId,
+        idx: e.idx,
+        title: e.title,
+        level: e.level,
+        chapterIdx: e.chapterIdx,
+        fragment: e.fragment,
+      })),
+      (rows) => db.insert(bookNav).values(rows),
     );
 
     // Chunked per chapter, so the spoiler clamp has an honest column to filter

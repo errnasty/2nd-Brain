@@ -17,6 +17,8 @@ export type DirItem = {
    *  False for ePubs uploaded before the reader existed: their file was
    *  discarded at upload and only the extracted text survives. */
   isBook: boolean;
+  /** A book the reader has marked read. */
+  bookFinished: boolean;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -171,6 +173,12 @@ export async function fetchDirectoryPage(
             and d.kind = 'epub'
             and d.storage_path is not null
         )`.as("is_book"),
+        bookFinished: sql<boolean>`exists (
+          select 1 from book_reading_state s
+          where s.document_id = ${directoryItems.documentId}
+            and s.user_id = ${directoryItems.userId}
+            and s.finished_at is not null
+        )`.as("book_finished"),
         readingStatus: directoryItems.readingStatus,
         createdAt: directoryItems.createdAt,
         updatedAt: directoryItems.updatedAt,
