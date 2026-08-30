@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
-import { ArrowRightCircle, BookOpen, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
+import { ArrowRightCircle, Brain, ChevronDown, ChevronLeft, ChevronRight, CornerUpLeft, ExternalLink, Eye, GraduationCap, HelpCircle, Library, Lightbulb, List, Loader2, Minimize2, MoreVertical, Pencil, Plus, Rabbit, Repeat, Sparkles, Trash2, Wand2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Markdown } from "@/components/ui/markdown";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import {
 import { NoteEditor } from "./note-editor";
 import { NoteOutline } from "./note-outline";
 import { extractHeadings, toggleTaskAtLine } from "@/lib/notes/markdown";
+import { BookInfo, type BookInfoData } from "@/components/reader/book/book-info";
 import { editAssistAction } from "@/app/(app)/directory/ai-actions";
 import type { EditAssistMode } from "@/lib/ai/edit-assist";
 import { buildFlashcards } from "@/components/study/build-flashcards";
@@ -60,6 +61,8 @@ type FullItem = {
   isBook?: boolean;
   /** An ePub from before the reader existed: text only, no file to page. */
   isLegacyEpub?: boolean;
+  /** Cover, author, progress — everything shown about a book instead of it. */
+  book?: BookInfoData | null;
   docFullText: string | null;
   breadcrumb: { id: string; name: string }[];
   outgoingLinks?: ResolvedLink[];
@@ -651,7 +654,7 @@ export function ItemViewer({
           )}
         </div>
 
-        {(isNote || isDoc) && (
+        {(isNote || isDoc) && !full?.isBook && (
           <div
             className={cn(
               "shrink-0 items-center rounded-md border border-border p-0.5",
@@ -886,18 +889,10 @@ export function ItemViewer({
 
           <Separator className="my-4 sm:my-6" />
 
-          {/* A book opens in its own full-screen reader; the text below stays
-              as it is, because Ask, Distill and search all work off it. */}
-          {full?.isBook && full.documentId && (
-            <div className="not-prose mb-6 flex flex-wrap items-center gap-3">
-              <Button onClick={() => router.push(`/read/${full.documentId}`)} className="gap-2">
-                <BookOpen className="h-4 w-4" />
-                Read book
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                Picks up where you left off.
-              </span>
-            </div>
+          {/* A book shows what it is, not what it says. The text still backs
+              Ask, Distill and search — it just is not the thing to read here. */}
+          {full?.isBook && full.documentId && full.book && (
+            <BookInfo documentId={full.documentId} title={title} book={full.book} />
           )}
 
           {full?.isLegacyEpub && (
@@ -1013,7 +1008,7 @@ export function ItemViewer({
             </div>
           )}
 
-          {isDoc && mode === "edit" && (
+          {isDoc && mode === "edit" && !full?.isBook && (
             <Textarea
               value={content}
               onChange={(e) => {
@@ -1026,7 +1021,7 @@ export function ItemViewer({
             />
           )}
 
-          {isDoc && mode === "preview" && !fullLoading && (
+          {isDoc && mode === "preview" && !fullLoading && !full?.isBook && (
             <div className="prose-reader">
               {isMarkdownDoc && (content || docBody) ? (
                 <Markdown components={mdComponents}>

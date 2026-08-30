@@ -1195,7 +1195,9 @@ function DraggableItemRow({
             >
               {item.title}
             </div>
-            {item.preview && (
+            {/* A book's preview is its front matter — a table of contents and a
+                copyright page. Nothing worth the two lines it costs. */}
+            {!item.isBook && item.preview && (
               <div className="mt-1 line-clamp-2 text-[0.78rem] leading-relaxed text-muted-foreground">
                 {item.preview}
               </div>
