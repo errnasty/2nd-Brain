@@ -828,7 +828,7 @@ export async function uploadToDirectoryAction(
     // redirect() and notFound() throw control-flow errors that Next must see.
     if (err && typeof err === "object" && "digest" in err) throw err;
     console.error("[uploadToDirectoryAction]", err);
-    return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
+    return { ok: false, error: describeUploadFailure(err) };
   }
 }
 
@@ -926,6 +926,22 @@ async function runDirectoryUpload(formData: FormData): Promise<DirectoryUploadRe
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Upload failed" };
   }
+}
+
+/**
+ * Translate the framework's body-handling errors into something a person can
+ * act on. "Unexpected end of form" is busboy noticing the request stopped
+ * mid-file; it never mentions size, which is almost always the reason.
+ */
+function describeUploadFailure(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/unexpected end of form/i.test(message)) {
+    return "The upload was cut short before the whole file arrived — usually because it is too large for this server to accept, or the connection dropped part-way. Try again on a stable connection, or with a smaller file.";
+  }
+  if (/body exceeded|too large|payload/i.test(message)) {
+    return "That file is larger than this server will accept in one request.";
+  }
+  return message || "Upload failed";
 }
 
 /** Insert a long list without building one statement Postgres will refuse. */
