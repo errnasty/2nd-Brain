@@ -125,9 +125,14 @@ function BookCover({ documentId, title }: { documentId: string; title: string })
       aria-hidden
       loading="lazy"
       decoding="async"
+      // Intrinsic size so the row reserves the right box before the image
+      // lands, and an explicit 2:3 ratio so a cover that is not exactly that
+      // gets cropped rather than squashed.
+      width={128}
+      height={192}
       onError={() => setFailed(true)}
       title={title}
-      className="mt-0.5 h-14 w-10 shrink-0 rounded-sm border border-border object-cover shadow-sm"
+      className="mt-0.5 aspect-[2/3] w-14 shrink-0 rounded-sm border border-border bg-muted object-cover shadow-sm sm:w-11"
     />
   );
 }
