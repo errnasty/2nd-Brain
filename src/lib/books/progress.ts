@@ -43,6 +43,24 @@ export function progressFor(
 }
 
 /**
+ * Pre-compute the totals so progress is arithmetic rather than a sort.
+ *
+ * `charTotals` copies and sorts the chapter list, which is fine once and
+ * wasteful on every page turn — build this when the book loads and call the
+ * result instead.
+ */
+export function createProgressCalculator(
+  chapters: ChapterLength[],
+): (anchor: ReadingAnchor) => number {
+  const { total, before } = charTotals(chapters);
+  if (total <= 0) return () => 0;
+  return (anchor) => {
+    const read = (before[anchor.chapterIdx] ?? 0) + Math.max(0, anchor.charOffset);
+    return Math.min(1, Math.max(0, read / total));
+  };
+}
+
+/**
  * Pull an anchor back into a book that may have changed under it.
  *
  * A saved position outlives the thing it points at: a book can be re-uploaded

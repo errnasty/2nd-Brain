@@ -57,6 +57,51 @@ async function mapPool<T>(items: T[], limit: number, fn: (item: T) => Promise<vo
   await Promise.all(workers);
 }
 
+/**
+ * Uploads in flight, capped.
+ *
+ * The spine has to be *walked* in order — chunk indices and the assembled text
+ * depend on it — but nothing about a chapter's upload needs to finish before
+ * the next chapter is read. Awaiting each one turned a 400-chapter book into
+ * 400 sequential round trips to storage, which is minutes of wall clock for
+ * work that is almost entirely waiting.
+ *
+ * The cap is what keeps the memory promise: at most `limit` chapters' HTML is
+ * alive at once, rather than the whole book.
+ */
+class UploadQueue {
+  private readonly inflight = new Map<number, Promise<void>>();
+  private seq = 0;
+  private failure: unknown = null;
+
+  constructor(private readonly limit: number) {}
+
+  async push(task: () => Promise<void>): Promise<void> {
+    if (this.failure) throw this.failure;
+    while (this.inflight.size >= this.limit) {
+      await Promise.race(this.inflight.values());
+      if (this.failure) throw this.failure;
+    }
+    const id = this.seq++;
+    // The tracked promise never rejects, so racing on it cannot produce an
+    // unhandled rejection for the siblings still in flight. The first failure
+    // is kept and rethrown from the next push or from drain().
+    const tracked = task()
+      .catch((err: unknown) => {
+        this.failure ??= err;
+      })
+      .finally(() => {
+        this.inflight.delete(id);
+      });
+    this.inflight.set(id, tracked);
+  }
+
+  async drain(): Promise<void> {
+    await Promise.all(this.inflight.values());
+    if (this.failure) throw this.failure;
+  }
+}
+
 export async function ingestEpub(input: {
   buffer: Buffer;
   userId: string;
@@ -68,7 +113,18 @@ export async function ingestEpub(input: {
 
   // Keep the original. Re-rendering a book later (a better sanitizer, a new
   // reader feature) should not require the reader to find the file again.
-  await putBookObject(paths.epub, buffer, "application/epub+zip");
+  //
+  // Started, not awaited: this is the single largest object in the whole
+  // ingest and nothing downstream depends on it, so it uploads alongside the
+  // spine walk instead of in front of it. The error is captured immediately so
+  // a rejection cannot go unhandled while the walk runs, and rethrown once the
+  // walk is done — a book whose original failed to store must still fail.
+  let originalError: unknown = null;
+  const originalUpload = putBookObject(paths.epub, buffer, "application/epub+zip").catch(
+    (err: unknown) => {
+      originalError = err;
+    },
+  );
 
   const spineIdxByPath = spineIndexByPath(book.spine);
   const assetUrl = (zipPath: string) =>
@@ -78,6 +134,7 @@ export async function ingestEpub(input: {
   const chunks: IngestedChunk[] = [];
   const textParts: string[] = [];
   let chunkIndex = 0;
+  const uploads = new UploadQueue(8);
 
   for (const entry of book.spine) {
     const raw = await book.readText(entry.zipPath);
@@ -88,7 +145,11 @@ export async function ingestEpub(input: {
       spineIdxByPath,
       assetUrl,
     });
-    await putBookObject(paths.chapter(entry.idx), Buffer.from(html, "utf8"), "text/html; charset=utf-8");
+    // Queued rather than awaited: the walk continues while this uploads.
+    const body = Buffer.from(html, "utf8");
+    await uploads.push(() =>
+      putBookObject(paths.chapter(entry.idx), body, "text/html; charset=utf-8"),
+    );
 
     const text = chapterText(raw);
     // A title from the book's own table of contents beats one scraped from the
@@ -119,13 +180,16 @@ export async function ingestEpub(input: {
     }
   }
 
+  await Promise.all([uploads.drain(), originalUpload]);
+  if (originalError) throw originalError;
+
   if (chapters.length === 0) {
     throw new Error("This book has no readable chapters.");
   }
 
   // ── assets ────────────────────────────────────────────────────────────
   let missingAssets = 0;
-  await mapPool(book.assets, 6, async (asset) => {
+  await mapPool(book.assets, 8, async (asset) => {
     const bytes = await book.readBinary(asset.zipPath);
     if (!bytes) {
       missingAssets++;

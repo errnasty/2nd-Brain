@@ -321,6 +321,16 @@ export type ItemContent = {
 
 const MAX_DOC_CHARS = 6000; // per-document budget so a few big files don't blow the prompt
 
+// How many chunks the aggregate below bothers to read.
+//
+// It concatenates chunks in order and then throws away everything past
+// MAX_DOC_CHARS. That was harmless when a document meant a PDF, but a book runs
+// to hundreds of chunks, so the query was assembling megabytes to keep 6KB —
+// on every Ask that touched one. Chunks target 4000 characters, so thirty of
+// them is many times the budget and the result is the same string; the limit
+// only stops the database doing work whose output is discarded.
+const DOC_TEXT_CHUNK_LIMIT = 30;
+
 /**
  * Fetch the ACTUAL text for matched items (not just the 400-char snippet from
  * retrieval). Notes use their own content; documents concatenate their chunks
@@ -359,7 +369,9 @@ export async function fetchItemContents(
       left(coalesce(
         (select string_agg(c.content, E'\n\n' order by c.chunk_index)
          from document_chunks c
-         where c.document_id = di.document_id and ${spoilerClampSql("c")}),
+         where c.document_id = di.document_id
+           and c.chunk_index < ${DOC_TEXT_CHUNK_LIMIT}
+           and ${spoilerClampSql("c")}),
         d.full_text
       ), ${MAX_DOC_CHARS}) as doc_text,
       left(coalesce(a.full_text, a.excerpt), ${MAX_DOC_CHARS}) as article_text

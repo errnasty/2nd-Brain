@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { advanceFurthest, charTotals, clampAnchor, progressFor } from "./progress";
+import {
+  advanceFurthest,
+  charTotals,
+  clampAnchor,
+  createProgressCalculator,
+  progressFor,
+} from "./progress";
 
 const book = [
   { idx: 0, charCount: 100 },
@@ -88,5 +94,34 @@ describe("advanceFurthest", () => {
     expect(advanceFurthest(5, 7)).toBe(7);
     // Re-reading chapter 2 must not re-hide chapter 9 from the spoiler clamp.
     expect(advanceFurthest(9, 2)).toBe(9);
+  });
+});
+
+describe("createProgressCalculator", () => {
+  it("agrees with progressFor", () => {
+    const at = createProgressCalculator(book);
+    for (const anchor of [
+      { chapterIdx: 0, charOffset: 0 },
+      { chapterIdx: 1, charOffset: 150 },
+      { chapterIdx: 2, charOffset: 600 },
+      { chapterIdx: 2, charOffset: 99999 },
+      { chapterIdx: 1, charOffset: -20 },
+    ]) {
+      expect(at(anchor)).toBeCloseTo(progressFor(book, anchor));
+    }
+  });
+
+  it("returns 0 for an empty book without dividing by zero", () => {
+    expect(createProgressCalculator([])({ chapterIdx: 0, charOffset: 5 })).toBe(0);
+    expect(createProgressCalculator([{ idx: 0, charCount: 0 }])({ chapterIdx: 0, charOffset: 5 })).toBe(0);
+  });
+
+  it("sorts once, not once per call", () => {
+    // The point of the helper: the chapter table is built when the book loads
+    // rather than rebuilt on every page turn.
+    const chapters = [{ idx: 1, charCount: 10 }, { idx: 0, charCount: 10 }];
+    const at = createProgressCalculator(chapters);
+    chapters.length = 0;
+    expect(at({ chapterIdx: 1, charOffset: 0 })).toBeCloseTo(0.5);
   });
 });

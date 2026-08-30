@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { requireUser } from "@/lib/auth";
 import { loadBookDoc, loadChapters, loadReadingState } from "@/lib/books/access";
 import { clampAnchor, progressFor } from "@/lib/books/progress";
+import { bookPaths, getBookObject } from "@/lib/books/storage";
 import { BookReader, type BookReaderTheme } from "@/components/reader/book/book-reader";
 
 export const dynamic = "force-dynamic";
@@ -43,11 +44,18 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
     chapterIdx: state?.chapterIdx ?? 0,
     charOffset: state?.charOffset ?? 0,
   });
+  // The chapter the reader will resume on, fetched here rather than left to the
+  // client. Otherwise opening a book costs a full round trip after hydration
+  // before a single word appears — the most visible latency in the feature, and
+  // entirely avoidable since this request already has bucket access.
+  const first = await getBookObject(bookPaths(user.id, doc.id).chapter(anchor.chapterIdx));
+
   const meta = (doc.metadata ?? {}) as Record<string, unknown>;
   const storedTheme = state?.theme;
 
   return (
     <BookReader
+      initialHtml={first ? first.body.toString("utf8") : null}
       book={{
         id: doc.id,
         title: doc.title,

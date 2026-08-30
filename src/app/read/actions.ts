@@ -1,11 +1,11 @@
 "use server";
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookChapters, bookReadingState, documents } from "@/lib/db/schema";
+import { bookReadingState, documents } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
-import { advanceFurthest, progressFor } from "@/lib/books/progress";
+import { advanceFurthest } from "@/lib/books/progress";
 
 const PositionSchema = z.object({
   documentId: z.string().uuid(),
@@ -46,25 +46,34 @@ export async function saveBookPositionAction(input: {
     return { ok: false as const, error: "Not found" };
   }
 
-  const chapters = await db
-    .select({ idx: bookChapters.idx, charCount: bookChapters.charCount })
-    .from(bookChapters)
-    .where(and(eq(bookChapters.documentId, documentId), eq(bookChapters.userId, user.id)))
-    .orderBy(asc(bookChapters.idx));
+  // Two sums and the current chapter's length, in one row. Reading back every
+  // chapter of a 400-chapter book to add up two numbers — every 1.5 seconds of
+  // reading, for every reader — is the kind of thing that only shows up once
+  // someone has a large library.
+  const totals = (await db.execute(sql`
+    select
+      coalesce(sum(char_count), 0)::bigint                                   as total,
+      coalesce(sum(char_count) filter (where idx < ${chapterIdx}), 0)::bigint as before,
+      coalesce(max(char_count) filter (where idx = ${chapterIdx}), 0)::bigint as current,
+      (select furthest_chapter_idx from book_reading_state
+        where document_id = ${documentId} and user_id = ${user.id})         as furthest
+    from book_chapters
+    where document_id = ${documentId} and user_id = ${user.id}
+  `)) as unknown as { total: string; before: string; current: string; furthest: number | null }[];
 
-  const progressPct = progressFor(chapters, { chapterIdx, charOffset });
+  const row = totals[0];
+  const total = Number(row?.total ?? 0);
+  const before = Number(row?.before ?? 0);
+  const current = Number(row?.current ?? 0);
 
-  const [existing] = await db
-    .select({ furthestChapterIdx: bookReadingState.furthestChapterIdx })
-    .from(bookReadingState)
-    .where(
-      and(eq(bookReadingState.documentId, documentId), eq(bookReadingState.userId, user.id)),
-    )
-    .limit(1);
+  // The stored count is an estimate of what the browser renders, so a real
+  // offset can overshoot it; clamping keeps progress inside 0..1.
+  const read = before + Math.min(Math.max(0, charOffset), current);
+  const progressPct = total > 0 ? Math.min(1, read / total) : 0;
 
   // Monotonic: flipping back to re-read an earlier chapter must not re-hide a
   // later one from the spoiler clamp.
-  const furthestChapterIdx = advanceFurthest(existing?.furthestChapterIdx ?? 0, chapterIdx);
+  const furthestChapterIdx = advanceFurthest(row?.furthest ?? 0, chapterIdx);
 
   await db
     .insert(bookReadingState)

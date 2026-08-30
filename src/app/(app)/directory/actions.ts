@@ -915,6 +915,17 @@ export async function uploadToDirectoryAction(formData: FormData): Promise<Direc
   }
 }
 
+/** Insert a long list without building one statement Postgres will refuse. */
+async function insertInBatches<T>(
+  rows: T[],
+  insert: (batch: T[]) => Promise<unknown>,
+  size = 1000,
+): Promise<void> {
+  for (let i = 0; i < rows.length; i += size) {
+    await insert(rows.slice(i, i + size));
+  }
+}
+
 /**
  * Ingest an ePub as a readable book rather than a wall of text.
  *
@@ -982,7 +993,12 @@ async function uploadBookToDirectory(
       })
       .where(eq(documents.id, doc.id));
 
-    await db.insert(bookChapters).values(
+    // Batched: Postgres caps a statement at 65535 bound parameters, and a
+    // reference work with thousands of sections would sail past that as one
+    // insert. 1000 rows keeps every statement an order of magnitude clear of
+    // the limit while still being a handful of round trips rather than
+    // thousands.
+    await insertInBatches(
       book.chapters.map((c) => ({
         documentId: doc.id,
         userId,
@@ -992,22 +1008,22 @@ async function uploadBookToDirectory(
         charCount: c.charCount,
         navLevel: c.navLevel,
       })),
+      (rows) => db.insert(bookChapters).values(rows),
     );
 
-    if (book.chunks.length > 0) {
-      // Chunked per chapter, so the spoiler clamp has an honest column to
-      // filter on rather than a guess at where chapter boundaries fell.
-      await db.insert(documentChunks).values(
-        book.chunks.map((c) => ({
-          documentId: doc.id,
-          userId,
-          chunkIndex: c.index,
-          content: c.text,
-          tokenCount: c.approxTokens,
-          chapterIndex: c.chapterIndex,
-        })),
-      );
-    }
+    // Chunked per chapter, so the spoiler clamp has an honest column to filter
+    // on rather than a guess at where chapter boundaries fell.
+    await insertInBatches(
+      book.chunks.map((c) => ({
+        documentId: doc.id,
+        userId,
+        chunkIndex: c.index,
+        content: c.text,
+        tokenCount: c.approxTokens,
+        chapterIndex: c.chapterIndex,
+      })),
+      (rows) => db.insert(documentChunks).values(rows),
+    );
 
     const [item] = await db
       .insert(directoryItems)

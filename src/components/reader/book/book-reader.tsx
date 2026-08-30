@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronLeft,
@@ -14,8 +14,8 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { offsetAtX, xOfOffset } from "@/lib/books/dom-anchor";
-import { progressFor } from "@/lib/books/progress";
+import { indexChapter, offsetAtX, xOfOffset, type ChapterIndex } from "@/lib/books/dom-anchor";
+import { createProgressCalculator } from "@/lib/books/progress";
 import { saveBookPositionAction, setBookPrefsAction } from "@/app/read/actions";
 
 export type BookChapterMeta = {
@@ -52,14 +52,21 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
 }
 
-export function BookReader({ book }: { book: BookPayload }) {
+export function BookReader({
+  book,
+  initialHtml = null,
+}: {
+  book: BookPayload;
+  /** The resume chapter, rendered on the server so the book opens instantly. */
+  initialHtml?: string | null;
+}) {
   const router = useRouter();
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const [chapterIdx, setChapterIdx] = useState(book.state.chapterIdx);
-  const [html, setHtml] = useState<string | null>(null);
+  const [html, setHtml] = useState<string | null>(initialHtml);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [pageCount, setPageCount] = useState(1);
@@ -75,29 +82,88 @@ export function BookReader({ book }: { book: BookPayload }) {
   const anchorRef = useRef(book.state.charOffset);
   const [progress, setProgress] = useState(book.state.progressPct);
 
+  // Measured once per reflow and reused for every page turn. Rebuilding it per
+  // turn would mean a getBoundingClientRect for every text node in the chapter.
+  const indexRef = useRef<ChapterIndex | null>(null);
+
+  // Progress is asked for on every page turn and every scroll tick, and the
+  // naive form sorts the chapter list each time.
+  const progressAt = useMemo(() => createProgressCalculator(book.chapters), [book.chapters]);
+
+  // Chapters already fetched. Turning back a page at a chapter boundary, or
+  // flipping through a table of contents, should never hit the network twice.
+  // Seeded with the server-rendered chapter so the first paint costs nothing.
+  const cacheRef = useRef<Map<number, string>>(
+    new Map(initialHtml === null ? [] : [[book.state.chapterIdx, initialHtml]]),
+  );
+
   const scrollMode = book.fixedLayout;
   const chapter = book.chapters.find((c) => c.idx === chapterIdx) ?? book.chapters[0];
 
   /* ── chapter loading ─────────────────────────────────────────────── */
 
+  const loadChapter = useCallback(
+    async (idx: number, signal?: AbortSignal): Promise<string> => {
+      const cached = cacheRef.current.get(idx);
+      if (cached !== undefined) return cached;
+
+      const r = await fetch(`/api/book/${book.id}/chapter/${idx}`, { signal });
+      if (!r.ok) {
+        throw new Error(r.status === 404 ? "This chapter is missing." : "Couldn't load this chapter.");
+      }
+      const text = await r.text();
+
+      // A handful of chapters is a megabyte at most, and the ones worth keeping
+      // are always the ones nearest where you are reading.
+      const cache = cacheRef.current;
+      cache.set(idx, text);
+      if (cache.size > 7) {
+        const furthest = [...cache.keys()].reduce((a, b) =>
+          Math.abs(b - idx) > Math.abs(a - idx) ? b : a,
+        );
+        if (furthest !== idx) cache.delete(furthest);
+      }
+      return text;
+    },
+    [book.id],
+  );
+
   useEffect(() => {
     const ac = new AbortController();
-    setHtml(null);
-    setLoadError(null);
 
-    fetch(`/api/book/${book.id}/chapter/${chapterIdx}`, { signal: ac.signal })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(r.status === 404 ? "This chapter is missing." : "Couldn't load this chapter.");
-        return r.text();
-      })
-      .then(setHtml)
-      .catch((err: unknown) => {
-        if (ac.signal.aborted) return;
-        setLoadError(err instanceof Error ? err.message : "Couldn't load this chapter.");
-      });
+    // A cache hit renders synchronously: crossing a chapter boundary should
+    // not flash a spinner for content already in memory.
+    const cached = cacheRef.current.get(chapterIdx);
+    if (cached !== undefined) {
+      setHtml(cached);
+      setLoadError(null);
+    } else {
+      setHtml(null);
+      setLoadError(null);
+      loadChapter(chapterIdx, ac.signal)
+        .then(setHtml)
+        .catch((err: unknown) => {
+          if (ac.signal.aborted) return;
+          setLoadError(err instanceof Error ? err.message : "Couldn't load this chapter.");
+        });
+    }
 
-    return () => ac.abort();
-  }, [book.id, chapterIdx]);
+    // Warm the neighbours. Reading is overwhelmingly forwards, so the next
+    // chapter goes first and the previous one follows — by the time the last
+    // page of this chapter is reached, the next one is already in memory.
+    const warm = window.setTimeout(() => {
+      for (const idx of [chapterIdx + 1, chapterIdx - 1]) {
+        if (idx < 0 || cacheRef.current.has(idx)) continue;
+        if (!book.chapters.some((c) => c.idx === idx)) continue;
+        void loadChapter(idx).catch(() => {});
+      }
+    }, 250);
+
+    return () => {
+      ac.abort();
+      window.clearTimeout(warm);
+    };
+  }, [book.id, book.chapters, chapterIdx, loadChapter]);
 
   /* ── measure ─────────────────────────────────────────────────────── */
 
@@ -123,7 +189,11 @@ export function BookReader({ book }: { book: BookPayload }) {
     const count = Math.max(1, Math.round((content.scrollWidth + COLUMN_GAP) / stride));
     setPageCount(count);
 
-    const x = xOfOffset(content, anchorRef.current);
+    // Measure everything once, here, while the layout is already being read.
+    const index = indexChapter(content);
+    indexRef.current = index;
+
+    const x = xOfOffset(index, content, anchorRef.current);
     setPage(x === null ? 0 : clamp(Math.floor((x + 1) / stride), 0, count - 1));
   }, [html, size.w, size.h, fontScale, scrollMode]);
 
@@ -157,15 +227,18 @@ export function BookReader({ book }: { book: BookPayload }) {
     const content = contentRef.current;
     if (!content || !html || scrollMode) return;
 
-    anchorRef.current = offsetAtX(content, page * (size.w + COLUMN_GAP));
-    setProgress(progressFor(book.chapters, { chapterIdx, charOffset: anchorRef.current }));
+    const index = indexRef.current;
+    if (!index) return;
+
+    anchorRef.current = offsetAtX(index, content, page * (size.w + COLUMN_GAP));
+    setProgress(progressAt({ chapterIdx, charOffset: anchorRef.current }));
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => persist(chapterIdx, anchorRef.current), 1500);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [page, html, size.w, chapterIdx, scrollMode, book.chapters, persist]);
+  }, [page, html, size.w, chapterIdx, scrollMode, progressAt, persist]);
 
   // Leaving the reader through an in-app navigation unmounts without ever
   // firing visibilitychange, and the pending debounce is cleared on the way
@@ -199,11 +272,11 @@ export function BookReader({ book }: { book: BookPayload }) {
     const scrollable = content.scrollHeight - content.clientHeight;
     const ratio = scrollable > 0 ? content.scrollTop / scrollable : 0;
     anchorRef.current = Math.round(ratio * chapter.charCount);
-    setProgress(progressFor(book.chapters, { chapterIdx, charOffset: anchorRef.current }));
+    setProgress(progressAt({ chapterIdx, charOffset: anchorRef.current }));
 
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => persist(chapterIdx, anchorRef.current), 1500);
-  }, [scrollMode, chapter, book.chapters, chapterIdx, persist]);
+  }, [scrollMode, chapter, chapterIdx, progressAt, persist]);
 
   /* ── navigation ──────────────────────────────────────────────────── */
 
