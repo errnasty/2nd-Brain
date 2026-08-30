@@ -1,8 +1,13 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Check, Highlighter, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { setBookFinishedAction } from "@/app/read/actions";
+import { exportHighlightsAction } from "@/app/read/highlights";
 
 /**
  * What the Directory shows for a book: the book, not its text.
@@ -25,6 +30,9 @@ export type BookInfoData = {
   chapterIdx: number;
   chapterTitle: string | null;
   started: boolean;
+  /** ISO timestamp of when it was marked read, or null. */
+  finishedAt: string | null;
+  highlightCount: number;
 };
 
 function formatSize(bytes: number | null): string | null {
@@ -49,15 +57,54 @@ function formatLanguage(tag: string | null): string | null {
 
 export function BookInfo({
   documentId,
+  itemId,
   title,
   book,
 }: {
   documentId: string;
+  /** The Directory item, so exported highlights are filed beside the book. */
+  itemId: string;
   title: string;
   book: BookInfoData;
 }) {
   const router = useRouter();
+  const [, startTransition] = useTransition();
+  const [finishedAt, setFinishedAt] = useState<string | null>(book.finishedAt);
   const percent = Math.round(book.progressPct * 100);
+
+  function toggleFinished() {
+    const next = finishedAt === null;
+    setFinishedAt(next ? new Date().toISOString() : null);
+    startTransition(async () => {
+      const r = await setBookFinishedAction({ documentId, finished: next });
+      if (!r.ok) {
+        // Put the button back rather than leave it claiming something untrue.
+        setFinishedAt(next ? null : new Date().toISOString());
+        toast.error(r.error);
+        return;
+      }
+      router.refresh();
+    });
+  }
+
+  const [exporting, setExporting] = useState(false);
+
+  function exportHighlights() {
+    setExporting(true);
+    startTransition(async () => {
+      try {
+        const r = await exportHighlightsAction({ documentId, itemId });
+        if (!r.ok) {
+          toast.error(r.error);
+          return;
+        }
+        toast.success(`Saved ${r.count} highlight${r.count === 1 ? "" : "s"} to a note.`);
+        router.push(`/directory?item=${r.noteId}`);
+      } finally {
+        setExporting(false);
+      }
+    });
+  }
 
   const facts: { label: string; value: string }[] = [];
   if (book.chapterCount > 0) {
@@ -88,14 +135,34 @@ export function BookInfo({
           <p className="text-[0.95rem] text-muted-foreground">by {book.author}</p>
         )}
 
-        <Button
-          size="lg"
-          onClick={() => router.push(`/read/${documentId}`)}
-          className="mt-4 w-full gap-2 sm:w-auto"
-        >
-          <BookOpen className="h-4 w-4" />
-          {book.started ? "Continue reading" : "Start reading"}
-        </Button>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Button
+            size="lg"
+            onClick={() => router.push(`/read/${documentId}`)}
+            className="w-full gap-2 sm:w-auto"
+          >
+            <BookOpen className="h-4 w-4" />
+            {book.started ? "Continue reading" : "Start reading"}
+          </Button>
+          <button
+            onClick={toggleFinished}
+            className={cn(
+              "inline-flex h-11 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors",
+              finishedAt
+                ? "border-brand text-brand"
+                : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+            )}
+          >
+            <Check className="h-4 w-4" />
+            {finishedAt ? "Read" : "Mark as read"}
+          </button>
+        </div>
+
+        {finishedAt && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Finished {new Date(finishedAt).toLocaleDateString()}
+          </p>
+        )}
 
         {book.started && (
           <div className="mt-4">
@@ -112,6 +179,23 @@ export function BookInfo({
                 <span className="italic"> — {book.chapterTitle}</span>
               )}
             </p>
+          </div>
+        )}
+
+        {book.highlightCount > 0 && (
+          <div className="mt-5 flex flex-wrap items-center gap-2 rounded-md border border-border p-3">
+            <Highlighter className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="flex-1 text-sm text-muted-foreground">
+              {book.highlightCount} highlight{book.highlightCount === 1 ? "" : "s"}
+            </span>
+            <button
+              onClick={exportHighlights}
+              disabled={exporting}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-60"
+            >
+              {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Save to a note
+            </button>
           </div>
         )}
 

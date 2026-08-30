@@ -1,6 +1,12 @@
 import { and, asc, eq } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { bookChapters, bookReadingState, documents } from "@/lib/db/schema";
+import {
+  bookChapters,
+  bookHighlights,
+  bookNav,
+  bookReadingState,
+  documents,
+} from "@/lib/db/schema";
 
 /**
  * Ownership and shape checks every book route repeats.
@@ -66,6 +72,53 @@ export async function loadChapters(documentId: string, userId: string) {
     .from(bookChapters)
     .where(and(eq(bookChapters.documentId, documentId), eq(bookChapters.userId, userId)))
     .orderBy(asc(bookChapters.idx));
+}
+
+/**
+ * The book's contents, in the book's order.
+ *
+ * Empty for a book that shipped no nav, and for every book ingested before the
+ * nav was stored — the reader falls back to listing the spine, which is a worse
+ * contents list but still a usable one.
+ */
+export async function loadNav(documentId: string, userId: string) {
+  return db
+    .select({
+      idx: bookNav.idx,
+      title: bookNav.title,
+      level: bookNav.level,
+      chapterIdx: bookNav.chapterIdx,
+      fragment: bookNav.fragment,
+    })
+    .from(bookNav)
+    .where(and(eq(bookNav.documentId, documentId), eq(bookNav.userId, userId)))
+    .orderBy(asc(bookNav.idx));
+}
+
+/**
+ * Every highlight in the book.
+ *
+ * All of them, not just the open chapter's: a book's highlights number in the
+ * dozens, the payload is smaller than one chapter of text, and having them in
+ * hand means turning a page never waits on a round trip to find out whether
+ * there is anything to draw.
+ */
+export async function loadHighlights(documentId: string, userId: string) {
+  return db
+    .select({
+      id: bookHighlights.id,
+      chapterIdx: bookHighlights.chapterIdx,
+      startOffset: bookHighlights.startOffset,
+      endOffset: bookHighlights.endOffset,
+      text: bookHighlights.text,
+      note: bookHighlights.note,
+      color: bookHighlights.color,
+    })
+    .from(bookHighlights)
+    .where(
+      and(eq(bookHighlights.documentId, documentId), eq(bookHighlights.userId, userId)),
+    )
+    .orderBy(asc(bookHighlights.chapterIdx), asc(bookHighlights.startOffset));
 }
 
 export async function loadReadingState(documentId: string, userId: string) {

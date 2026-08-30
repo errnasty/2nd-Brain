@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseNavDocument, parseNcx } from "./epub";
+import { navTitlesByPath, parseNavDocument, parseNcx } from "./epub";
 
 describe("parseNavDocument (EPUB 3)", () => {
   const nav = `
@@ -19,37 +19,37 @@ describe("parseNavDocument (EPUB 3)", () => {
       </nav>
     </body></html>`;
 
-  it("reads titles resolved against the nav document's own folder", () => {
+  it("keeps the contents in the book's own order", () => {
+    expect(parseNavDocument(nav, "OEBPS/nav.xhtml").map((e) => e.title)).toEqual([
+      "One",
+      "Two",
+      "Two point one",
+    ]);
+  });
+
+  it("resolves targets against the nav document's own folder", () => {
     const out = parseNavDocument(nav, "OEBPS/nav.xhtml");
-    expect(out.get("OEBPS/ch1.xhtml")?.title).toBe("One");
-    expect(out.get("OEBPS/ch2.xhtml")?.title).toBe("Two");
+    expect(out[0].zipPath).toBe("OEBPS/ch1.xhtml");
+    expect(out[1].zipPath).toBe("OEBPS/ch2.xhtml");
+  });
+
+  it("keeps the fragment, so an entry can point inside a file", () => {
+    const out = parseNavDocument(nav, "OEBPS/nav.xhtml");
+    // The whole reason the nav is stored separately: several entries can share
+    // one file and differ only by anchor.
+    expect(out[2]).toMatchObject({ zipPath: "OEBPS/ch2.xhtml", fragment: "s1" });
+    expect(out[0].fragment).toBeNull();
   });
 
   it("uses list nesting for the outline level", () => {
-    const out = parseNavDocument(
-      `<nav epub:type="toc"><ol>
-         <li><a href="a.xhtml">Top</a>
-           <ol><li><a href="b.xhtml">Nested</a></li></ol>
-         </li>
-       </ol></nav>`,
-      "nav.xhtml",
-    );
-    expect(out.get("a.xhtml")?.level).toBe(1);
-    expect(out.get("b.xhtml")?.level).toBe(2);
-  });
-
-  it("names a chapter that the toc only ever reaches through a fragment", () => {
-    // Single-file books split by anchors are common; without this they would
-    // have no chapter name at all.
-    const out = parseNavDocument(
-      `<nav epub:type="toc"><ol><li><a href="all.xhtml#c3">Chapter Three</a></li></ol></nav>`,
-      "nav.xhtml",
-    );
-    expect(out.get("all.xhtml")?.title).toBe("Chapter Three");
+    const out = parseNavDocument(nav, "OEBPS/nav.xhtml");
+    expect(out.map((e) => e.level)).toEqual([1, 1, 2]);
   });
 
   it("ignores the landmarks nav, which is not a table of contents", () => {
-    expect(parseNavDocument(nav, "OEBPS/nav.xhtml").has("OEBPS/ch9.xhtml")).toBe(false);
+    expect(parseNavDocument(nav, "OEBPS/nav.xhtml").some((e) => e.title.includes("Start"))).toBe(
+      false,
+    );
   });
 
   it("strips inline markup and decodes entities in a title", () => {
@@ -57,28 +57,29 @@ describe("parseNavDocument (EPUB 3)", () => {
       `<nav epub:type="toc"><ol><li><a href="a.xhtml">Tom <b>&amp;</b> Jerry</a></li></ol></nav>`,
       "nav.xhtml",
     );
-    expect(out.get("a.xhtml")?.title).toBe("Tom & Jerry");
+    expect(out[0].title).toBe("Tom & Jerry");
   });
 
-  it("keeps the first title when a chapter is linked twice", () => {
+  it("keeps every entry when a file is listed more than once", () => {
     const out = parseNavDocument(
       `<nav epub:type="toc"><ol>
-         <li><a href="a.xhtml">Real name</a></li>
-         <li><a href="a.xhtml">Duplicate</a></li>
+         <li><a href="a.xhtml">Chapter</a></li>
+         <li><a href="a.xhtml#b">Section</a></li>
        </ol></nav>`,
       "nav.xhtml",
     );
-    expect(out.get("a.xhtml")?.title).toBe("Real name");
+    expect(out.map((e) => e.title)).toEqual(["Chapter", "Section"]);
   });
 
   it("falls back to the whole document when no toc nav is marked", () => {
     const out = parseNavDocument(`<ol><li><a href="a.xhtml">Plain</a></li></ol>`, "nav.xhtml");
-    expect(out.get("a.xhtml")?.title).toBe("Plain");
+    expect(out[0].title).toBe("Plain");
   });
 
   it("skips an anchor with no title text", () => {
-    const out = parseNavDocument(`<nav epub:type="toc"><ol><li><a href="a.xhtml"></a></li></ol></nav>`, "nav.xhtml");
-    expect(out.size).toBe(0);
+    expect(
+      parseNavDocument(`<nav epub:type="toc"><ol><li><a href="a.xhtml"></a></li></ol></nav>`, "nav.xhtml"),
+    ).toEqual([]);
   });
 });
 
@@ -91,42 +92,53 @@ describe("parseNcx (EPUB 2)", () => {
       <navPoint><navLabel><text>Two</text></navLabel><content src="text/ch2.xhtml"/></navPoint>
     </navMap></ncx>`;
 
-  it("reads titles and resolves them against the ncx's folder", () => {
+  it("keeps depth-first order, which is reading order", () => {
+    expect(parseNcx(ncx, "OEBPS/toc.ncx").map((e) => e.title)).toEqual(["One", "One A", "Two"]);
+  });
+
+  it("resolves targets against the ncx's folder and keeps fragments", () => {
     const out = parseNcx(ncx, "OEBPS/toc.ncx");
-    expect(out.get("OEBPS/text/ch1.xhtml")?.title).toBe("One");
-    expect(out.get("OEBPS/text/ch2.xhtml")?.title).toBe("Two");
+    expect(out[0]).toMatchObject({ zipPath: "OEBPS/text/ch1.xhtml", fragment: null });
+    expect(out[1]).toMatchObject({ zipPath: "OEBPS/text/ch1.xhtml", fragment: "a" });
   });
 
   it("takes the outline level from navPoint nesting", () => {
-    const nested = `<ncx><navMap>
-      <navPoint><navLabel><text>Top</text></navLabel><content src="a.xhtml"/>
-        <navPoint><navLabel><text>Nested</text></navLabel><content src="b.xhtml"/></navPoint>
-      </navPoint>
-    </navMap></ncx>`;
-    const out = parseNcx(nested, "toc.ncx");
-    expect(out.get("a.xhtml")?.level).toBe(1);
-    expect(out.get("b.xhtml")?.level).toBe(2);
-  });
-
-  it("keeps the outer title when a sub-entry points back into the same file", () => {
-    const out = parseNcx(ncx, "OEBPS/toc.ncx");
-    expect(out.get("OEBPS/text/ch1.xhtml")?.title).toBe("One");
+    expect(parseNcx(ncx, "OEBPS/toc.ncx").map((e) => e.level)).toEqual([1, 2, 1]);
   });
 
   it("handles a single navPoint, which the XML parser hands back unwrapped", () => {
     const one = `<ncx><navMap><navPoint><navLabel><text>Only</text></navLabel>
       <content src="a.xhtml"/></navPoint></navMap></ncx>`;
-    expect(parseNcx(one, "toc.ncx").get("a.xhtml")?.title).toBe("Only");
+    expect(parseNcx(one, "toc.ncx")[0].title).toBe("Only");
   });
 
   it("keeps a numeric-looking title as text", () => {
     const numeric = `<ncx><navMap><navPoint><navLabel><text>1984</text></navLabel>
       <content src="a.xhtml"/></navPoint></navMap></ncx>`;
-    expect(parseNcx(numeric, "toc.ncx").get("a.xhtml")?.title).toBe("1984");
+    expect(parseNcx(numeric, "toc.ncx")[0].title).toBe("1984");
   });
 
   it("returns nothing rather than throwing on malformed XML", () => {
-    expect(parseNcx("<ncx><navMap>", "toc.ncx").size).toBe(0);
-    expect(parseNcx("", "toc.ncx").size).toBe(0);
+    expect(parseNcx("<ncx><navMap>", "toc.ncx")).toEqual([]);
+    expect(parseNcx("", "toc.ncx")).toEqual([]);
+  });
+});
+
+describe("navTitlesByPath", () => {
+  it("names a file after the first entry that points at it", () => {
+    const titles = navTitlesByPath([
+      { title: "Chapter Three", level: 1, zipPath: "a.xhtml", fragment: null },
+      { title: "A section within it", level: 2, zipPath: "a.xhtml", fragment: "s2" },
+    ]);
+    expect(titles.get("a.xhtml")?.title).toBe("Chapter Three");
+  });
+
+  it("names a file the toc only ever reaches through a fragment", () => {
+    // Single-file books split by anchors are common; without this the file
+    // would have no name at all.
+    const titles = navTitlesByPath([
+      { title: "Chapter Three", level: 1, zipPath: "all.xhtml", fragment: "c3" },
+    ]);
+    expect(titles.get("all.xhtml")?.title).toBe("Chapter Three");
   });
 });

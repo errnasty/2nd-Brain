@@ -5,7 +5,7 @@ import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { ArrowDownUp, BookOpen, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDownUp, BookOpen, Brain, Loader2, ChevronLeft, Check, FileText, FolderClosed, FolderPlus, GraduationCap, GripVertical, LayoutGrid, Library, Lightbulb, Link2, List, MoreVertical, Newspaper, NotebookPen, Pencil, Plus, SlidersHorizontal, Upload, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -70,6 +70,12 @@ const DirectoryBoard = dynamic(() => import("./directory-board").then((m) => m.D
   ssr: false,
   loading: () => <div className="flex-1" aria-busy="true" />,
 });
+// Lazy like the board: most visits never switch view, and the shelf pulls in
+// its own cover loading on top of the grid.
+const DirectoryShelf = dynamic(() => import("./directory-shelf").then((m) => m.DirectoryShelf), {
+  ssr: false,
+  loading: () => <div className="flex-1" aria-busy="true" />,
+});
 const GapsDialog = dynamic(() => import("./gaps-dialog").then((m) => m.GapsDialog), { ssr: false });
 const CurriculumDialog = dynamic(
   () => import("./curriculum-dialog").then((m) => m.CurriculumDialog),
@@ -95,6 +101,10 @@ export type DirectoryListItem = {
   documentId: string | null;
   /** An ePub the reader can open. See DirItem for why this is not just kind. */
   isBook?: boolean;
+  bookFinished?: boolean;
+  /** 0..1. Zero for anything that is not a book, or has not been opened. */
+  bookProgress?: number;
+  bookAuthor?: string | null;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -132,7 +142,7 @@ function BookCover({ documentId, title }: { documentId: string; title: string })
       height={192}
       onError={() => setFailed(true)}
       title={title}
-      className="mt-0.5 aspect-[2/3] w-14 shrink-0 rounded-sm border border-border bg-muted object-cover shadow-sm sm:w-11"
+      className="mt-0.5 aspect-[2/3] w-20 shrink-0 self-start rounded border border-border bg-muted object-cover shadow-md sm:w-16"
     />
   );
 }
@@ -167,7 +177,7 @@ export function DirectoryShell({
   // instead of requiring a rename + mode-switch first.
   const [freshItemId, setFreshItemId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  const [view, setView] = useState<"list" | "board">("list");
+  const [view, setView] = useState<"list" | "board" | "shelf">("list");
   const [listCollapsed, toggleListCollapsed] = useListCollapse("directory.listCollapsed.v1");
   const [gapsOpen, setGapsOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
@@ -736,6 +746,18 @@ export function DirectoryShell({
                 <List className="h-3.5 w-3.5" />
               </button>
               <button
+                onClick={() => setView("shelf")}
+                title="Shelf view (books by cover)"
+                className={cn(
+                  "rounded p-1 transition-colors",
+                  view === "shelf"
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Library className="h-3.5 w-3.5" />
+              </button>
+              <button
                 onClick={() => setView("board")}
                 title="Board view (reading pipeline)"
                 className={cn(
@@ -843,6 +865,12 @@ export function DirectoryShell({
                   Reset filters
                 </Button>
               </div>
+            ) : view === "shelf" ? (
+              <DirectoryShelf
+                items={filteredItems}
+                selectedId={selectedId}
+                onOpen={selectItem}
+              />
             ) : view === "board" ? (
               <DirectoryBoard
                 items={filteredItems}
@@ -1186,6 +1214,14 @@ function DraggableItemRow({
             <div className="mb-1.5 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
               {item.isBook ? <BookOpen className="h-3 w-3" /> : KIND_META[item.kind].icon}
               <span>{item.isBook ? "Book" : KIND_META[item.kind].label}</span>
+              {item.bookFinished && (
+                <>
+                  <span className="opacity-50">·</span>
+                  <span className="inline-flex items-center gap-0.5 text-brand">
+                    <Check className="h-3 w-3" /> Read
+                  </span>
+                </>
+              )}
               <span className="opacity-50">·</span>
               <span className="normal-case" style={{ letterSpacing: 0 }}>{formatRelativeTime(item.updatedAt)}</span>
             </div>

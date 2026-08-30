@@ -293,6 +293,40 @@ export const bookChapters = pgTable(
 );
 
 /**
+ * The book's own table of contents, in the book's own order.
+ *
+ * Deliberately not the spine. `bookChapters` is reading order and the unit the
+ * reader pages through; this is what the author called the contents, which
+ * nests differently, orders differently, and frequently points at an anchor
+ * inside a chapter rather than at its start.
+ */
+export const bookNav = pgTable(
+  "book_nav",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    /** Position in the contents — the order it must be displayed in. */
+    idx: integer("idx").notNull(),
+    title: text("title").notNull(),
+    level: integer("level").default(1).notNull(),
+    /** Spine entry this line opens. */
+    chapterIdx: integer("chapter_idx").notNull(),
+    /** Anchor within that entry, when the line points into the middle of one. */
+    fragment: text("fragment"),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    docIdxUnique: uniqueIndex("book_nav_doc_idx_unique").on(t.documentId, t.idx),
+    userIdx: index("book_nav_user_idx").on(t.userId),
+  }),
+);
+
+/**
  * Where a reader is in a book, plus the preferences that belong to this book
  * rather than to the account.
  *
@@ -320,11 +354,55 @@ export const bookReadingState = pgTable(
     spoilerSafe: boolean("spoiler_safe").default(false).notNull(),
     fontScale: real("font_scale").default(1).notNull(),
     theme: text("theme"),
+    /** When the reader marked it read. Null while unread or in progress. */
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    /** The note this book's highlights are exported to, once they have been. */
+    highlightsNoteId: uuid("highlights_note_id").references(() => directoryItems.id, {
+      onDelete: "set null",
+    }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     pk: primaryKey({ columns: [t.userId, t.documentId] }),
     userIdx: index("book_reading_state_user_idx").on(t.userId, t.updatedAt),
+  }),
+);
+
+/**
+ * A passage someone marked, and what they thought about it.
+ *
+ * Anchored like a reading position — a chapter and a character range inside it
+ * — rather than by DOM path or page, both of which move the moment the type
+ * size does. `text` is stored rather than re-derived: it is what was actually
+ * selected, and it has to outlive the offsets that found it.
+ */
+export const bookHighlights = pgTable(
+  "book_highlights",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    documentId: uuid("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    chapterIdx: integer("chapter_idx").notNull(),
+    startOffset: integer("start_offset").notNull(),
+    endOffset: integer("end_offset").notNull(),
+    text: text("text").notNull(),
+    note: text("note"),
+    color: text("color").default("yellow").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => ({
+    chapterIdx: index("book_highlights_chapter_idx").on(
+      t.documentId,
+      t.userId,
+      t.chapterIdx,
+      t.startOffset,
+    ),
+    userIdx: index("book_highlights_user_idx").on(t.userId, t.createdAt),
   }),
 );
 

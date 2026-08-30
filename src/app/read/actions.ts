@@ -94,6 +94,28 @@ export async function saveBookPositionAction(input: {
   return { ok: true as const, progressPct };
 }
 
+/** Mark a book read, or put it back on the pile. */
+export async function setBookFinishedAction(input: { documentId: string; finished: boolean }) {
+  const documentId = z.string().uuid().safeParse(input.documentId);
+  if (!documentId.success) return { ok: false as const, error: "Invalid book" };
+
+  const { user } = await requireUser();
+  if (!(await assertOwnsBook(documentId.data, user.id))) {
+    return { ok: false as const, error: "Not found" };
+  }
+
+  const finishedAt = input.finished ? new Date() : null;
+  await db
+    .insert(bookReadingState)
+    .values({ userId: user.id, documentId: documentId.data, finishedAt })
+    .onConflictDoUpdate({
+      target: [bookReadingState.userId, bookReadingState.documentId],
+      set: { finishedAt, updatedAt: new Date() },
+    });
+
+  return { ok: true as const, finishedAt: finishedAt?.toISOString() ?? null };
+}
+
 const PrefsSchema = z.object({
   documentId: z.string().uuid(),
   // Half size to triple size. Anything outside that is a bug or a fat finger,

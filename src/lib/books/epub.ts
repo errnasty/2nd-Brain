@@ -1,6 +1,6 @@
 import JSZip from "jszip";
 import { XMLParser } from "fast-xml-parser";
-import { dirOf, normalizeZipPath, resolveHref } from "./paths";
+import { dirOf, normalizeZipPath, resolveHref, splitFragment } from "./paths";
 
 /**
  * Full ePub reader-side parse.
@@ -46,6 +46,25 @@ export type EpubSpineEntry = {
 
 export type EpubAsset = { zipPath: string; mediaType: string };
 
+/**
+ * One line of the book's own table of contents.
+ *
+ * The nav is not the spine. The spine is reading order — every file, including
+ * the cover and the copyright page. The nav is what the author decided the
+ * contents are: its own order, its own nesting, and entries that frequently
+ * point at an anchor *inside* a file rather than at the file itself. Rendering
+ * the spine and calling it a contents list produces exactly the jumble that
+ * sounds like, which is why both are kept.
+ */
+export type NavEntry = {
+  title: string;
+  /** 1-based nesting depth in the contents tree. */
+  level: number;
+  zipPath: string;
+  /** Anchor within the file, when the entry points into the middle of one. */
+  fragment: string | null;
+};
+
 export type EpubMeta = {
   title: string | null;
   creator: string | null;
@@ -57,6 +76,8 @@ export type EpubBook = {
   opfPath: string;
   meta: EpubMeta;
   spine: EpubSpineEntry[];
+  /** The book's own contents, in its own order. Empty when it shipped none. */
+  nav: NavEntry[];
   assets: EpubAsset[];
   coverPath: string | null;
   coverMediaType: string | null;
@@ -110,8 +131,8 @@ function isDrm(encryptionXml: string): boolean {
  * unescaped ampersand, and a scanner tolerates all of it. Nesting depth comes
  * from the `<ol>` stack, which is what gives sub-chapters their indent.
  */
-export function parseNavDocument(html: string, navPath: string): Map<string, { title: string; level: number }> {
-  const out = new Map<string, { title: string; level: number }>();
+export function parseNavDocument(html: string, navPath: string): NavEntry[] {
+  const out: NavEntry[] = [];
 
   // Prefer the toc nav; a nav document may also hold landmarks and a page list.
   const tocMatch = /<nav\b[^>]*epub:type\s*=\s*["'][^"']*\btoc\b[^"']*["'][^>]*>([\s\S]*?)<\/nav>/i.exec(html);
@@ -147,22 +168,34 @@ export function parseNavDocument(html: string, navPath: string): Map<string, { t
     if (!title) continue;
 
     const zipPath = resolveHref(navPath, href);
-    // First entry wins: a book that links the same chapter twice means the
-    // deeper one is a sub-section, and the chapter keeps its own name.
-    if (zipPath && !out.has(zipPath)) {
-      out.set(zipPath, { title: title.slice(0, 300), level: Math.max(1, depth) });
-    }
+    if (!zipPath) continue;
+    out.push({
+      title: title.slice(0, 300),
+      level: Math.max(1, depth),
+      zipPath,
+      fragment: splitFragment(href).fragment,
+    });
   }
 
   return out;
 }
 
-/** Titles from an EPUB 2 `toc.ncx`, which nests properly and parses cleanly. */
-export function parseNcx(
-  ncxXml: string,
-  ncxPath: string,
-): Map<string, { title: string; level: number }> {
+/**
+ * Chapter names, for the one place a spine entry needs one: the reader's
+ * header. First nav entry per file wins — a file's own name beats the name of
+ * some section inside it.
+ */
+export function navTitlesByPath(entries: NavEntry[]): Map<string, { title: string; level: number }> {
   const out = new Map<string, { title: string; level: number }>();
+  for (const e of entries) {
+    if (!out.has(e.zipPath)) out.set(e.zipPath, { title: e.title, level: e.level });
+  }
+  return out;
+}
+
+/** Titles from an EPUB 2 `toc.ncx`, which nests properly and parses cleanly. */
+export function parseNcx(ncxXml: string, ncxPath: string): NavEntry[] {
+  const out: NavEntry[] = [];
   let doc: unknown;
   try {
     doc = xml.parse(ncxXml);
@@ -182,8 +215,13 @@ export function parseNcx(
       const title = textOf(p.navLabel?.text);
       if (src && title) {
         const zipPath = resolveHref(ncxPath, src);
-        if (zipPath && !out.has(zipPath)) {
-          out.set(zipPath, { title: title.slice(0, 300), level });
+        if (zipPath) {
+          out.push({
+            title: title.slice(0, 300),
+            level,
+            zipPath,
+            fragment: splitFragment(src).fragment,
+          });
         }
       }
       const kids = asArray(p.navPoint);
@@ -321,23 +359,25 @@ export async function openEpub(buffer: Buffer): Promise<EpubBook> {
   }
 
   // ── table of contents ─────────────────────────────────────────────────
-  let titles = new Map<string, { title: string; level: number }>();
+  let nav: NavEntry[] = [];
 
   const navEntry = [...byId.values()].find((e) => /\bnav\b/.test(e.properties));
   if (navEntry) {
     const navHtml = await readText(navEntry.zipPath);
-    if (navHtml) titles = parseNavDocument(navHtml, navEntry.zipPath);
+    if (navHtml) nav = parseNavDocument(navHtml, navEntry.zipPath);
   }
-  if (titles.size === 0) {
+  if (nav.length === 0) {
     const ncxId = spineNode["@_toc"] as string | undefined;
     const ncxEntry =
       (ncxId ? byId.get(ncxId) : undefined) ??
       [...byId.values()].find((e) => e.mediaType === "application/x-dtbncx+xml");
     if (ncxEntry) {
       const ncxXml = await readText(ncxEntry.zipPath);
-      if (ncxXml) titles = parseNcx(ncxXml, ncxEntry.zipPath);
+      if (ncxXml) nav = parseNcx(ncxXml, ncxEntry.zipPath);
     }
   }
+
+  const titles = navTitlesByPath(nav);
 
   const spine: EpubSpineEntry[] = spinePaths.map((zipPath, idx) => {
     const hit = titles.get(zipPath);
@@ -366,10 +406,15 @@ export async function openEpub(buffer: Buffer): Promise<EpubBook> {
     )
     .map((e) => ({ zipPath: e.zipPath, mediaType: e.mediaType }));
 
+  const spineSetForNav = new Set(spinePaths);
+
   return {
     opfPath,
     meta,
     spine,
+    // Only entries landing on a file the spine actually renders: a nav can
+    // point at something outside reading order, and that is not navigable.
+    nav: nav.filter((e) => spineSetForNav.has(e.zipPath)),
     assets,
     coverPath: coverEntry?.zipPath ?? null,
     coverMediaType: coverEntry?.mediaType ?? null,

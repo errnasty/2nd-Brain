@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
+  Highlighter,
   List,
+  Search,
   Loader2,
   Settings2,
   Sparkles,
@@ -16,7 +19,13 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { indexChapter, offsetAtX, xOfOffset, type ChapterIndex } from "@/lib/books/dom-anchor";
 import { createProgressCalculator } from "@/lib/books/progress";
-import { saveBookPositionAction, setBookPrefsAction } from "@/app/read/actions";
+import {
+  setBookFinishedAction,
+  saveBookPositionAction,
+  setBookPrefsAction,
+} from "@/app/read/actions";
+import { searchBookAction, type BookHighlight, type BookSearchHit } from "@/app/read/highlights";
+import { BookHighlightLayer } from "./book-highlight-layer";
 
 export type BookChapterMeta = {
   idx: number;
@@ -27,12 +36,23 @@ export type BookChapterMeta = {
 
 export type BookReaderTheme = "app" | "paper" | "night";
 
+export type BookNavEntry = {
+  idx: number;
+  title: string;
+  level: number;
+  chapterIdx: number;
+  fragment: string | null;
+};
+
 export type BookPayload = {
   id: string;
   title: string;
   author: string | null;
   fixedLayout: boolean;
   chapters: BookChapterMeta[];
+  /** The book's own contents. Empty falls back to listing the spine. */
+  nav: BookNavEntry[];
+  finishedAt: string | null;
   state: {
     chapterIdx: number;
     charOffset: number;
@@ -46,6 +66,15 @@ export type BookPayload = {
 /** Gap between pages. Also the gutter, so text never runs to the screen edge. */
 const COLUMN_GAP = 48;
 
+/**
+ * Above this, the page splits into a two-column spread.
+ *
+ * A single column across a desktop window is 150-plus characters a line, which
+ * is genuinely hard to read — the eye loses its place on the return sweep. Two
+ * columns is also what the paginated metaphor is already shaped like.
+ */
+const SPREAD_MIN_WIDTH = 900;
+
 const FONT_STEPS = [0.8, 0.9, 1, 1.15, 1.3, 1.5, 1.75];
 
 function clamp(n: number, lo: number, hi: number) {
@@ -55,10 +84,13 @@ function clamp(n: number, lo: number, hi: number) {
 export function BookReader({
   book,
   initialHtml = null,
+  initialHighlights = [],
 }: {
   book: BookPayload;
   /** The resume chapter, rendered on the server so the book opens instantly. */
   initialHtml?: string | null;
+  /** Every highlight in the book — small enough that page turns never wait. */
+  initialHighlights?: BookHighlight[];
 }) {
   const router = useRouter();
 
@@ -80,7 +112,29 @@ export function BookReader({
   const [fontScale, setFontScale] = useState(book.state.fontScale);
   const [theme, setTheme] = useState<BookReaderTheme>(book.state.theme ?? "app");
   const [spoilerSafe, setSpoilerSafe] = useState(book.state.spoilerSafe);
-  const [panel, setPanel] = useState<"toc" | "settings" | null>(null);
+  const [panel, setPanel] = useState<"toc" | "settings" | "search" | null>(null);
+  const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
+  const [highlights, setHighlights] = useState<BookHighlight[]>(initialHighlights);
+  // Bumped after every relayout so the highlight overlay re-measures. Rects
+  // live in the content's coordinate space, which only moves when text does.
+  const [layoutTick, setLayoutTick] = useState(0);
+
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<BookSearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [dismissedFinish, setDismissedFinish] = useState(false);
+  // A phrase to locate once the chapter it lives in has been laid out.
+  const pendingSearchRef = useRef<string | null>(null);
+
+  const setContentNode = useCallback((el: HTMLDivElement | null) => {
+    contentRef.current = el;
+    setContentEl(el);
+  }, []);
+  const [finishedAt, setFinishedAt] = useState<string | null>(book.finishedAt);
+
+  // A nav entry can point at an anchor inside a chapter; the jump is queued
+  // here and consumed once that chapter has been laid out.
+  const pendingFragmentRef = useRef<string | null>(null);
 
   // The character offset the reader is at. Everything layout-dependent is
   // derived from this and re-derived after every reflow, which is what makes a
@@ -107,6 +161,7 @@ export function BookReader({
   );
 
   const scrollMode = book.fixedLayout;
+  const columns = !scrollMode && size.w >= SPREAD_MIN_WIDTH ? 2 : 1;
   const chapter = book.chapters.find((c) => c.idx === chapterIdx) ?? book.chapters[0];
 
   /* ── chapter loading ─────────────────────────────────────────────── */
@@ -202,8 +257,38 @@ export function BookReader({
     indexRef.current = index;
     measuredChapterRef.current = chapterIdx;
 
+    const fragment = pendingFragmentRef.current;
+    if (fragment) {
+      pendingFragmentRef.current = null;
+      const target = content.querySelector<HTMLElement>("#" + CSS.escape(fragment));
+      if (target) {
+        const fx = target.getBoundingClientRect().left - content.getBoundingClientRect().left;
+        setPage(clamp(Math.floor((fx + 1) / stride), 0, count - 1));
+        anchorRef.current = offsetAtX(index, content, Math.floor(fx / stride) * stride);
+        setLayoutTick((t) => t + 1);
+        return;
+      }
+    }
+
+    const phrase = pendingSearchRef.current;
+    if (phrase) {
+      pendingSearchRef.current = null;
+      // The chapter's text, in the same character space every anchor uses, so
+      // a match can be turned straight into a page.
+      const whole = index.nodes.map((node) => node.data).join("");
+      const at = whole.toLowerCase().indexOf(phrase.toLowerCase());
+      if (at >= 0) {
+        anchorRef.current = at;
+        const hx = xOfOffset(index, content, at);
+        setPage(hx === null ? 0 : clamp(Math.floor((hx + 1) / stride), 0, count - 1));
+        setLayoutTick((t) => t + 1);
+        return;
+      }
+    }
+
     const x = xOfOffset(index, content, anchorRef.current);
     setPage(x === null ? 0 : clamp(Math.floor((x + 1) / stride), 0, count - 1));
+    setLayoutTick((t) => t + 1);
   }, [html, size.w, size.h, fontScale, scrollMode, chapterIdx]);
 
   // Scroll mode (fixed-layout books) anchors by proportion rather than by
@@ -290,9 +375,10 @@ export function BookReader({
   /* ── navigation ──────────────────────────────────────────────────── */
 
   const goChapter = useCallback(
-    (idx: number, land: "start" | "end" = "start") => {
+    (idx: number, land: "start" | "end" = "start", fragment: string | null = null) => {
       const target = book.chapters.find((c) => c.idx === idx);
       if (!target) return;
+      pendingFragmentRef.current = fragment;
       // MAX_SAFE_INTEGER resolves to the final character, and from there the
       // layout pass lands on the last page — which is what going backwards
       // through a chapter boundary should feel like.
@@ -402,6 +488,37 @@ export function BookReader({
     void setBookPrefsAction({ documentId: book.id, theme: next }).catch(() => {});
   }
 
+  async function runSearch() {
+    const q = query.trim();
+    if (q.length < 2) return;
+    setSearching(true);
+    try {
+      const r = await searchBookAction({ documentId: book.id, query: q });
+      setHits(r.ok ? r.hits : []);
+      if (!r.ok) toast.error(r.error);
+    } catch {
+      setHits([]);
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function goToHit(hit: BookSearchHit) {
+    pendingSearchRef.current = query.trim();
+    goChapter(hit.chapterIdx, "start");
+  }
+
+  function toggleFinished() {
+    const next = finishedAt === null;
+    setFinishedAt(next ? new Date().toISOString() : null);
+    void setBookFinishedAction({ documentId: book.id, finished: next })
+      .then((r) => {
+        if (!r.ok) return;
+        toast.success(next ? "Marked as read." : "Put back on the pile.");
+      })
+      .catch(() => {});
+  }
+
   function changeSpoiler(next: boolean) {
     setSpoilerSafe(next);
     void setBookPrefsAction({ documentId: book.id, spoilerSafe: next })
@@ -414,6 +531,40 @@ export function BookReader({
       )
       .catch(() => {});
   }
+
+  // The book's contents where it shipped any; the spine only as a fallback,
+  // because a spine listing is front matter and continuation files jumbled in
+  // with real chapters.
+  const contents = useMemo(
+    () =>
+      book.nav.length > 0
+        ? book.nav.map((e) => ({
+            key: `n${e.idx}`,
+            title: e.title,
+            level: e.level,
+            chapterIdx: e.chapterIdx,
+            fragment: e.fragment,
+          }))
+        : book.chapters.map((c) => ({
+            key: `c${c.idx}`,
+            title: c.title ?? `Section ${c.idx + 1}`,
+            level: c.navLevel,
+            chapterIdx: c.idx,
+            fragment: null as string | null,
+          })),
+    [book.nav, book.chapters],
+  );
+
+  // The line you are inside, which for a chapter split across several contents
+  // entries is the last one at or before where you are.
+  const activeKey = useMemo(() => {
+    let key: string | null = null;
+    for (const entry of contents) {
+      if (entry.chapterIdx <= chapterIdx) key = entry.key;
+      else break;
+    }
+    return key;
+  }, [contents, chapterIdx]);
 
   const atStart = chapterIdx === book.chapters[0]?.idx && page === 0;
   const lastIdx = book.chapters[book.chapters.length - 1]?.idx;
@@ -451,6 +602,15 @@ export function BookReader({
         <Button
           size="icon"
           variant="ghost"
+          onClick={() => setPanel((p) => (p === "search" ? null : "search"))}
+          title="Find in book"
+          aria-label="Find in book"
+        >
+          <Search className="h-4 w-4" />
+        </Button>
+        <Button
+          size="icon"
+          variant="ghost"
           onClick={() => setPanel((p) => (p === "toc" ? null : "toc"))}
           title="Contents"
           aria-label="Contents"
@@ -472,7 +632,7 @@ export function BookReader({
       <div
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
-        className="relative min-h-0 flex-1 px-5 py-4 sm:px-10 sm:py-6"
+        className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 px-5 py-4 sm:px-10 sm:py-6 lg:px-14"
       >
         {/* The measured box is deliberately the one WITHOUT the gutter padding:
             clientWidth on the padded element counts the padding, and columns
@@ -490,8 +650,9 @@ export function BookReader({
             <Loader2 className="h-5 w-5 animate-spin opacity-50" />
           </div>
         ) : (
+          <>
           <div
-            ref={contentRef}
+            ref={setContentNode}
             onClick={onContentClick}
             className={cn("prose-book", scrollMode && "h-full overflow-y-auto")}
             style={
@@ -501,7 +662,10 @@ export function BookReader({
                     ["--book-font-scale" as string]: String(fontScale),
                     width: size.w ? `${size.w}px` : "100%",
                     height: size.h ? `${size.h}px` : "100%",
-                    columnWidth: size.w ? `${size.w}px` : undefined,
+                    // One column on a phone, a two-page spread on a desktop.
+                    columnWidth: size.w
+                      ? `${(size.w - COLUMN_GAP * (columns - 1)) / columns}px`
+                      : undefined,
                     columnGap: `${COLUMN_GAP}px`,
                     columnFill: "auto",
                     transform: `translateX(-${page * (size.w + COLUMN_GAP)}px)`,
@@ -511,6 +675,25 @@ export function BookReader({
             onScroll={scrollMode ? onScrollSave : undefined}
             dangerouslySetInnerHTML={{ __html: html }}
           />
+          {/* Same box, same transform: highlight rects are measured in the
+              content's own coordinates, so the overlay has to move with it. */}
+          {!scrollMode && (
+            <div
+              className="pointer-events-none absolute inset-0 z-10"
+              style={{ transform: `translateX(-${page * (size.w + COLUMN_GAP)}px)` }}
+            >
+              <BookHighlightLayer
+                documentId={book.id}
+                chapterIdx={chapterIdx}
+                contentEl={contentEl}
+                indexRef={indexRef}
+                layoutTick={layoutTick}
+                highlights={highlights}
+                onChange={setHighlights}
+              />
+            </div>
+          )}
+          </>
         )}
         </div>
 
@@ -531,6 +714,28 @@ export function BookReader({
           </>
         )}
       </div>
+
+      {/* Offered where the intent actually is: the last page. Finding the
+          settings panel afterwards is a step nobody takes. */}
+      {atEnd && !finishedAt && !dismissedFinish && html !== null && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-20 z-20 flex justify-center px-4">
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border bg-popover py-2 pl-4 pr-2 text-sm shadow-xl">
+            <span className="text-muted-foreground">Finished this book?</span>
+            <Button size="sm" onClick={toggleFinished} className="h-8 gap-1.5">
+              <Check className="h-3.5 w-3.5" />
+              Mark as read
+            </Button>
+            <button
+              onClick={() => setDismissedFinish(true)}
+              aria-label="Not yet"
+              title="Not yet"
+              className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── bottom bar ──────────────────────────────────────────── */}
       <footer className="flex shrink-0 items-center gap-2 border-t border-border/60 px-3 py-2">
@@ -588,30 +793,85 @@ export function BookReader({
           <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(22rem,90vw)] flex-col border-l border-border bg-background text-foreground shadow-xl">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <div className="flex-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-                {panel === "toc" ? "Contents" : "Reading"}
+                {panel === "toc" ? "Contents" : panel === "search" ? "Find in book" : "Reading"}
               </div>
               <Button size="icon" variant="ghost" onClick={() => setPanel(null)} aria-label="Close">
                 <X className="h-4 w-4" />
               </Button>
             </div>
 
-            {panel === "toc" ? (
+            {panel === "search" ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void runSearch();
+                  }}
+                  className="border-b border-border p-2"
+                >
+                  <input
+                    autoFocus
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search this book…"
+                    className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-foreground/40"
+                  />
+                </form>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-2">
+                  {searching ? (
+                    <div className="flex justify-center py-6">
+                      <Loader2 className="h-4 w-4 animate-spin opacity-50" />
+                    </div>
+                  ) : hits === null ? (
+                    <p className="px-2 py-4 text-[13px] leading-relaxed text-muted-foreground">
+                      Search the whole book. A result jumps to the page its phrase is on.
+                    </p>
+                  ) : hits.length === 0 ? (
+                    <p className="px-2 py-4 text-[13px] text-muted-foreground">
+                      Nothing found for that.
+                    </p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {hits.map((hit) => (
+                        <li key={hit.chapterIdx}>
+                          <button
+                            onClick={() => goToHit(hit)}
+                            className="block w-full rounded px-2 py-2 text-left transition-colors hover:bg-accent"
+                          >
+                            <div className="truncate text-xs font-medium text-foreground">
+                              {hit.chapterTitle ?? `Chapter ${hit.chapterIdx + 1}`}
+                            </div>
+                            <div className="mt-0.5 line-clamp-3 text-[13px] leading-snug text-muted-foreground">
+                              {hit.snippet}
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </div>
+            ) : panel === "toc" ? (
               <nav className="min-h-0 flex-1 overflow-y-auto p-2">
                 <ul className="space-y-0.5">
-                  {book.chapters.map((c) => (
-                    <li key={c.idx}>
+                  {contents.map((entry) => (
+                    <li key={entry.key}>
                       <button
-                        onClick={() => goChapter(c.idx, "start")}
+                        onClick={() => goChapter(entry.chapterIdx, "start", entry.fragment)}
                         className={cn(
-                          "block w-full truncate rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-                          c.idx === chapterIdx
+                          "block w-full rounded px-2 py-1.5 text-left text-sm leading-snug transition-colors hover:bg-accent",
+                          entry.key === activeKey
                             ? "bg-accent font-medium text-foreground"
                             : "text-muted-foreground",
+                          // Top-level lines are the book's structure; deeper
+                          // ones are sections within it and read as such.
+                          entry.level === 1 ? "font-medium" : "text-[13px]",
                         )}
-                        style={{ paddingLeft: `${0.5 + (Math.min(c.navLevel, 4) - 1) * 0.75}rem` }}
-                        title={c.title ?? undefined}
+                        style={{ paddingLeft: `${0.5 + (Math.min(entry.level, 5) - 1) * 0.85}rem` }}
+                        title={entry.title}
                       >
-                        {c.title ?? `Chapter ${c.idx + 1}`}
+                        {entry.title}
                       </button>
                     </li>
                   ))}
@@ -682,6 +942,35 @@ export function BookReader({
                       </span>
                     </span>
                   </label>
+                </section>
+
+                {highlights.length > 0 && (
+                  <section className="flex items-center gap-2 rounded-md border border-border p-2.5 text-sm">
+                    <Highlighter className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="flex-1 text-muted-foreground">
+                      {highlights.length} highlight{highlights.length === 1 ? "" : "s"} in this book
+                    </span>
+                  </section>
+                )}
+
+                <section>
+                  <button
+                    onClick={toggleFinished}
+                    className={cn(
+                      "flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors",
+                      finishedAt
+                        ? "border-foreground bg-accent text-foreground"
+                        : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
+                    )}
+                  >
+                    <Check className="h-4 w-4" />
+                    {finishedAt ? "Read" : "Mark as read"}
+                  </button>
+                  {finishedAt && (
+                    <p className="mt-1.5 text-center text-xs text-muted-foreground">
+                      Finished {new Date(finishedAt).toLocaleDateString()}
+                    </p>
+                  )}
                 </section>
 
                 {book.fixedLayout && (
