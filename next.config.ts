@@ -60,6 +60,21 @@ const nextConfig: NextConfig = {
       // reject the body before that check can run.
       bodySizeLimit: "52mb",
     },
+    // The OTHER body limit, and the one that actually bites.
+    //
+    // Every authenticated route goes through middleware, and Next buffers at
+    // most 10MB of a request body before handing it over — silently. The
+    // Server Action then receives a form that stops mid-file, and busboy
+    // reports "Unexpected end of form", which says nothing about size and
+    // points nowhere near the cause. bodySizeLimit above does not help: it
+    // governs a later stage that the truncated body never reaches.
+    //
+    // This capped EVERY upload at 10MB, not just books — a 15MB PDF failed the
+    // same way and for the same reason.
+    //
+    // Kept equal to bodySizeLimit so there is one effective ceiling rather than
+    // two that can disagree.
+    middlewareClientMaxBodySize: "52mb",
     // Cache the RSC payload for visited dynamic routes in the router cache so
     // navigating away and back is instant. 5 minutes for dynamic pages (like
     // /feeds and /directory), 1 hour for static ones.
