@@ -1,6 +1,11 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
+import { and, eq, like } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { xpEvents } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
+import { getUserSettings } from "@/lib/settings/store";
+import { resolveTypography } from "@/lib/books/typography";
 import {
   loadBookDoc,
   loadChapters,
@@ -41,11 +46,12 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
   const doc = await loadBookDoc(id, user.id);
   if (!doc) notFound();
 
-  const [chapters, nav, state, highlights] = await Promise.all([
+  const [chapters, nav, state, highlights, settings] = await Promise.all([
     loadChapters(id, user.id),
     loadNav(id, user.id),
     loadReadingState(id, user.id),
     loadHighlights(id, user.id),
+    getUserSettings(user.id),
   ]);
   if (chapters.length === 0) notFound();
 
@@ -61,10 +67,13 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
 
   const meta = (doc.metadata ?? {}) as Record<string, unknown>;
   const storedTheme = state?.theme;
+  const readChapters = await finishedChapters(id, user.id, state?.finishedAt != null, chapters.length);
 
   return (
     <BookReader
       initialHtml={first ? first.body.toString("utf8") : null}
+      typography={resolveTypography(settings.bookReader)}
+      readChapters={readChapters}
       initialHighlights={highlights.map((h) => ({
         ...h,
         color: (h.color as BookHighlight["color"]) ?? "yellow",
@@ -90,4 +99,44 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
       }}
     />
   );
+}
+
+/**
+ * The chapters this reader has actually finished, for the contents list's ticks.
+ *
+ * Read from the XP ledger rather than from `furthest_chapter_idx`, which is a
+ * high-water mark and not a claim about anything below it: jumping to chapter
+ * 30 from the contents list moves it to 30 and would tick twenty-nine chapters
+ * nobody read. A ledger row means the reader reached the end of that specific
+ * chapter, which is exactly what a tick should mean.
+ *
+ * A book marked read is the one exception, and it short-circuits the query: a
+ * finished book showing an unticked contents list looks broken, and it is also
+ * how every book finished before chapters were tracked reports itself.
+ */
+async function finishedChapters(
+  documentId: string,
+  userId: string,
+  bookFinished: boolean,
+  chapterCount: number,
+): Promise<number[]> {
+  if (bookFinished) return Array.from({ length: chapterCount }, (_, i) => i);
+  try {
+    const rows = await db
+      .select({ refId: xpEvents.refId })
+      .from(xpEvents)
+      .where(
+        and(
+          eq(xpEvents.userId, userId),
+          eq(xpEvents.source, "chapter_read"),
+          like(xpEvents.refId, `${documentId}:%`),
+        ),
+      );
+    return rows
+      .map((r) => Number((r.refId ?? "").split(":")[1]))
+      .filter((n) => Number.isInteger(n));
+  } catch {
+    // A tick is decoration. Never let it stop a book from opening.
+    return [];
+  }
 }

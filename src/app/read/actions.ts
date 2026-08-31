@@ -3,10 +3,17 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookChapters, bookReadingState, directoryItems, documents } from "@/lib/db/schema";
+import {
+  bookChapters,
+  bookReadingState,
+  directoryItems,
+  documents,
+  userSettings,
+} from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { advanceFurthest } from "@/lib/books/progress";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
+import { LINE_HEIGHT_STEPS } from "@/lib/books/typography";
 import { bookFinishXp, chapterCounts } from "@/lib/gamify/rules";
 
 const PositionSchema = z.object({
@@ -238,6 +245,64 @@ export async function setBookPrefsAction(input: {
     .onConflictDoUpdate({
       target: [bookReadingState.userId, bookReadingState.documentId],
       set,
+    });
+
+  return { ok: true as const };
+}
+
+const TypographySchema = z.object({
+  font: z.enum(["serif", "sans"]).optional(),
+  lineHeight: z
+    .number()
+    .refine((n) => LINE_HEIGHT_STEPS.some((s) => s.value === n), "Unknown line height")
+    .optional(),
+  margin: z.enum(["narrow", "normal", "wide"]).optional(),
+});
+
+/**
+ * Reader typography, stored on the account rather than on the book.
+ *
+ * Line spacing, margins and the typeface are about the reader, not about what
+ * they happen to be reading, so setting them once should hold for every book —
+ * which is exactly the opposite of type size and page colour, and why those
+ * two stay on `book_reading_state`.
+ *
+ * The write is a jsonb shallow merge of only the keys sent, so two settings
+ * changed in quick succession can't overwrite one another, and every value is
+ * validated first: this ends up in CSS, and an unchecked line height is a book
+ * rendered as overlapping lines with no way back except editing the database.
+ */
+export async function setBookTypographyAction(input: {
+  font?: "serif" | "sans";
+  lineHeight?: number;
+  margin?: "narrow" | "normal" | "wide";
+}) {
+  const parsed = TypographySchema.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "Invalid typography" };
+
+  const patch = Object.fromEntries(
+    Object.entries(parsed.data).filter(([, v]) => v !== undefined),
+  );
+  if (Object.keys(patch).length === 0) return { ok: true as const };
+
+  const { user } = await requireUser();
+  // Merged one level deeper than the generic settings write: `bookReader` is
+  // itself an object, and `||` at the top level would replace the whole of it,
+  // so changing the margin would silently reset the typeface.
+  await db
+    .insert(userSettings)
+    .values({ userId: user.id, settings: { bookReader: patch }, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: userSettings.userId,
+      set: {
+        settings: sql`jsonb_set(
+          coalesce(${userSettings.settings}, '{}'::jsonb),
+          '{bookReader}',
+          coalesce(${userSettings.settings} -> 'bookReader', '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb,
+          true
+        )`,
+        updatedAt: new Date(),
+      },
     });
 
   return { ok: true as const };

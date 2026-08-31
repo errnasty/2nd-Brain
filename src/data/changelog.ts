@@ -27,6 +27,23 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-31-b",
+    date: "August 31, 2026",
+    title: "A quieter page, and a reader that knows where you are",
+    tag: "improvement",
+    summary:
+      "The bars around a book now get out of the way while you read, the contents list ticks off the chapters you have finished, and the footer tells you how long is left in this one. Plus typeface, line spacing and margins.",
+    items: [
+      "The top and bottom bars fade away while you read and come back when you move the mouse or tap the middle of the page — on a phone that hands the book most of the screen back.",
+      "The contents list ticks the chapters you have actually finished, so it reads as a map of where you have been rather than a flat list.",
+      "“About 12 min left” in the footer, for this chapter rather than the whole book — the number you actually want at eleven at night.",
+      "Typeface (serif or sans), line spacing and margins, in the reading settings. These three follow you to every book; type size and page colour still belong to the book you set them on.",
+      "Reopening a book says where it is picking up, instead of dropping you mid-paragraph with no idea where you are.",
+      "The very first book you open shows, once, where to tap to turn the page and where the menus are.",
+      "Closing a book takes you back to the folder you opened it from, not to the top of your Directory.",
+    ],
+  },
+  {
     id: "2026-08-31-a",
     date: "August 31, 2026",
     title: "Chapters pay as you read, and any passage can explain itself",

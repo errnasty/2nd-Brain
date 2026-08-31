@@ -56,6 +56,22 @@ function formatLanguage(tag: string | null): string | null {
   }
 }
 
+/**
+ * Where the reader is standing right now, to hand to the book so closing it
+ * comes back here.
+ *
+ * The whole path and query, not just the folder id: on a phone the Directory
+ * IS this screen (`/directory?folder=…&item=…`), so returning to the folder
+ * without the item would drop the reader on a list, one tap from where they
+ * were, with the book they just closed no longer on screen. Read at click time
+ * rather than at render, because the item can be opened and closed under this
+ * component without it re-rendering.
+ */
+function here(): string {
+  if (typeof window === "undefined") return "/directory";
+  return `${window.location.pathname}${window.location.search}`;
+}
+
 export function BookInfo({
   documentId,
   itemId,
@@ -147,7 +163,7 @@ export function BookInfo({
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <Button
             size="lg"
-            onClick={() => router.push(`/read/${documentId}`)}
+            onClick={() => router.push(`/read/${documentId}?from=${encodeURIComponent(here())}`)}
             className="w-full gap-2 sm:w-auto"
           >
             <BookOpen className="h-4 w-4" />

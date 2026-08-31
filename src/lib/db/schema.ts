@@ -1337,6 +1337,17 @@ export type XpEvent = typeof xpEvents.$inferSelect;
 // One row per user; `settings` is a merged JSONB blob of UI preferences that
 // must persist + sync (board WIP limits, board filters, …). SYNCED to desktop.
 export type UserSettingsData = {
+  // Typography for the book reader. Global rather than per-book, unlike type
+  // size and page colour: line spacing, margins and the typeface are about the
+  // reader's eyes, not about the book in front of them, and having to set them
+  // again on every new book would be tedious. Additive jsonb key — no
+  // migration needed. Unset = the BOOK_TYPOGRAPHY_DEFAULT in
+  // src/lib/books/typography.ts.
+  bookReader?: {
+    font?: "serif" | "sans";
+    lineHeight?: number;
+    margin?: "narrow" | "normal" | "wide";
+  };
   // Preferred AI model id (a CHAT_MODELS id) applied to EVERY AI call in the
   // app — Ask + background generation (decks, quizzes, flashcards, tagging…).
   // Unset/null = the env-configured provider defaults. Additive jsonb key —
