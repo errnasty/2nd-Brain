@@ -38,6 +38,7 @@ import {
   type LibraryFolder,
   type OrganizeItem,
 } from "@/lib/ai/organize";
+import { REPORT_TITLE_CHARS } from "./organize-plan";
 import type {
   OrganizeOptions,
   OrganizeProgress,
@@ -89,6 +90,7 @@ export async function runOrganize(
     foldersCreated: [],
     foldersRemoved: [],
     undo: { moves: [], createdFolderIds: [], removedFolders: [] },
+    report: { moves: [], unplaced: [] },
   };
 
   await onProgress({ phase: "planning", done: 0, total: 0, label: "Reading your library" });
@@ -136,6 +138,10 @@ export async function runOrganize(
   // mess this is supposed to clean up.
   const byName = new Map(existing.map((f) => [norm(f.name), f.id]));
   const folderIds = new Map<string, string>(); // plan name → folder id
+  // id → name, for the report. Names are captured as they are RIGHT NOW: the
+  // report is a record of what happened, and a folder renamed next week should
+  // not silently rewrite the history of where things went.
+  const folderName = new Map<string, string>(existing.map((f) => [f.id, f.name]));
   for (const f of plan) {
     const hit = byName.get(norm(f.name));
     if (hit) {
@@ -159,6 +165,7 @@ export async function runOrganize(
       byName.set(norm(f.name), row.id);
       summary.foldersCreated.push(f.name);
       summary.undo.createdFolderIds.push(row.id);
+      folderName.set(row.id, f.name);
       continue;
     }
 
@@ -174,6 +181,7 @@ export async function runOrganize(
     if (taken) {
       folderIds.set(norm(f.name), taken.id);
       byName.set(norm(f.name), taken.id);
+      folderName.set(taken.id, f.name);
     }
   }
 
@@ -230,6 +238,8 @@ export async function runOrganize(
     const moves = new Map<string, string[]>();
     const placed = new Set<string>();
     const cameFrom = new Map<string, string | null>();
+    // The UPDATE returns ids; the report wants titles.
+    const titleOf = new Map(batch.map((b) => [b.id, b.title]));
     for (const p of placements) {
       const item = batch.find((b) => b.id === p.itemId);
       const dest = folderIds.get(norm(p.folderName ?? ""));
@@ -254,10 +264,20 @@ export async function runOrganize(
       // Only rows that actually changed hands are recorded, so an undo can
       // never "restore" an item the sort never touched.
       for (const r of rows) {
-        summary.undo.moves.push({ itemId: r.id, from: cameFrom.get(r.id) ?? null });
+        const from = cameFrom.get(r.id) ?? null;
+        summary.undo.moves.push({ itemId: r.id, from });
+        summary.report.moves.push({
+          title: (titleOf.get(r.id) ?? "Untitled").slice(0, REPORT_TITLE_CHARS),
+          from: from ? (folderName.get(from) ?? null) : null,
+          to: folderName.get(folderId) ?? "a new folder",
+        });
       }
     }
-    summary.leftAlone += batch.filter((b) => !placed.has(b.id)).length;
+    const skipped = batch.filter((b) => !placed.has(b.id));
+    summary.leftAlone += skipped.length;
+    for (const b of skipped) {
+      summary.report.unplaced.push(b.title.slice(0, REPORT_TITLE_CHARS));
+    }
 
     filed += batch.length;
   }

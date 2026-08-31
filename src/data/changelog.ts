@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-31-c",
+    date: "August 31, 2026",
+    title: "See where a sort put everything, and stop losing your page",
+    tag: "improvement",
+    summary:
+      "After a sort you can now see exactly which items went into which folder, and put it all back from there. And tapping the middle of a book to check your progress no longer skips you forward a page.",
+    items: [
+      "“See what moved” after any sort — both sorting unsorted items and reorganising everything — listing every item that moved, which folder it landed in and where it came from, plus anything left where it was and any empty folders cleared out. Undo is in that same window, so you can look before deciding.",
+      "It’s on the notification when a sort finishes, and stays available in the sort window afterwards, because the notification is long gone by the time you’ve opened two folders and started wondering.",
+      "Fixed: tapping the middle of a book to bring the bars back was nudging you forward a page. The bars now sit over the page instead of squeezing it, so showing them never re-flows the text under you.",
+    ],
+  },
+  {
     id: "2026-08-31-b",
     date: "August 31, 2026",
     title: "A quieter page, and a reader that knows where you are",
