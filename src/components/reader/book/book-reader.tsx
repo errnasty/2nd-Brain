@@ -27,6 +27,7 @@ import {
 import { searchBookAction, type BookHighlight, type BookSearchHit } from "@/app/read/highlights";
 import { celebrate } from "@/lib/gamify/celebrate";
 import { BookHighlightLayer } from "./book-highlight-layer";
+import { BookExplainPanel } from "./book-explain-panel";
 
 export type BookChapterMeta = {
   idx: number;
@@ -113,7 +114,10 @@ export function BookReader({
   const [fontScale, setFontScale] = useState(book.state.fontScale);
   const [theme, setTheme] = useState<BookReaderTheme>(book.state.theme ?? "app");
   const [spoilerSafe, setSpoilerSafe] = useState(book.state.spoilerSafe);
-  const [panel, setPanel] = useState<"toc" | "settings" | "search" | null>(null);
+  const [panel, setPanel] = useState<"toc" | "settings" | "search" | "explain" | null>(null);
+  // The passage the explain panel is working on. Kept here rather than in the
+  // panel so a new selection replaces the old explanation instead of stacking.
+  const [explaining, setExplaining] = useState<string | null>(null);
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
   const [highlights, setHighlights] = useState<BookHighlight[]>(initialHighlights);
   // Bumped after every relayout so the highlight overlay re-measures. Rects
@@ -142,6 +146,10 @@ export function BookReader({
   // font change or a rotation land back on the same words.
   const anchorRef = useRef(book.state.charOffset);
   const [progress, setProgress] = useState(book.state.progressPct);
+  // A chapter's XP, shown for a few seconds beside the progress bar rather than
+  // as a toast: a card sliding over the page you are reading, every chapter, is
+  // an interruption — the reward belongs in the furniture you already glance at.
+  const [xpFlash, setXpFlash] = useState<{ amount: number; at: number } | null>(null);
 
   // Measured once per reflow and reused for every page turn. Rebuilding it per
   // turn would mean a getBoundingClientRect for every text node in the chapter.
@@ -309,12 +317,27 @@ export function BookReader({
     (idx: number, offset: number) => {
       void saveBookPositionAction({ documentId: book.id, chapterIdx: idx, charOffset: offset })
         .then((r) => {
-          if (r.ok) setProgress(r.progressPct);
+          if (!r.ok) return;
+          setProgress(r.progressPct);
+          // Only ever set on the save that actually crossed the end of a
+          // chapter — the server pays each chapter once, so this cannot repeat
+          // while the reader lingers on the last page.
+          if (r.xp && r.xp.awarded > 0) {
+            setXpFlash({ amount: r.xp.awarded, at: Date.now() });
+            celebrate(r.xp);
+          }
         })
         .catch(() => {});
     },
     [book.id],
   );
+
+  // Clear the flash a few seconds after the award that set it.
+  useEffect(() => {
+    if (!xpFlash) return;
+    const t = setTimeout(() => setXpFlash(null), 4000);
+    return () => clearTimeout(t);
+  }, [xpFlash]);
 
   // After a page turn, record which character now sits at the left edge. That
   // offset is what gets saved, and what the next reflow resolves back to.
@@ -700,6 +723,10 @@ export function BookReader({
                 contentEl={contentEl}
                 indexRef={indexRef}
                 layoutTick={layoutTick}
+                onExplain={(text) => {
+                  setExplaining(text);
+                  setPanel("explain");
+                }}
                 highlights={highlights}
                 onChange={setHighlights}
               />
@@ -768,7 +795,7 @@ export function BookReader({
               style={{ width: `${Math.round(progress * 100)}%` }}
             />
           </div>
-          <div className="text-center font-mono text-[11px] tabular-nums opacity-60">
+          <div className="relative text-center font-mono text-[11px] tabular-nums opacity-60">
             {scrollMode ? (
               <>
                 {chapterIdx + 1} / {book.chapters.length}
@@ -780,6 +807,15 @@ export function BookReader({
             )}
             <span className="mx-1.5 opacity-40">·</span>
             {Math.round(progress * 100)}%
+            {xpFlash && (
+              <span
+                key={xpFlash.at}
+                aria-live="polite"
+                className="pointer-events-none absolute inset-x-0 -top-5 animate-in fade-in slide-in-from-bottom-1 font-sans font-medium text-emerald-500"
+              >
+                Chapter read · +{xpFlash.amount} XP
+              </span>
+            )}
           </div>
         </div>
 
@@ -805,14 +841,35 @@ export function BookReader({
           <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(22rem,90vw)] flex-col border-l border-border bg-background text-foreground shadow-xl">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <div className="flex-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-                {panel === "toc" ? "Contents" : panel === "search" ? "Find in book" : "Reading"}
+                {panel === "toc"
+                  ? "Contents"
+                  : panel === "search"
+                    ? "Find in book"
+                    : panel === "explain"
+                      ? "Explain"
+                      : "Reading"}
               </div>
               <Button size="icon" variant="ghost" onClick={() => setPanel(null)} aria-label="Close">
                 <X className="h-4 w-4" />
               </Button>
             </div>
 
-            {panel === "search" ? (
+            {panel === "explain" ? (
+              explaining ? (
+                <BookExplainPanel
+                  // Keyed on the passage so a fresh selection remounts the panel
+                  // rather than trying to reconcile a half-streamed answer.
+                  key={explaining}
+                  documentId={book.id}
+                  chapterIdx={chapterIdx}
+                  passage={explaining}
+                />
+              ) : (
+                <p className="p-4 text-[13px] leading-relaxed text-muted-foreground">
+                  Select a passage in the book, then press the sparkle to have it explained.
+                </p>
+              )
+            ) : panel === "search" ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <form
                   onSubmit={(e) => {

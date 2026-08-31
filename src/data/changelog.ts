@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-31-a",
+    date: "August 31, 2026",
+    title: "Chapters pay as you read, and any passage can explain itself",
+    tag: "feature",
+    summary:
+      "Reaching the end of a chapter now earns XP, so a book rewards the evenings that read it rather than only the day you finish. And selecting any passage lets you ask what it means, answered from the book itself.",
+    items: [
+      "Finish a chapter and you get 12 XP, shown briefly above the progress bar rather than as a toast over what you are reading. Each chapter pays once, only once you reach the end of it, and front matter shorter than a few hundred words does not count. A new badge for 100 chapters.",
+      "Select a passage and press the sparkle: the reader explains it in a panel beside the page — who that person was, what the term means, what the sentence is actually saying. You can ask a follow-up about the same passage.",
+      "The explanation only ever draws on the chapter you are in and the ones before it, so it cannot spoil a book for you even with the spoiler setting off. It uses earlier parts of the book itself, which is how a character introduced three hundred pages ago gets recognised.",
+    ],
+  },
+  {
     id: "2026-08-31",
     date: "August 31, 2026",
     title: "Finishing a book pays properly, and sorting runs in the background",

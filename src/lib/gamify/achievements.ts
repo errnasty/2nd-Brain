@@ -36,6 +36,7 @@ export const ACHIEVEMENTS: Achievement[] = [
   { key: "cards_500", name: "Deck runner", desc: "Grade 500 flashcards", emoji: "🎴", test: (s) => c(s, "cardsGraded") >= 500 },
   { key: "tasks_25", name: "Taskmaster", desc: "Complete 25 tasks", emoji: "✅", test: (s) => c(s, "tasksDone") >= 25 },
   { key: "reader_50", name: "Bookworm", desc: "Read 50 articles", emoji: "📚", test: (s) => c(s, "articlesRead") >= 50 },
+  { key: "chapters_100", name: "Page turner", desc: "Read 100 chapters", emoji: "🔖", test: (s) => c(s, "chaptersRead") >= 100 },
   { key: "book_1", name: "Cover to cover", desc: "Finish your first book", emoji: "📖", test: (s) => c(s, "booksFinished") >= 1 },
   { key: "book_5", name: "Shelf builder", desc: "Finish 5 books", emoji: "📚", test: (s) => c(s, "booksFinished") >= 5 },
   { key: "book_25", name: "Well read", desc: "Finish 25 books", emoji: "🏛️", test: (s) => c(s, "booksFinished") >= 25 },

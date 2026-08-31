@@ -7,7 +7,7 @@ import { bookChapters, bookReadingState, directoryItems, documents } from "@/lib
 import { requireUser } from "@/lib/auth";
 import { advanceFurthest } from "@/lib/books/progress";
 import { awardXp, type AwardResult } from "@/lib/gamify/award";
-import { bookFinishXp } from "@/lib/gamify/rules";
+import { bookFinishXp, chapterCounts } from "@/lib/gamify/rules";
 
 const PositionSchema = z.object({
   documentId: z.string().uuid(),
@@ -93,7 +93,38 @@ export async function saveBookPositionAction(input: {
       set: { chapterIdx, charOffset, furthestChapterIdx, progressPct, updatedAt: new Date() },
     });
 
-  return { ok: true as const, progressPct };
+  // Reaching the end of a chapter pays, so a book rewards the evenings that
+  // read it and not only the day it is finished. The test is cheap and made of
+  // numbers this query already has; `awardXp` refuses a repeat, so the reader
+  // paging back and forth across the last page of a chapter cannot farm it.
+  let xp: AwardResult | null = null;
+  if (chapterCounts(charOffset, current)) {
+    xp = await awardXp(user.id, {
+      source: "chapter_read",
+      itemId: await bookItemId(user.id, documentId),
+      useAI: false,
+      refKind: "chapter_read",
+      refId: `${documentId}:${chapterIdx}`,
+    });
+    if (xp.skipped || xp.awarded <= 0) xp = null;
+  }
+
+  return { ok: true as const, progressPct, xp };
+}
+
+/**
+ * The Directory item a book lives in — the thing that decides which skill its
+ * XP feeds. Null when the book has no item (an ePub uploaded before the
+ * Directory linked them), in which case the award is player-only rather than
+ * being pushed into some arbitrary skill.
+ */
+async function bookItemId(userId: string, documentId: string): Promise<string | null> {
+  const [item] = await db
+    .select({ id: directoryItems.id })
+    .from(directoryItems)
+    .where(and(eq(directoryItems.documentId, documentId), eq(directoryItems.userId, userId)))
+    .limit(1);
+  return item?.id ?? null;
 }
 
 /**
@@ -141,22 +172,18 @@ export async function setBookFinishedAction(input: { documentId: string; finishe
  */
 async function awardBookFinish(userId: string, documentId: string): Promise<AwardResult | null> {
   try {
-    const [[lengths], [item]] = await Promise.all([
+    const [[lengths], itemId] = await Promise.all([
       db
         .select({ chars: sql<number>`coalesce(sum(${bookChapters.charCount}), 0)::int` })
         .from(bookChapters)
         .where(and(eq(bookChapters.documentId, documentId), eq(bookChapters.userId, userId))),
-      db
-        .select({ id: directoryItems.id })
-        .from(directoryItems)
-        .where(and(eq(directoryItems.documentId, documentId), eq(directoryItems.userId, userId)))
-        .limit(1),
+      bookItemId(userId, documentId),
     ]);
 
     return await awardXp(userId, {
       source: "book_finished",
       amount: bookFinishXp(lengths?.chars ?? 0),
-      itemId: item?.id ?? null,
+      itemId,
       // The item's cached/folder skill is the right answer here; running the
       // AI classifier over a whole book at the finish line is not.
       useAI: false,

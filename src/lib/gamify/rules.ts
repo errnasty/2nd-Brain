@@ -7,6 +7,7 @@ export type XpSource =
   | "card_graded"
   | "cards_made"
   | "article_read"
+  | "chapter_read"
   | "book_finished"
   | "article_saved"
   | "article_starred"
@@ -53,6 +54,38 @@ export function bookFinishXp(charCount: number): number {
   return Math.min(BOOK_XP_MAX, Math.max(BOOK_XP_MIN, raw));
 }
 
+/**
+ * When a chapter counts as read.
+ *
+ * The finish award alone is a terrible reinforcement schedule: hundreds of XP
+ * arriving once, weeks after you started, with nothing in between for the
+ * twenty evenings that actually did the work. Chapters are the unit a reader
+ * experiences as progress, so they are the unit that pays.
+ *
+ * Two guards decide what a chapter is:
+ *
+ *   - `CHAPTER_READ_FRACTION` — you have to have reached the end of it. Opening
+ *     a chapter is not reading it, and paying on entry would make flicking
+ *     through the contents list the fastest XP in the app. Not 100%, because a
+ *     stored character count is an estimate of what the browser renders and a
+ *     reader can legitimately stop a hair short of it.
+ *   - `CHAPTER_MIN_CHARS` — roughly 250 words. Title pages, dedications,
+ *     epigraphs and part dividers are all real spine entries and all worth
+ *     nothing; this is what separates them from a chapter.
+ *
+ * Farming is blocked upstream: each chapter is awarded once ever, keyed on the
+ * book and the chapter index.
+ */
+export const CHAPTER_READ_FRACTION = 0.9;
+export const CHAPTER_MIN_CHARS = 1_500;
+
+/** True when a position inside a chapter means that chapter has been read. */
+export function chapterCounts(charOffset: number, charCount: number): boolean {
+  if (!Number.isFinite(charCount) || charCount < CHAPTER_MIN_CHARS) return false;
+  if (!Number.isFinite(charOffset) || charOffset < 0) return false;
+  return charOffset >= charCount * CHAPTER_READ_FRACTION;
+}
+
 /** Base XP per source. card_graded is computed separately (scales with grade);
  *  quiz_completed's caller passes an explicit `amount` from quizXp().
  *
@@ -71,6 +104,11 @@ export const XP_RULES: Record<XpSource, number> = {
   card_graded: 8, // base; see cardGradeXp
   cards_made: 18,
   article_read: 4,
+  // A chapter is several articles' worth of text and a real sitting's work, so
+  // it pays about three times a skim and rather less than finishing a study
+  // session. A 20-chapter book therefore pays roughly 240 on the way through
+  // and its finish award on top — the bulk of a book's XP is still the book.
+  chapter_read: 12,
   // Finishing a book is the largest single act of reading this app can
   // observe, so it pays like one. The number is computed per book from its
   // length (see bookFinishXp) — this entry is the floor a caller gets if it
@@ -128,6 +166,7 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   card_graded: "reviewed a card",
   cards_made: "made flashcards",
   article_read: "read an article",
+  chapter_read: "read a chapter",
   book_finished: "finished a book",
   article_saved: "saved an article",
   article_starred: "starred an article",
@@ -185,6 +224,7 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   card_graded: "cardsGraded",
   cards_made: null,
   article_read: "articlesRead",
+  chapter_read: "chaptersRead",
   book_finished: "booksFinished",
   article_saved: null,
   article_starred: null,

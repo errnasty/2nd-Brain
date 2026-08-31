@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Highlighter, MessageSquarePlus, Trash2, X } from "lucide-react";
+import { Highlighter, MessageSquarePlus, Sparkles, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -49,6 +49,7 @@ export function BookHighlightLayer({
   layoutTick,
   highlights,
   onChange,
+  onExplain,
 }: {
   documentId: string;
   chapterIdx: number;
@@ -58,6 +59,8 @@ export function BookHighlightLayer({
   layoutTick: number;
   highlights: BookHighlight[];
   onChange: (next: BookHighlight[]) => void;
+  /** Hand the selected passage to the reader's explain panel. */
+  onExplain: (text: string) => void;
 }) {
   const [painted, setPainted] = useState<Painted[]>([]);
   const [draft, setDraft] = useState<{
@@ -250,6 +253,19 @@ export function BookHighlightLayer({
             </button>
           ))}
           <span className="mx-0.5 h-5 w-px bg-border" />
+          {/* Selecting the passage is the question — this asks it. */}
+          <button
+            onClick={() => {
+              const text = draft.text;
+              clearSelection();
+              onExplain(text);
+            }}
+            title="Explain this passage"
+            aria-label="Explain this passage"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Sparkles className="h-4 w-4" />
+          </button>
           <button
             onClick={() => void create("yellow", true)}
             title="Highlight and add a note"

@@ -18,6 +18,8 @@ import {
   bookFinishXp,
   BOOK_XP_MIN,
   BOOK_XP_MAX,
+  chapterCounts,
+  CHAPTER_MIN_CHARS,
 } from "./rules";
 
 describe("cardGradeXp", () => {
@@ -227,5 +229,42 @@ describe("bookFinishXp", () => {
     const typical = bookFinishXp(500_000);
     expect(typical).toBeGreaterThan(BOOK_XP_MIN);
     expect(typical).toBeLessThan(BOOK_XP_MAX);
+  });
+});
+
+describe("chapterCounts", () => {
+  const LONG = 20_000;
+
+  it("pays only once the end of the chapter is in sight", () => {
+    expect(chapterCounts(LONG * 0.5, LONG)).toBe(false);
+    expect(chapterCounts(LONG * 0.89, LONG)).toBe(false);
+    expect(chapterCounts(LONG * 0.95, LONG)).toBe(true);
+    expect(chapterCounts(LONG, LONG)).toBe(true);
+  });
+
+  // Opening a chapter is not reading it — if entry paid, flicking through the
+  // contents list would be the fastest XP in the app.
+  it("pays nothing for merely opening a chapter", () => {
+    expect(chapterCounts(0, LONG)).toBe(false);
+  });
+
+  // Title pages, dedications and part dividers are real spine entries.
+  it("ignores anything too short to be a chapter", () => {
+    expect(chapterCounts(CHAPTER_MIN_CHARS - 1, CHAPTER_MIN_CHARS - 1)).toBe(false);
+    expect(chapterCounts(CHAPTER_MIN_CHARS, CHAPTER_MIN_CHARS)).toBe(true);
+  });
+
+  it("survives junk rather than paying on a NaN", () => {
+    expect(chapterCounts(Number.NaN, LONG)).toBe(false);
+    expect(chapterCounts(LONG, Number.NaN)).toBe(false);
+    expect(chapterCounts(-5, LONG)).toBe(false);
+    expect(chapterCounts(10, 0)).toBe(false);
+  });
+
+  // A chapter is a sitting's work: worth several skimmed articles, worth less
+  // than finishing a whole study session.
+  it("is priced between an article and a session", () => {
+    expect(XP_RULES.chapter_read).toBeGreaterThan(XP_RULES.article_read);
+    expect(XP_RULES.chapter_read).toBeLessThan(XP_RULES.session_complete);
   });
 });
