@@ -44,14 +44,20 @@ export const LINE_HEIGHT_STEPS: { value: number; label: string }[] = [
 /**
  * Side margins, as the gutter either side of the text.
  *
- * "Narrow" is what someone reading on a phone in bed wants — every character
- * of width matters there. "Wide" holds a shorter line on a desktop, which is
- * the single biggest thing you can do for readability on a big screen.
+ * Each is a `clamp()` rather than a fixed length, because the right gutter is
+ * not one number: 56px either side of a phone screen leaves a column too
+ * narrow to read, and 20px either side of a desktop window leaves a line so
+ * long the eye loses its place on the return sweep. The reader's setting picks
+ * a BAND — how generous to be — and the viewport picks the value inside it.
+ *
+ * "Normal" is deliberately the band the reader shipped with before this was a
+ * setting (roughly 20px on a phone, 56px on a desktop), so an account that
+ * never opens the panel sees the page it has always seen.
  */
-export const MARGIN_STEPS: { value: BookMargin; label: string; rem: number }[] = [
-  { value: "narrow", label: "Narrow", rem: 0.75 },
-  { value: "normal", label: "Normal", rem: 2 },
-  { value: "wide", label: "Wide", rem: 4.5 },
+export const MARGIN_STEPS: { value: BookMargin; label: string; css: string }[] = [
+  { value: "narrow", label: "Narrow", css: "clamp(0.5rem, 2vw, 1.5rem)" },
+  { value: "normal", label: "Normal", css: "clamp(1.25rem, 5vw, 3.5rem)" },
+  { value: "wide", label: "Wide", css: "clamp(2rem, 9vw, 7rem)" },
 ];
 
 export const FONT_STACKS: Record<BookFont, string> = {
@@ -59,9 +65,12 @@ export const FONT_STACKS: Record<BookFont, string> = {
   sans: '"Helvetica Neue", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif',
 };
 
-/** The gutter for a margin setting, in rem. */
-export function marginRem(margin: BookMargin): number {
-  return MARGIN_STEPS.find((m) => m.value === margin)?.rem ?? 2;
+/** The CSS length for a margin setting. Falls back to "normal". */
+export function marginCss(margin: BookMargin): string {
+  return (
+    MARGIN_STEPS.find((m) => m.value === margin)?.css ??
+    MARGIN_STEPS[1].css
+  );
 }
 
 /**

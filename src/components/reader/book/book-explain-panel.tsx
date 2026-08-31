@@ -39,6 +39,10 @@ export function BookExplainPanel({
   const [asked, setAsked] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const answerRef = useRef<HTMLDivElement>(null);
+  // Whether the answer view should keep following the stream. Declared here
+  // because `run` below resets it; see the scroll effect for why it is tracked
+  // from the scroll event rather than measured.
+  const stick = useRef(true);
 
   const run = useCallback(
     async (followUp?: string) => {
@@ -50,6 +54,9 @@ export function BookExplainPanel({
       setError(null);
       setAnswer("");
       setAsked(followUp ?? null);
+      // A new answer starts at the top and should be followed again, whatever
+      // the reader did with the last one.
+      stick.current = true;
 
       try {
         const res = await fetch(`/api/book/${documentId}/explain`, {
@@ -89,14 +96,23 @@ export function BookExplainPanel({
     return () => abortRef.current?.abort();
   }, [run]);
 
-  // Follow the stream, but only while the reader is already at the bottom —
-  // yanking the panel down while they are re-reading the first paragraph is
-  // worse than letting the text run on below the fold.
-  useEffect(() => {
+  // Follow the stream, but stop the moment the reader scrolls up — yanking the
+  // panel back down while they are re-reading the first paragraph is worse than
+  // letting the text run on below the fold.
+  //
+  // Tracked from the scroll event rather than measured when the answer changes:
+  // by then the new text is already in the DOM, so "am I near the bottom" is
+  // asked of a container that just grew and answers no from the second chunk
+  // onwards — which would have made this follow nothing at all.
+  const onAnswerScroll = useCallback(() => {
     const el = answerRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  }, []);
+
+  useEffect(() => {
+    const el = answerRef.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [answer]);
 
   return (
@@ -107,7 +123,7 @@ export function BookExplainPanel({
         </blockquote>
       </div>
 
-      <div ref={answerRef} className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div ref={answerRef} onScroll={onAnswerScroll} className="min-h-0 flex-1 overflow-y-auto p-3">
         {asked && <p className="mb-2 text-xs font-medium text-muted-foreground">You asked: {asked}</p>}
 
         {error ? (

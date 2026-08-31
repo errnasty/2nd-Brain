@@ -31,7 +31,7 @@ import {
   FONT_STACKS,
   LINE_HEIGHT_STEPS,
   MARGIN_STEPS,
-  marginRem,
+  marginCss,
   type BookFont,
   type BookTypography,
 } from "@/lib/books/typography";
@@ -153,7 +153,16 @@ export function BookReader({
   const [panel, setPanel] = useState<"toc" | "settings" | "search" | "explain" | null>(null);
   // The passage the explain panel is working on. Kept here rather than in the
   // panel so a new selection replaces the old explanation instead of stacking.
-  const [explaining, setExplaining] = useState<string | null>(null);
+  // The chapter is captured WITH the passage, not read live: a passage selected
+  // in chapter 9 is a chapter 9 passage even after the reader turns on into
+  // chapter 10, and a live index would silently re-explain it against the wrong
+  // context — and re-fire the request on every chapter change while the panel
+  // sat open. `at` makes re-selecting the same words ask again.
+  const [explaining, setExplaining] = useState<{
+    text: string;
+    chapterIdx: number;
+    at: number;
+  } | null>(null);
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
   const [highlights, setHighlights] = useState<BookHighlight[]>(initialHighlights);
   // Bumped after every relayout so the highlight overlay re-measures. Rects
@@ -186,6 +195,13 @@ export function BookReader({
   // as a toast: a card sliding over the page you are reading, every chapter, is
   // an interruption — the reward belongs in the furniture you already glance at.
   const [xpFlash, setXpFlash] = useState<{ amount: number; at: number } | null>(null);
+
+  // Chapters already finished, for the contents ticks. Seeded from the server
+  // and added to as chapters are finished in this sitting — the tick has to
+  // appear when the chapter is read, not on the next time the book is opened.
+  // A Set because the list is walked once per contents entry, and a book can
+  // have hundreds of them.
+  const [readSet, setReadSet] = useState<Set<number>>(() => new Set(readChapters));
 
   // Typography is one object rather than three pieces of state: the settings
   // panel writes one field at a time but the page has to re-paginate on any of
@@ -379,6 +395,9 @@ export function BookReader({
           // while the reader lingers on the last page.
           if (r.xp && r.xp.awarded > 0) {
             setXpFlash({ amount: r.xp.awarded, at: Date.now() });
+            // The award is only ever granted once per chapter, so this is also
+            // the moment that chapter earned its tick in the contents list.
+            setReadSet((prev) => (prev.has(idx) ? prev : new Set(prev).add(idx)));
             celebrate(r.xp);
           }
         })
@@ -409,8 +428,9 @@ export function BookReader({
 
   useEffect(() => {
     // A panel is a thing you are using; hiding the bar it hangs off would be
-    // absurd, so the timer simply does not run while one is open.
-    if (panel !== null) {
+    // absurd, so the timer simply does not run while one is open. Nor while
+    // the first-run overlay is up, which is busy pointing at those very bars.
+    if (panel !== null || tapHint) {
       if (idleTimer.current) clearTimeout(idleTimer.current);
       setChromeHidden(false);
       return;
@@ -426,7 +446,7 @@ export function BookReader({
       window.removeEventListener("pointermove", onMouse);
       if (idleTimer.current) clearTimeout(idleTimer.current);
     };
-  }, [panel, armIdle]);
+  }, [panel, tapHint, armIdle]);
 
   /* ── first-run + resume cues ─────────────────────────────────────── */
 
@@ -628,8 +648,13 @@ export function BookReader({
       // move. Guarded on the selection being collapsed so that finishing a
       // highlight drag, or tapping to dismiss one, never counts as this.
       if (window.getSelection()?.isCollapsed !== false) {
-        setChromeHidden((hidden) => !hidden);
-        armIdle();
+        const showing = chromeHidden;
+        setChromeHidden(!showing);
+        // Asking for the bars has to KEEP them: the idle timer only means
+        // anything where there is a mouse to re-arm it, so leaving it running
+        // would take them away again three seconds later on the one device
+        // that has no other way to get them back.
+        if (showing && idleTimer.current) clearTimeout(idleTimer.current);
       }
       return;
     }
@@ -747,10 +772,6 @@ export function BookReader({
     [book.nav, book.chapters],
   );
 
-  // Chapters already finished, for the contents ticks. A Set because the list
-  // is walked once per entry and a book can have hundreds of them.
-  const readSet = useMemo(() => new Set(readChapters), [readChapters]);
-
   // The line you are inside, which for a chapter split across several contents
   // entries is the last one at or before where you are.
   const activeKey = useMemo(() => {
@@ -772,14 +793,20 @@ export function BookReader({
    * nothing. Null for a fixed-layout book, whose character counts are a fiction.
    */
   const chapterMinutesLeft = useMemo(() => {
-    if (scrollMode || !chapter || chapter.charCount <= 0 || pageCount <= 0) return null;
+    // `html === null` means the new chapter has not arrived, so `pageCount`
+    // still belongs to the previous one — pairing it with the new chapter's
+    // length would flash a wrong number (usually "nearly done") on every
+    // chapter change.
+    if (scrollMode || html === null || !chapter || chapter.charCount <= 0 || pageCount <= 0) {
+      return null;
+    }
     // Measured in PAGES rather than from the saved character offset: the offset
     // is written by a passive effect after the page has already turned, so
     // reading it here would always report the previous page's number. Pages are
     // also the honest unit — they are what is on screen.
     const pagesLeft = Math.max(0, pageCount - 1 - page);
     return minutesFor((chapter.charCount * pagesLeft) / pageCount);
-  }, [scrollMode, chapter, page, pageCount]);
+  }, [scrollMode, html, chapter, page, pageCount]);
 
   const atStart = chapterIdx === book.chapters[0]?.idx && page === 0;
   const lastIdx = book.chapters[book.chapters.length - 1]?.idx;
@@ -862,7 +889,10 @@ export function BookReader({
         // class. The MEASURED box is the child below, which excludes this
         // padding, so changing it resizes that box and the ResizeObserver
         // re-paginates without anything else having to know.
-        style={{ paddingLeft: `${marginRem(typography.margin)}rem`, paddingRight: `${marginRem(typography.margin)}rem` }}
+        style={{
+          paddingLeft: marginCss(typography.margin),
+          paddingRight: marginCss(typography.margin),
+        }}
         className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 py-4 sm:py-6"
       >
         {/* The measured box is deliberately the one WITHOUT the gutter padding:
@@ -926,7 +956,7 @@ export function BookReader({
                 indexRef={indexRef}
                 layoutTick={layoutTick}
                 onExplain={(text) => {
-                  setExplaining(text);
+                  setExplaining({ text, chapterIdx, at: Date.now() });
                   setPanel("explain");
                 }}
                 highlights={highlights}
@@ -1109,12 +1139,14 @@ export function BookReader({
             {panel === "explain" ? (
               explaining ? (
                 <BookExplainPanel
-                  // Keyed on the passage so a fresh selection remounts the panel
-                  // rather than trying to reconcile a half-streamed answer.
-                  key={explaining}
+                  // Keyed on the selection, timestamp included, so asking again
+                  // about the same words remounts and re-asks rather than
+                  // sitting on the previous answer — and so a fresh selection
+                  // never tries to reconcile a half-streamed one.
+                  key={explaining.at}
                   documentId={book.id}
-                  chapterIdx={chapterIdx}
-                  passage={explaining}
+                  chapterIdx={explaining.chapterIdx}
+                  passage={explaining.text}
                 />
               ) : (
                 <p className="p-4 text-[13px] leading-relaxed text-muted-foreground">

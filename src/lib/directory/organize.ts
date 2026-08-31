@@ -123,6 +123,7 @@ export async function runOrganize(
   const plan = await planLibraryFolders(
     items.map((i) => i.title),
     existing.map((f) => f.name),
+    scope === "everything" ? "reorganize" : "fill",
   );
   if (plan.length === 0) {
     await onProgress({ phase: "done", done: 0, total: items.length, label: "Couldn't plan a structure" });
@@ -141,19 +142,65 @@ export async function runOrganize(
       folderIds.set(norm(f.name), hit);
       continue;
     }
+    // `onConflictDoNothing` because (user_id, name) is unique and `existing`
+    // above deliberately excludes the deprecated inbox folder: a plan that
+    // proposes a name the inbox already holds would otherwise raise a
+    // constraint error and fail the entire sort, an hour's work lost to one
+    // folder name. The same guard covers a folder created by another device
+    // between the read and this write.
     const [row] = await db
       .insert(directoryFolders)
       .values({ userId, name: f.name, parentId: null })
+      .onConflictDoNothing({ target: [directoryFolders.userId, directoryFolders.name] })
       .returning({ id: directoryFolders.id });
+
     if (row) {
       folderIds.set(norm(f.name), row.id);
       byName.set(norm(f.name), row.id);
       summary.foldersCreated.push(f.name);
       summary.undo.createdFolderIds.push(row.id);
+      continue;
+    }
+
+    // Lost the race, or the name is the inbox's. Either way a folder with this
+    // exact name exists — file into it rather than dropping the whole cluster,
+    // and do NOT record it as created: the undo must never delete a folder this
+    // run did not make.
+    const [taken] = await db
+      .select({ id: directoryFolders.id })
+      .from(directoryFolders)
+      .where(and(eq(directoryFolders.userId, userId), eq(directoryFolders.name, f.name)))
+      .limit(1);
+    if (taken) {
+      folderIds.set(norm(f.name), taken.id);
+      byName.set(norm(f.name), taken.id);
     }
   }
 
-  const usableFolders: LibraryFolder[] = plan.filter((f) => folderIds.has(norm(f.name)));
+  const planned: LibraryFolder[] = plan.filter((f) => folderIds.has(norm(f.name)));
+
+  /**
+   * The folders pass 2 is allowed to file into.
+   *
+   * For a whole-library run that is exactly the plan: deciding the shelf is the
+   * point, and a folder the plan dropped is one the run intends to empty.
+   *
+   * For a loose-items run it is the plan PLUS every folder the user already
+   * has, because the plan was built from the loose titles alone and cannot
+   * speak for folders none of them happen to belong in. Without this, filing a
+   * handful of stray articles would quietly restrict the whole library to the
+   * three or four folders those articles suggested — and items with a perfectly
+   * good existing home would be told there wasn't one.
+   */
+  const usableFolders: LibraryFolder[] = [...planned];
+  if (scope === "unsorted") {
+    const named = new Set(planned.map((f) => norm(f.name)));
+    for (const f of existing) {
+      if (named.has(norm(f.name))) continue;
+      folderIds.set(norm(f.name), f.id);
+      usableFolders.push({ name: f.name, description: `Existing folder: ${f.name}` });
+    }
+  }
 
   // File the items, a batch at a time.
   let filed = 0;
@@ -220,8 +267,27 @@ export async function runOrganize(
   if (scope === "everything" && opts.pruneEmpty) {
     await onProgress({ phase: "tidying", done: filed, total: items.length, label: "Tidying up empty folders" });
     const pruned = await pruneEmptyFolders(userId);
-    summary.foldersRemoved = pruned.map((f) => f.name);
-    summary.undo.removedFolders = pruned;
+
+    // A folder this run created and then pruned (the plan proposed it, nothing
+    // was filed into it) belongs in neither list: reporting it as both created
+    // and removed is just noise, and it has nothing to restore or re-remove on
+    // an undo either. Net effect of the run on that folder is nothing, so the
+    // summary says nothing about it.
+    const bornAndDied = new Set(
+      pruned.map((f) => f.id).filter((id) => summary.undo.createdFolderIds.includes(id)),
+    );
+    const createdIdByName = new Map(pruned.map((f) => [f.id, f.name]));
+    if (bornAndDied.size > 0) {
+      const names = new Set([...bornAndDied].map((id) => createdIdByName.get(id)));
+      summary.foldersCreated = summary.foldersCreated.filter((n) => !names.has(n));
+      summary.undo.createdFolderIds = summary.undo.createdFolderIds.filter(
+        (id) => !bornAndDied.has(id),
+      );
+    }
+
+    const survived = pruned.filter((f) => !bornAndDied.has(f.id));
+    summary.foldersRemoved = survived.map((f) => f.name);
+    summary.undo.removedFolders = survived;
   }
 
   await onProgress({ phase: "done", done: filed, total: items.length, label: "Done" });

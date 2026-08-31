@@ -63,11 +63,17 @@ export default async function ReadBookPage({ params }: { params: Promise<{ id: s
   // client. Otherwise opening a book costs a full round trip after hydration
   // before a single word appears — the most visible latency in the feature, and
   // entirely avoidable since this request already has bucket access.
-  const first = await getBookObject(bookPaths(user.id, doc.id).chapter(anchor.chapterIdx));
+  //
+  // The contents ticks ride alongside it rather than after it: they are
+  // decoration, and putting a second round trip in front of the first word of
+  // the book would spend the very latency the line above exists to save.
+  const [first, readChapters] = await Promise.all([
+    getBookObject(bookPaths(user.id, doc.id).chapter(anchor.chapterIdx)),
+    finishedChapters(id, user.id, state?.finishedAt != null, chapters.map((c) => c.idx)),
+  ]);
 
   const meta = (doc.metadata ?? {}) as Record<string, unknown>;
   const storedTheme = state?.theme;
-  const readChapters = await finishedChapters(id, user.id, state?.finishedAt != null, chapters.length);
 
   return (
     <BookReader
@@ -118,9 +124,12 @@ async function finishedChapters(
   documentId: string,
   userId: string,
   bookFinished: boolean,
-  chapterCount: number,
+  // The book's real spine indices, not a count: they are what the contents
+  // list matches against, and assuming they run 0..n-1 would tick the wrong
+  // lines in any book whose spine does not.
+  allChapterIdx: number[],
 ): Promise<number[]> {
-  if (bookFinished) return Array.from({ length: chapterCount }, (_, i) => i);
+  if (bookFinished) return allChapterIdx;
   try {
     const rows = await db
       .select({ refId: xpEvents.refId })

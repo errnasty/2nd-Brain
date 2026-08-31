@@ -118,9 +118,10 @@ export async function organizeItems(
 
 // ── Full-library reorganize ──────────────────────────────────────────
 //
-// A different problem from routing loose items into a shelf that already
-// works. Here the shelf itself is the thing being decided, so it is done in
-// two passes:
+// Two jobs, one pipeline. Either the shelf itself is being decided (a whole
+// library reorganisation) or loose items are being filed onto a shelf that
+// already works — `mode` is which, and it changes only the first pass. Both
+// run in two passes:
 //
 //   1. AGREE A STRUCTURE from every title at once. One item at a time can only
 //      ever answer "which of these folders is least wrong", which is how a
@@ -149,7 +150,7 @@ const LibraryPlanSchema = z.object({
     .max(24),
 });
 
-const PLAN_SYSTEM = `You design the folder structure for someone's personal knowledge library.
+const PLAN_SYSTEM_REORGANIZE = `You design the folder structure for someone's personal knowledge library.
 
 You are given every item's title, and the folders that exist today. Propose the
 folder list the whole library SHOULD have.
@@ -169,6 +170,24 @@ Rules:
 
 Return only the folders list.`;
 
+const PLAN_SYSTEM_FILL = `You are finding homes for the LOOSE items in someone's library.
+
+You are given the titles of items that are in no folder at all, and the folders
+that already exist. Propose the folders these loose items should go into.
+
+Rules:
+- The existing folders STAY. This is not a reorganisation: the user's structure
+  is working and you are adding to it, not replacing it. Do not propose renaming
+  or merging what is already there.
+- Repeat an existing folder name (copied EXACTLY) when loose items belong in it,
+  with a one-line description of what it holds.
+- Propose a NEW folder only for a topic none of the existing folders covers.
+  Prefer one broader new folder to several thin ones.
+- Names: 1-3 words, Title Case.
+- Every folder needs a one-line description of what belongs in it.
+
+Return only the folders list.`;
+
 /**
  * Pass 1: propose the folder structure for a whole library from its titles.
  *
@@ -179,6 +198,7 @@ Return only the folders list.`;
 export async function planLibraryFolders(
   titles: string[],
   existingFolderNames: string[],
+  mode: "reorganize" | "fill" = "reorganize",
 ): Promise<LibraryFolder[]> {
   if (!aiAvailable()) return [];
   if (titles.length === 0) return [];
@@ -188,14 +208,15 @@ export async function planLibraryFolders(
       ? existingFolderNames.map((n) => `"${n}"`).join(", ")
       : "(none yet)";
   const list = titles.map((t, i) => `${i + 1}. ${t.slice(0, 160)}`).join("\n");
+  const heading = mode === "fill" ? "LOOSE ITEMS (in no folder)" : "EVERY ITEM IN THE LIBRARY";
 
   try {
     const result = await withLiteModel((model) =>
       generateJson({
         model,
         schema: LibraryPlanSchema,
-        system: PLAN_SYSTEM,
-        prompt: `EXISTING FOLDERS: ${existing}\n\nEVERY ITEM IN THE LIBRARY:\n${list}\n\nReturn the folders list.`,
+        system: mode === "fill" ? PLAN_SYSTEM_FILL : PLAN_SYSTEM_REORGANIZE,
+        prompt: `EXISTING FOLDERS: ${existing}\n\n${heading}:\n${list}\n\nReturn the folders list.`,
       }),
     );
     // Fold duplicates the model may still emit ("Ai" and "AI"), keeping the

@@ -22,7 +22,11 @@ import { requireUser } from "@/lib/auth";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
 import { undoOrganize } from "@/lib/directory/organize";
-import { describeOrganizeSummary, type OrganizeSummary } from "@/lib/directory/organize-plan";
+import {
+  describeOrganizeSummary,
+  publicSummary,
+  type PublicOrganizeSummary,
+} from "@/lib/directory/organize-plan";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { extractReadable } from "@/lib/readability/extract";
 import { chunkText } from "@/lib/documents/chunker";
@@ -1274,7 +1278,8 @@ export async function applyAutoOrganizeAction(proposals: OrganizeProposal[]): Pr
 export type LastSort = {
   jobId: string;
   finishedAt: string;
-  summary: OrganizeSummary;
+  /** Counts only. The undo record itself never leaves the server. */
+  summary: PublicOrganizeSummary;
   description: string;
 };
 
@@ -1308,7 +1313,7 @@ export async function lastUndoableSortAction(): Promise<LastSort | null> {
   return {
     jobId: job.id,
     finishedAt: job.updatedAt.toISOString(),
-    summary,
+    summary: publicSummary(summary),
     description: describeOrganizeSummary(summary),
   };
 }

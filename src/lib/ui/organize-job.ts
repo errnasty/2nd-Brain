@@ -39,7 +39,7 @@ import { undoSortAction } from "@/app/(app)/directory/actions";
 import {
   describeOrganizeSummary,
   type OrganizeScope,
-  type OrganizeSummary,
+  type PublicOrganizeSummary,
 } from "@/lib/directory/organize-plan";
 
 const KEY = "directory.sortJob.v1";
@@ -84,7 +84,7 @@ type JobStatus = {
   status: "pending" | "running" | "done" | "error";
   error: string | null;
   progress: { phase: string; done: number; total: number; label: string } | null;
-  summary: OrganizeSummary | null;
+  summary: PublicOrganizeSummary | null;
 };
 
 /**
@@ -144,11 +144,19 @@ function stopWatching(jobId: string): void {
 }
 
 /** Attach the progress strip and the completion toast to a running sort. */
-export function watchOrganizeJob(jobId: string, scope: OrganizeScope = "unsorted"): void {
+export function watchOrganizeJob(jobId: string, scope?: OrganizeScope): void {
   if (typeof window === "undefined" || watching.has(jobId)) return;
 
+  // Re-attaching after a reload has no idea which scope was chosen, so it says
+  // the true, vaguer thing rather than guessing "unsorted" and being wrong
+  // about a whole-directory run. The label is replaced by the job's own on the
+  // first poll anyway.
   const stripId = startGenerationJob(
-    scope === "everything" ? "Sorting your whole directory" : "Sorting unsorted items",
+    scope === "everything"
+      ? "Sorting your whole directory"
+      : scope === "unsorted"
+        ? "Sorting unsorted items"
+        : "Sorting your directory",
   );
   const startedAt = Date.now();
 
@@ -216,18 +224,26 @@ export function resumeOrganizeJob(): void {
   if (jobId) watchOrganizeJob(jobId);
 }
 
-function celebrateSort(jobId: string, summary: OrganizeSummary): void {
-  if (summary.moved === 0 && summary.foldersCreated.length === 0) {
+function celebrateSort(jobId: string, summary: PublicOrganizeSummary): void {
+  // "Nothing needed moving" has to mean nothing happened at all — a run that
+  // cleared out four empty folders did something, and saying otherwise leaves
+  // the reader wondering where their folders went.
+  if (
+    summary.moved === 0 &&
+    summary.foldersCreated.length === 0 &&
+    summary.foldersRemoved.length === 0
+  ) {
     toast("Nothing needed moving — your directory is already tidy.");
     return;
   }
   toast.success("Your directory is sorted", {
     description: describeOrganizeSummary(summary),
     duration: 12_000,
-    action: {
-      label: "Undo",
-      onClick: () => void undoSort(jobId),
-    },
+    // Offered only when there is something to put back. A sort whose undo has
+    // already been used still reports itself as done to a tab that reconnects
+    // to it later, and an Undo button that can only say "put back 0 items" is
+    // worse than no button.
+    action: summary.canUndo ? { label: "Undo", onClick: () => void undoSort(jobId) } : undefined,
   });
 }
 

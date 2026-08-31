@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   BOOK_TYPOGRAPHY_DEFAULT,
   LINE_HEIGHT_STEPS,
-  marginRem,
+  MARGIN_STEPS,
+  marginCss,
   resolveTypography,
 } from "./typography";
 
@@ -50,9 +51,18 @@ describe("resolveTypography", () => {
   });
 });
 
-describe("marginRem", () => {
-  it("orders the gutters narrow < normal < wide", () => {
-    expect(marginRem("narrow")).toBeLessThan(marginRem("normal"));
-    expect(marginRem("normal")).toBeLessThan(marginRem("wide"));
+describe("marginCss", () => {
+  it("returns the band for each setting", () => {
+    for (const step of MARGIN_STEPS) {
+      expect(marginCss(step.value)).toBe(step.css);
+    }
+  });
+
+  // Every band has to scale with the viewport: one fixed gutter cannot be right
+  // for both a phone and a desktop window.
+  it("gives every setting a viewport-relative band", () => {
+    for (const step of MARGIN_STEPS) {
+      expect(step.css).toMatch(/^clamp\(.+vw.+\)$/);
+    }
   });
 });

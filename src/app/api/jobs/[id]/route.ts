@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { getAiJob } from "@/lib/ai-jobs/run";
 import type { OrganizeJobPayload } from "@/lib/db/schema";
+import { publicSummary } from "@/lib/directory/organize-plan";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     itemId: job.resultItemId,
     error: job.error,
     progress: organize?.progress ?? null,
-    summary: organize?.summary ?? null,
+    // Counts only — the undo record behind it stays on the server (see
+    // publicSummary); the browser undoes a sort by job id, not by replaying it.
+    summary: organize?.summary ? publicSummary(organize.summary) : null,
   });
 }

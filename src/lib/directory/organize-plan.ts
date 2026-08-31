@@ -60,10 +60,36 @@ export type OrganizeUndo = {
   removedFolders: { id: string; name: string; parentId: string | null }[];
 };
 
+/**
+ * The summary minus its undo record — what is safe and sensible to send to a
+ * browser.
+ *
+ * The undo record is a list of every item the sort moved and where it came
+ * from: up to six hundred id pairs, tens of kilobytes, and of no use whatsoever
+ * to the page, which only ever renders counts and a button. It is polled every
+ * two seconds while a sort runs, so shipping it would mean re-sending the
+ * entire move list on the tick the job finishes. The undo itself is applied
+ * server-side from the job row, so the browser needs the job id and nothing
+ * else.
+ */
+export type PublicOrganizeSummary = Omit<OrganizeSummary, "undo"> & { canUndo: boolean };
+
+export function publicSummary(s: OrganizeSummary): PublicOrganizeSummary {
+  const { undo, ...rest } = s;
+  return {
+    ...rest,
+    canUndo: undo.moves.length > 0 || undo.removedFolders.length > 0,
+  };
+}
+
 /** One line for the toast that lands when the job finishes. */
-export function describeOrganizeSummary(s: OrganizeSummary): string {
+export function describeOrganizeSummary(s: Omit<OrganizeSummary, "undo">): string {
   const parts: string[] = [];
-  parts.push(`${s.moved} item${s.moved === 1 ? "" : "s"} filed`);
+  // Skipped when nothing moved AND something else did happen, so a run that
+  // only tidied folders reads "2 empty folders removed" rather than leading
+  // with "0 items filed".
+  const onlyFolders = s.moved === 0 && (s.foldersCreated.length > 0 || s.foldersRemoved.length > 0);
+  if (!onlyFolders) parts.push(`${s.moved} item${s.moved === 1 ? "" : "s"} filed`);
   if (s.foldersCreated.length > 0) {
     parts.push(`${s.foldersCreated.length} new folder${s.foldersCreated.length === 1 ? "" : "s"}`);
   }

@@ -109,7 +109,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!passage) return new Response("Select a passage to explain.", { status: 400 });
 
   const chapters = await loadChapters(id, userId);
-  const chapterIdx = Number.isInteger(body.chapterIdx) ? (body.chapterIdx as number) : 0;
+  // Clamped to a chapter this book actually has. The index comes from the
+  // client, and it is the ONLY thing bounding how much of the book the model
+  // can see — an out-of-range value would make "everything before this
+  // chapter" mean the entire book, quietly undoing the promise that this
+  // button cannot spoil anything.
+  const lastIdx = chapters.length > 0 ? chapters[chapters.length - 1].idx : 0;
+  const asked = Number.isInteger(body.chapterIdx) ? (body.chapterIdx as number) : 0;
+  const chapterIdx = Math.min(Math.max(0, asked), lastIdx);
   const chapter = chapters.find((c) => c.idx === chapterIdx);
   const question = (body.question ?? "").trim().slice(0, 500);
 

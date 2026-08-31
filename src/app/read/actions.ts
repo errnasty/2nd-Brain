@@ -9,6 +9,7 @@ import {
   directoryItems,
   documents,
   userSettings,
+  xpEvents,
 } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { advanceFurthest } from "@/lib/books/progress";
@@ -101,11 +102,15 @@ export async function saveBookPositionAction(input: {
     });
 
   // Reaching the end of a chapter pays, so a book rewards the evenings that
-  // read it and not only the day it is finished. The test is cheap and made of
-  // numbers this query already has; `awardXp` refuses a repeat, so the reader
-  // paging back and forth across the last page of a chapter cannot farm it.
+  // read it and not only the day it is finished. The test itself is free — it
+  // is made of numbers the query above already returned — but this runs on
+  // every position save, which is every page turn plus a debounce, and a reader
+  // lingering on the last page of a chapter would otherwise re-ask the whole
+  // award machinery a few times a minute. So the ledger is checked first, and
+  // the only path that costs anything is the one that actually pays. `awardXp`
+  // still guards the race; this is about the common case, not correctness.
   let xp: AwardResult | null = null;
-  if (chapterCounts(charOffset, current)) {
+  if (chapterCounts(charOffset, current) && !(await chapterAlreadyPaid(user.id, documentId, chapterIdx))) {
     xp = await awardXp(user.id, {
       source: "chapter_read",
       itemId: await bookItemId(user.id, documentId),
@@ -117,6 +122,34 @@ export async function saveBookPositionAction(input: {
   }
 
   return { ok: true as const, progressPct, xp };
+}
+
+/** Has this chapter already been paid for? One indexed lookup on the ledger. */
+async function chapterAlreadyPaid(
+  userId: string,
+  documentId: string,
+  chapterIdx: number,
+): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ id: xpEvents.id })
+      .from(xpEvents)
+      // All four columns of `xp_events_ref_unique`, in its order, so this is a
+      // single index probe on a path that runs on every page turn.
+      .where(
+        and(
+          eq(xpEvents.userId, userId),
+          eq(xpEvents.source, "chapter_read"),
+          eq(xpEvents.refKind, "chapter_read"),
+          eq(xpEvents.refId, `${documentId}:${chapterIdx}`),
+        ),
+      )
+      .limit(1);
+    return !!row;
+  } catch {
+    // Unreadable ledger: fall through to awardXp, which checks again anyway.
+    return false;
+  }
 }
 
 /**
