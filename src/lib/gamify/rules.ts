@@ -7,6 +7,7 @@ export type XpSource =
   | "card_graded"
   | "cards_made"
   | "article_read"
+  | "book_finished"
   | "article_saved"
   | "article_starred"
   | "article_read_later"
@@ -27,6 +28,31 @@ export type XpSource =
   | "concept_tested"
   | "refresher_done";
 
+/**
+ * Finishing a book: 120–600 XP, scaled by how long the book actually is.
+ *
+ * A book is the one thing in this app that can take weeks, so a flat number
+ * would be wrong in both directions — it would overpay a 30-page pamphlet and
+ * badly underpay a 900-page history. The rate below works out at roughly 1 XP
+ * per 2,000 characters, about a page and a half of a paperback: a 250-page
+ * book lands near 250 XP, two and a half days of the daily goal, and a
+ * doorstopper hits the 600 ceiling.
+ *
+ * The floor exists so a short book is still visibly worth finishing, and the
+ * ceiling so one enormous file can't hand out a month of progress at once.
+ * Farming is blocked upstream instead of here: the award is keyed on the book
+ * (refKind + refId), so un-marking and re-marking it pays exactly once.
+ */
+export const BOOK_XP_MIN = 120;
+export const BOOK_XP_MAX = 600;
+export const BOOK_XP_CHARS_PER_XP = 2000;
+
+export function bookFinishXp(charCount: number): number {
+  const chars = Math.max(0, Math.floor(charCount || 0));
+  const raw = Math.round(chars / BOOK_XP_CHARS_PER_XP);
+  return Math.min(BOOK_XP_MAX, Math.max(BOOK_XP_MIN, raw));
+}
+
 /** Base XP per source. card_graded is computed separately (scales with grade);
  *  quiz_completed's caller passes an explicit `amount` from quizXp().
  *
@@ -45,6 +71,11 @@ export const XP_RULES: Record<XpSource, number> = {
   card_graded: 8, // base; see cardGradeXp
   cards_made: 18,
   article_read: 4,
+  // Finishing a book is the largest single act of reading this app can
+  // observe, so it pays like one. The number is computed per book from its
+  // length (see bookFinishXp) — this entry is the floor a caller gets if it
+  // forgets to pass an amount.
+  book_finished: BOOK_XP_MIN,
   article_saved: 10,
   article_starred: 5,
   article_read_later: 3,
@@ -97,6 +128,7 @@ export const SOURCE_LABEL: Record<XpSource, string> = {
   card_graded: "reviewed a card",
   cards_made: "made flashcards",
   article_read: "read an article",
+  book_finished: "finished a book",
   article_saved: "saved an article",
   article_starred: "starred an article",
   article_read_later: "saved an article for later",
@@ -153,6 +185,7 @@ export const SOURCE_COUNTER: Record<XpSource, string | null> = {
   card_graded: "cardsGraded",
   cards_made: null,
   article_read: "articlesRead",
+  book_finished: "booksFinished",
   article_saved: null,
   article_starred: null,
   article_read_later: null,

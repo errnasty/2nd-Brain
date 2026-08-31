@@ -3,9 +3,11 @@
 import { and, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { bookReadingState, documents } from "@/lib/db/schema";
+import { bookChapters, bookReadingState, directoryItems, documents } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { advanceFurthest } from "@/lib/books/progress";
+import { awardXp, type AwardResult } from "@/lib/gamify/award";
+import { bookFinishXp } from "@/lib/gamify/rules";
 
 const PositionSchema = z.object({
   documentId: z.string().uuid(),
@@ -94,7 +96,17 @@ export async function saveBookPositionAction(input: {
   return { ok: true as const, progressPct };
 }
 
-/** Mark a book read, or put it back on the pile. */
+/**
+ * Mark a book read, or put it back on the pile.
+ *
+ * Finishing pays the biggest single XP award in the app, scaled by the book's
+ * length (see `bookFinishXp`) — a book is weeks of reading, and the economy
+ * should say so. The award is keyed on the book itself, so putting a book back
+ * on the pile and marking it read again pays nothing the second time; the XP
+ * already granted is deliberately NOT clawed back, because un-marking is
+ * normally a correction to the shelf, not a claim that the reading undid
+ * itself.
+ */
 export async function setBookFinishedAction(input: { documentId: string; finished: boolean }) {
   const documentId = z.string().uuid().safeParse(input.documentId);
   if (!documentId.success) return { ok: false as const, error: "Invalid book" };
@@ -113,7 +125,48 @@ export async function setBookFinishedAction(input: { documentId: string; finishe
       set: { finishedAt, updatedAt: new Date() },
     });
 
-  return { ok: true as const, finishedAt: finishedAt?.toISOString() ?? null };
+  let xp: AwardResult | null = null;
+  if (finishedAt) xp = await awardBookFinish(user.id, documentId.data);
+
+  return { ok: true as const, finishedAt: finishedAt?.toISOString() ?? null, xp };
+}
+
+/**
+ * The XP half of finishing a book, kept out of the action above so the shelf
+ * state is written whatever happens here. `awardXp` never throws, and the two
+ * lookups it needs are cheap: the book's total length (which sets the size of
+ * the award) and its Directory item (which decides WHICH skill the XP lands
+ * in — a book in "Systems Design" should level up Systems Design, not a
+ * generic Reading bucket).
+ */
+async function awardBookFinish(userId: string, documentId: string): Promise<AwardResult | null> {
+  try {
+    const [[lengths], [item]] = await Promise.all([
+      db
+        .select({ chars: sql<number>`coalesce(sum(${bookChapters.charCount}), 0)::int` })
+        .from(bookChapters)
+        .where(and(eq(bookChapters.documentId, documentId), eq(bookChapters.userId, userId))),
+      db
+        .select({ id: directoryItems.id })
+        .from(directoryItems)
+        .where(and(eq(directoryItems.documentId, documentId), eq(directoryItems.userId, userId)))
+        .limit(1),
+    ]);
+
+    return await awardXp(userId, {
+      source: "book_finished",
+      amount: bookFinishXp(lengths?.chars ?? 0),
+      itemId: item?.id ?? null,
+      // The item's cached/folder skill is the right answer here; running the
+      // AI classifier over a whole book at the finish line is not.
+      useAI: false,
+      refKind: "book_finished",
+      refId: documentId,
+    });
+  } catch (err) {
+    console.warn("awardBookFinish failed:", err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 const PrefsSchema = z.object({

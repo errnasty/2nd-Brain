@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { db } from "@/lib/db";
 import {
+  aiJobs,
   articles,
   bookChapters,
   bookNav,
@@ -15,10 +16,13 @@ import {
   documents,
   itemTags,
   tags,
+  type OrganizeJobPayload,
 } from "@/lib/db/schema";
 import { requireUser } from "@/lib/auth";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
+import { undoOrganize } from "@/lib/directory/organize";
+import { describeOrganizeSummary, type OrganizeSummary } from "@/lib/directory/organize-plan";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
 import { extractReadable } from "@/lib/readability/extract";
 import { chunkText } from "@/lib/documents/chunker";
@@ -1263,6 +1267,97 @@ export async function applyAutoOrganizeAction(proposals: OrganizeProposal[]): Pr
   }
 
   return { ok: true, routed, foldersCreated, skipped };
+}
+
+// ── Undoing a background sort ────────────────────────────────────────
+
+export type LastSort = {
+  jobId: string;
+  finishedAt: string;
+  summary: OrganizeSummary;
+  description: string;
+};
+
+/**
+ * The most recent background sort that could still be undone.
+ *
+ * Offered because the toast that lands when a sort finishes is the only other
+ * way back, and a toast is gone in seconds — while "actually, put that back" is
+ * a thought people have a minute later, after clicking into two folders and
+ * disliking what they see. Only the latest run is offered: undoing sorts out of
+ * order would restore items to folders a newer run has already moved them out
+ * of, which is a worse mess than either sort produced.
+ */
+export async function lastUndoableSortAction(): Promise<LastSort | null> {
+  const { user } = await requireUser();
+  const [job] = await db
+    .select()
+    .from(aiJobs)
+    .where(and(eq(aiJobs.userId, user.id), eq(aiJobs.kind, "organize"), eq(aiJobs.status, "done")))
+    .orderBy(desc(aiJobs.updatedAt))
+    .limit(1);
+  if (!job) return null;
+
+  const payload = job.payload as OrganizeJobPayload;
+  const summary = payload.summary;
+  // Nothing moved and nothing created — there is nothing to put back.
+  if (!summary || (summary.undo.moves.length === 0 && summary.undo.removedFolders.length === 0)) {
+    return null;
+  }
+
+  return {
+    jobId: job.id,
+    finishedAt: job.updatedAt.toISOString(),
+    summary,
+    description: describeOrganizeSummary(summary),
+  };
+}
+
+export type UndoSortResult =
+  | { ok: true; restored: number; foldersRestored: number; foldersRemoved: number }
+  | { ok: false; error: string };
+
+/**
+ * Put the library back the way it was before `jobId` ran.
+ *
+ * The job row is both the record of what happened and the guard: it is looked
+ * up scoped to this user, so a job id from somewhere else finds nothing. Once
+ * applied, the run's undo record is emptied rather than the row deleted — the
+ * job's history stays readable, and a second click can't "restore" items a
+ * third time into folders they have since been moved out of.
+ */
+export async function undoSortAction(jobId: string): Promise<UndoSortResult> {
+  const parsed = z.string().uuid().safeParse(jobId);
+  if (!parsed.success) return { ok: false, error: "Invalid sort" };
+
+  const { user } = await requireUser();
+  const [job] = await db
+    .select()
+    .from(aiJobs)
+    .where(and(eq(aiJobs.id, parsed.data), eq(aiJobs.userId, user.id), eq(aiJobs.kind, "organize")))
+    .limit(1);
+  if (!job) return { ok: false, error: "That sort is no longer available" };
+
+  const payload = job.payload as OrganizeJobPayload;
+  const summary = payload.summary;
+  if (!summary) return { ok: false, error: "That sort has nothing to undo" };
+
+  const result = await undoOrganize(user.id, summary.undo);
+
+  await db
+    .update(aiJobs)
+    .set({
+      payload: {
+        ...payload,
+        summary: { ...summary, undo: { moves: [], createdFolderIds: [], removedFolders: [] } },
+      },
+      updatedAt: new Date(),
+    })
+    .where(and(eq(aiJobs.id, job.id), eq(aiJobs.userId, user.id)));
+
+  bustMapCache(user.id);
+  revalidatePath("/directory");
+  return { ok: true, ...result };
 }
 
 // ── Tag filtering ────────────────────────────────────────────────────

@@ -4,7 +4,11 @@ import { aiAvailable } from "@/lib/ai/provider";
 import { runAiJob } from "@/lib/ai-jobs/run";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// A research note is ~30s; a whole-library sort is one planning call plus a
+// filing call per 25 items, so it needs materially longer. Severing this
+// response is survivable either way (the client polls the job row), but a
+// severed sort leaves the job wedged mid-run, so give it the room.
+export const maxDuration = 300;
 
 /**
  * Execute a background AI job. Long-running by design; the client fires this

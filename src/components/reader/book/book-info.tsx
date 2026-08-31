@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { setBookFinishedAction } from "@/app/read/actions";
 import { exportHighlightsAction } from "@/app/read/highlights";
+import { celebrate } from "@/lib/gamify/celebrate";
 
 /**
  * What the Directory shows for a book: the book, not its text.
@@ -82,6 +83,14 @@ export function BookInfo({
         setFinishedAt(next ? null : new Date().toISOString());
         toast.error(r.error);
         return;
+      }
+      // Same award the reader celebrates — a book finished from the info panel
+      // is worth exactly as much as one finished on its last page.
+      if (next && r.xp && r.xp.awarded > 0) {
+        toast.success(`Finished — +${r.xp.awarded} XP 📖`, {
+          description: r.xp.skill ? `Into ${r.xp.skill.name}.` : undefined,
+        });
+        celebrate(r.xp);
       }
       router.refresh();
     });

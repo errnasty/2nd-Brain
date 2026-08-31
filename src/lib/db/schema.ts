@@ -1,5 +1,10 @@
 import { sql } from "drizzle-orm";
 import type { RememberedStory } from "@/lib/today/story-memory";
+import type {
+  OrganizeProgress,
+  OrganizeScope,
+  OrganizeSummary,
+} from "@/lib/directory/organize-plan";
 import {
   bigint,
   boolean,
@@ -1065,8 +1070,27 @@ export const thinktankSaved = pgTable(
 // the job's status — so a severed response can never surface as a false error,
 // whatever cuts it. NOT synced (like xp_events): jobs are per-device state, and
 // the durable output is the Directory note they produce.
-export type AiJobKind = "curriculum" | "gap_research";
-export type AiJobPayload = { topic: string; folderId?: string | null };
+export type AiJobKind = "curriculum" | "gap_research" | "organize";
+
+/** Research/curriculum jobs: write a note about `topic` into `folderId`. */
+export type ResearchJobPayload = { topic: string; folderId?: string | null };
+
+/**
+ * A Directory sort. Unlike the research jobs this one has nothing to hand back
+ * at the end (`result_item_id` is a single note id, and a sort produces neither
+ * a note nor one id), so its progress and its result live in the payload — the
+ * row the client is already polling. Types imported rather than restated so the
+ * two can't drift; `import type` is erased at build, so it costs the bundle
+ * nothing and creates no cycle.
+ */
+export type OrganizeJobPayload = {
+  scope: OrganizeScope;
+  pruneEmpty?: boolean;
+  progress?: OrganizeProgress;
+  summary?: OrganizeSummary;
+};
+
+export type AiJobPayload = ResearchJobPayload | OrganizeJobPayload;
 
 export const aiJobs = pgTable(
   "ai_jobs",

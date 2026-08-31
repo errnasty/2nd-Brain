@@ -25,6 +25,7 @@ import {
   setBookPrefsAction,
 } from "@/app/read/actions";
 import { searchBookAction, type BookHighlight, type BookSearchHit } from "@/app/read/highlights";
+import { celebrate } from "@/lib/gamify/celebrate";
 import { BookHighlightLayer } from "./book-highlight-layer";
 
 export type BookChapterMeta = {
@@ -514,7 +515,18 @@ export function BookReader({
     void setBookFinishedAction({ documentId: book.id, finished: next })
       .then((r) => {
         if (!r.ok) return;
-        toast.success(next ? "Marked as read." : "Put back on the pile.");
+        // Finishing a book is worth hundreds of XP, so say the number rather
+        // than leaving it to be noticed on the Study page later. A repeat
+        // finish awards nothing (the server pays once per book) — that path
+        // falls back to the plain confirmation.
+        if (next && r.xp && r.xp.awarded > 0) {
+          toast.success(`Finished — +${r.xp.awarded} XP 📖`, {
+            description: r.xp.skill ? `Into ${r.xp.skill.name}. That's the whole book.` : "That's the whole book.",
+          });
+          celebrate(r.xp);
+        } else {
+          toast.success(next ? "Marked as read." : "Put back on the pile.");
+        }
       })
       .catch(() => {});
   }

@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-31",
+    date: "August 31, 2026",
+    title: "Finishing a book pays properly, and sorting runs in the background",
+    tag: "feature",
+    summary:
+      "A finished book is now the biggest single XP award in the app, scaled by how long the book actually was. Sorting your Directory moved into the background, learned to build folders from scratch, and can now be undone.",
+    items: [
+      "Mark a book read and you get hundreds of XP — a short book pays 120, a long one up to 600 — credited to the skill that book belongs to, with three new badges for your first, fifth and twenty-fifth book. It pays once per book, so putting one back on the pile and finishing it again is not a way to farm it.",
+      "Sorting now runs in the background: start it, close the dialog, and carry on. A progress strip at the top of the app counts items as they are filed, it survives changing page or reloading, and a summary lands when it is done.",
+      "Sorting builds folders when there are none. A brand-new library with nothing in it but loose items now gets a structure proposed for it, instead of being told there was nothing to suggest.",
+      "New: sort the whole Directory, not just the loose items. It rethinks the structure across everything you have, re-files items that were already in folders, and optionally clears out folders left holding nothing.",
+      "Undo. Every sort records where each item came from, so one press puts the whole thing back — folders it removed included. The undo is on the finish notification and stays available in the sort dialog afterwards.",
+    ],
+  },
+  {
     id: "2026-08-30-c",
     date: "August 30, 2026",
     title: "Mark up a book, search it, and see your library",

@@ -1,11 +1,28 @@
 import { and, eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
-import { aiJobs, type AiJobKind, type AiJobPayload } from "@/lib/db/schema";
-import { buildCurriculumNote, buildResearchNote, type NoteResult } from "@/lib/ai/research-notes";
+import {
+  aiJobs,
+  type AiJobKind,
+  type AiJobPayload,
+  type OrganizeJobPayload,
+  type ResearchJobPayload,
+} from "@/lib/db/schema";
+import { buildCurriculumNote, buildResearchNote } from "@/lib/ai/research-notes";
+import { runOrganize, type OrganizeProgress } from "@/lib/directory/organize";
+import { bustMapCache } from "@/lib/map-cache";
 
 // A job stuck in "running" longer than this is presumed orphaned (its runner's
 // process died) and may be re-kicked.
 const STALE_RUNNING_MS = 2 * 60 * 1000;
+
+/**
+ * What a job hands back. Wider than a note-building result because not every
+ * job makes a note: a Directory sort finishes with no single item to open, so
+ * `itemId` is allowed to be null and the client reads the outcome from the
+ * job's payload instead.
+ */
+type JobOutcome = { ok: true; itemId: string | null } | { ok: false; error: string };
 
 export async function createAiJob(userId: string, kind: AiJobKind, payload: AiJobPayload): Promise<string> {
   const [row] = await db.insert(aiJobs).values({ userId, kind, payload }).returning({ id: aiJobs.id });
@@ -47,14 +64,12 @@ export async function runAiJob(
     .returning({ id: aiJobs.id });
   if (claimed.length === 0) return { ok: false, error: "Already running" };
 
-  let result: NoteResult;
+  let result: JobOutcome;
   try {
-    const topic = job.payload.topic;
-    const folderId = job.payload.folderId ?? null;
     result =
-      job.kind === "curriculum"
-        ? await buildCurriculumNote(userId, topic, folderId)
-        : await buildResearchNote(userId, topic, folderId);
+      job.kind === "organize"
+        ? await runOrganizeJob(userId, jobId, job.payload as OrganizeJobPayload)
+        : await runNoteJob(userId, job.kind, job.payload as ResearchJobPayload);
   } catch (err) {
     result = { ok: false, error: err instanceof Error ? err.message : "Job failed" };
   }
@@ -71,4 +86,65 @@ export async function runAiJob(
     .set({ status: "error", error: result.error, updatedAt: new Date() })
     .where(eq(aiJobs.id, jobId));
   return { ok: false, error: result.error };
+}
+
+async function runNoteJob(
+  userId: string,
+  kind: Exclude<AiJobKind, "organize">,
+  payload: ResearchJobPayload,
+): Promise<JobOutcome> {
+  const topic = payload.topic;
+  const folderId = payload.folderId ?? null;
+  return kind === "curriculum"
+    ? buildCurriculumNote(userId, topic, folderId)
+    : buildResearchNote(userId, topic, folderId);
+}
+
+/**
+ * The Directory sort, wrapped in the job contract.
+ *
+ * Progress is written straight back into this row's payload on every step,
+ * because the row is the only thing the browser can see once the request that
+ * started the work has severed. Those writes are fail-soft on purpose: losing a
+ * progress tick should slow the bar down, never abandon the sort.
+ *
+ * The sort produces no note, so the outcome's `itemId` is null and the answer
+ * — what moved, what was created, what was tidied away — is read back from the
+ * payload by GET /api/jobs/[id].
+ */
+async function runOrganizeJob(
+  userId: string,
+  jobId: string,
+  payload: OrganizeJobPayload,
+): Promise<JobOutcome> {
+  // Accumulated, not rebuilt from the original payload each time: the final
+  // write adds the summary and must not erase the progress the last tick wrote,
+  // and vice versa. Each write also refreshes `updated_at`, which is what stops
+  // a genuinely long sort from looking orphaned to the stale-job check above.
+  let current: OrganizeJobPayload = payload;
+  const write = async (patch: Partial<OrganizeJobPayload>) => {
+    current = { ...current, ...patch };
+    try {
+      await db
+        .update(aiJobs)
+        .set({ payload: current, updatedAt: new Date() })
+        .where(eq(aiJobs.id, jobId));
+    } catch {
+      // A dropped progress tick is cosmetic — never fail the sort over it.
+    }
+  };
+
+  const summary = await runOrganize(
+    userId,
+    { scope: payload.scope, pruneEmpty: payload.pruneEmpty },
+    (progress: OrganizeProgress) => write({ progress }),
+  );
+
+  await write({ summary });
+
+  // The sidebar's folder tree and the knowledge map both cache what just moved.
+  bustMapCache(userId);
+  revalidatePath("/directory");
+
+  return { ok: true, itemId: null };
 }
