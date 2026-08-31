@@ -27,6 +27,21 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-31-d",
+    date: "August 31, 2026",
+    title: "Folders full of books open on the shelf, and open faster",
+    tag: "improvement",
+    summary:
+      "A folder that is mostly books now opens as a shelf of covers instead of a list of titles, book folders load noticeably quicker however many books you add, and uploads show a real progress bar.",
+    items: [
+      "A folder that is mostly books opens on the shelf. Walk into a folder of notes and you get the list back. Pick a view yourself and it stays picked.",
+      "Uploading a book now shows how far along it is, not just a spinner — the bar fills as the file goes up, then says it is processing while the book is unpacked. It sits in the strip at the top of the app, so you can carry on working or leave the page.",
+      "Book folders open faster, and stay fast as the library grows. Opening a book is quicker too.",
+      "Books with no cover art no longer make the app go looking for one.",
+      "Books on the board now show their author instead of the first stray lines of a title page.",
+    ],
+  },
+  {
     id: "2026-08-31-c",
     date: "August 31, 2026",
     title: "See where a sort put everything, and stop losing your page",

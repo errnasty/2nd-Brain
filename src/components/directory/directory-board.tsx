@@ -267,8 +267,17 @@ function BoardCard({
         <span>{formatRelativeTime(item.updatedAt)}</span>
       </div>
       <div className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</div>
-      {item.preview && (
-        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.preview}</div>
+      {/* A book carries no snippet — the first lines of a title page say
+          nothing, and reading them off every card is what made a folder of
+          books slow to open. Its author is the useful second line instead. */}
+      {item.isBook ? (
+        item.bookAuthor && (
+          <div className="mt-1 truncate text-xs text-muted-foreground">{item.bookAuthor}</div>
+        )
+      ) : (
+        item.preview && (
+          <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.preview}</div>
+        )
       )}
     </div>
   );

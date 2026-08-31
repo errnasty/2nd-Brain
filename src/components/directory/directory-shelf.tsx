@@ -14,10 +14,20 @@ import type { DirectoryListItem } from "./directory-shell";
  * of each cover so "the one I'm halfway through" is answerable at a glance.
  */
 
-function Cover({ documentId, title }: { documentId: string; title: string }) {
+function Cover({
+  documentId,
+  title,
+  hasCover = true,
+}: {
+  documentId: string;
+  title: string;
+  /** False only when the ePub is known to carry no cover: draw the card
+   *  straight away rather than spending a request to be told so. */
+  hasCover?: boolean;
+}) {
   const [failed, setFailed] = useState(false);
 
-  if (failed) {
+  if (!hasCover || failed) {
     // No cover in the file. A plain card beats a broken-image icon, and the
     // title still has to be readable at shelf size.
     return (
@@ -93,7 +103,11 @@ export function DirectoryShelf({
                     selectedId === book.id && "ring-2 ring-foreground ring-offset-2 ring-offset-background",
                   )}
                 >
-                  <Cover documentId={book.documentId!} title={book.title} />
+                  <Cover
+                    documentId={book.documentId!}
+                    title={book.title}
+                    hasCover={book.bookHasCover}
+                  />
                 </div>
 
                 {book.bookFinished ? (
