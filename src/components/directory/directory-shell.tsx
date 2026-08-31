@@ -28,7 +28,6 @@ import {
   fetchDirectoryItemByIdAction,
   loadMoreDirectoryItemsAction,
   renameDirectoryFolderAction,
-  uploadToDirectoryAction,
 } from "@/app/(app)/directory/actions";
 import { buildFlashcards } from "@/components/study/build-flashcards";
 import { buildQuiz, quizReadyMessage } from "@/components/study/build-quiz";
@@ -40,6 +39,7 @@ import {
 import { DIRECTORY_PAGE_SIZE } from "@/lib/directory/constants";
 import { maxUploadBytesFor, maxUploadLabelFor } from "@/lib/upload-limits";
 import { toast } from "sonner";
+import { uploadFileWithProgress } from "@/lib/ui/upload-with-progress";
 import { usePromptText } from "@/components/ui/app-dialogs";
 import { pushRecent } from "@/lib/directory/recently-viewed";
 import { replaceUrl } from "@/lib/ui/replace-url";
@@ -105,6 +105,8 @@ export type DirectoryListItem = {
   /** 0..1. Zero for anything that is not a book, or has not been opened. */
   bookProgress?: number;
   bookAuthor?: string | null;
+  /** False only when the ePub is known to carry no cover image. */
+  bookHasCover?: boolean;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -119,14 +121,23 @@ const KIND_META: Record<DirectoryListItem["kind"], { label: string; icon: React.
 /**
  * A book's cover, where it has one.
  *
- * There is no flag saying whether a cover was extracted — plenty of ePubs ship
- * without one — so the image is simply attempted and hidden if it 404s. That
- * costs one failed request per coverless book and saves carrying the fact
- * through three queries.
+ * Plenty of ePubs ship without one, and a request per coverless book is a cost
+ * that grows with the library — so the extracted-or-not flag now rides along
+ * with the row and those books draw nothing at all. Books ingested before the
+ * flag was recorded still fall back to attempting the image and hiding it on a
+ * 404, which is what every book used to do.
  */
-function BookCover({ documentId, title }: { documentId: string; title: string }) {
+function BookCover({
+  documentId,
+  title,
+  hasCover = true,
+}: {
+  documentId: string;
+  title: string;
+  hasCover?: boolean;
+}) {
   const [failed, setFailed] = useState(false);
-  if (failed) return null;
+  if (!hasCover || failed) return null;
   return (
     /* eslint-disable-next-line @next/next/no-img-element */
     <img
@@ -177,7 +188,21 @@ export function DirectoryShell({
   // instead of requiring a rename + mode-switch first.
   const [freshItemId, setFreshItemId] = useState<string | null>(null);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  // The view, and whether the reader has said what it should be.
+  //
+  // A folder of books opens on the shelf, because a list of forty rows of
+  // identical-looking titles is the wrong way to find a book and the covers are
+  // the whole reason the shelf exists. Anywhere else keeps the list. The
+  // decision is re-made when the folder changes — walking from a books folder
+  // into a notes folder should not leave you on an empty shelf — but never
+  // again once the reader has chosen a view themselves: an automatic default is
+  // a guess, and a click is not.
   const [view, setView] = useState<"list" | "board" | "shelf">("list");
+  const viewPinned = useRef(false);
+  const chooseView = useCallback((next: "list" | "board" | "shelf") => {
+    viewPinned.current = true;
+    setView(next);
+  }, []);
   const [listCollapsed, toggleListCollapsed] = useListCollapse("directory.listCollapsed.v1");
   const [gapsOpen, setGapsOpen] = useState(false);
   const [curriculumOpen, setCurriculumOpen] = useState(false);
@@ -220,6 +245,35 @@ export function DirectoryShell({
 
   const allItems = useMemo(() => [...items, ...extraItems], [items, extraItems]);
   const allTags = useMemo(() => ({ ...itemTagsById, ...extraTags }), [itemTagsById, extraTags]);
+
+  /**
+   * Open a folder of books on the shelf.
+   *
+   * Judged on the FIRST page of the folder rather than the whole of it, because
+   * that is what is loaded when the folder opens and waiting for the rest to
+   * decide how to draw it would defeat the point.
+   *
+   * The bar is high — four items in five, and at least two books — rather than
+   * a simple majority, because the shelf draws ONLY books. A folder of thirty
+   * books and twenty notes is not a library; switching it to the shelf would
+   * quietly hide twenty things. At four in five, what is hidden is a stray or
+   * two, and the reader is one click from the list.
+   *
+   * Runs on the folder, not on the items — appending a page as the reader
+   * scrolls must not change the view under them, and neither must a book
+   * finishing its upload.
+   */
+  const folderSig = `${activeFolder ?? ""}|${activeTagIds.join(",")}`;
+  const firstPageBooks = items.filter((i) => i.isBook).length;
+  const firstPageCount = items.length;
+  useEffect(() => {
+    if (viewPinned.current) return;
+    const mostlyBooks = firstPageBooks >= 2 && firstPageBooks * 5 >= firstPageCount * 4;
+    setView(mostlyBooks ? "shelf" : "list");
+    // Deliberately keyed on the folder alone: the counts are read at the moment
+    // the folder changes and are not themselves a reason to re-decide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [folderSig]);
 
   // #13 Client-side filter strip (type + age) over the loaded items.
   const [typeFilter, setTypeFilter] = useState<"all" | DirectoryListItem["kind"]>("all");
@@ -540,22 +594,18 @@ export function DirectoryShell({
         );
         return;
       }
-      const fd = new FormData();
-      fd.set("file", file);
-      if (targetFolderId) fd.set("folderId", targetFolderId);
-      startTransition(async () => {
-        try {
-          const r = await uploadToDirectoryAction(fd);
-          if (r.ok) toast.success(`${file.name} uploaded`);
-          else toast.error(`${file.name}: ${r.error}`);
-        } catch (err) {
-          // The action returns a typed result, so a rejection here is the
-          // framework failing around it — a body over the configured limit, a
-          // dropped connection. Unhandled inside a transition it takes the
-          // whole route down with an error boundary, which tells the user
-          // nothing at all.
-          const message = err instanceof Error ? err.message : "Upload failed";
-          toast.error(`${file.name}: ${message}`);
+      // Posted over HTTP rather than as a Server Action so the browser can
+      // report how much has gone out: a book is up to fifty megabytes, and a
+      // spinner that sits for a minute is indistinguishable from a stuck one.
+      // The bar lives in the app's status strip, so leaving the Directory does
+      // not lose sight of it.
+      void uploadFileWithProgress(file, targetFolderId).then((r) => {
+        if (r.ok) {
+          toast.success(`${file.name} uploaded`);
+          // The new item is on the server, not in this page's props.
+          router.refresh();
+        } else {
+          toast.error(`${file.name}: ${r.error}`);
         }
       });
     });
@@ -734,7 +784,7 @@ export function DirectoryShell({
           <div className="flex items-center gap-2">
             <div className="flex items-center rounded-md border border-border p-0.5">
               <button
-                onClick={() => setView("list")}
+                onClick={() => chooseView("list")}
                 title="List view"
                 className={cn(
                   "rounded p-1 transition-colors",
@@ -746,7 +796,7 @@ export function DirectoryShell({
                 <List className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={() => setView("shelf")}
+                onClick={() => chooseView("shelf")}
                 title="Shelf view (books by cover)"
                 className={cn(
                   "rounded p-1 transition-colors",
@@ -758,7 +808,7 @@ export function DirectoryShell({
                 <Library className="h-3.5 w-3.5" />
               </button>
               <button
-                onClick={() => setView("board")}
+                onClick={() => chooseView("board")}
                 title="Board view (reading pipeline)"
                 className={cn(
                   "rounded p-1 transition-colors",
@@ -1207,7 +1257,11 @@ function DraggableItemRow({
           </div>
 
           {item.isBook && item.documentId && (
-            <BookCover documentId={item.documentId} title={item.title} />
+            <BookCover
+              documentId={item.documentId}
+              title={item.title}
+              hasCover={item.bookHasCover}
+            />
           )}
 
           <button onClick={onOpen} className="min-w-0 flex-1 text-left">

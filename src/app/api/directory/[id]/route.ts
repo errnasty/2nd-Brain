@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import {
@@ -38,7 +38,17 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
       updatedAt: directoryItems.updatedAt,
       docKind: documents.kind,
       docStoragePath: documents.storagePath,
-      docFullText: documents.fullText,
+      // NOT `documents.fullText`. A book's full text runs to megabytes and
+      // lives out of line in TOAST, and this route deliberately refuses to send
+      // it — a book's body belongs in the reader. Selecting it anyway meant
+      // Postgres reassembled all of it on every book opened, for a value thrown
+      // away three lines before the response. The CASE keeps the decision in
+      // SQL, where it costs nothing, instead of in Node, where it costs the
+      // whole read.
+      docFullText: sql<string | null>`case
+        when ${documents.kind} = 'epub' and ${documents.storagePath} is not null then null
+        else ${documents.fullText}
+      end`.as("doc_full_text"),
       docPageCount: documents.pageCount,
       docSizeBytes: documents.sizeBytes,
       docMetadata: documents.metadata,

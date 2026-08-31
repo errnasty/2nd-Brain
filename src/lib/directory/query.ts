@@ -22,6 +22,8 @@ export type DirItem = {
   /** 0..1. Zero for anything that is not a book, or has not been opened. */
   bookProgress: number;
   bookAuthor: string | null;
+  /** False only when the ePub is KNOWN to carry no cover image. */
+  bookHasCover: boolean;
   readingStatus: ReadingStatus;
   createdAt: Date;
   updatedAt: Date;
@@ -88,6 +90,30 @@ async function previewSql() {
   return hasPreviewColumn
     ? sql<string | null>`preview`
     : sql<string | null>`substring(${directoryItems.content}, 1, 240)`;
+}
+
+/**
+ * The preview, except for books, which never show one.
+ *
+ * The list renders a snippet for notes, articles and documents and deliberately
+ * does not for a book — a book is shown by its cover and its progress, and the
+ * first 240 characters of a title page say nothing. Computing it anyway was
+ * free-looking and wasn't: a book's `content` is ten thousand characters, which
+ * Postgres stores out of line, so a folder of fifty books paid fifty
+ * out-of-line reads to produce fifty strings that were then thrown away by the
+ * component that received them. That is the shape of "the folder got slower
+ * with every book I added".
+ *
+ * Guarded in SQL rather than filtered afterwards, because the cost is in the
+ * reading, not the sending. Where the generated `preview` column exists this
+ * changes nothing measurable — it is already cheap — and it still saves
+ * shipping the bytes.
+ */
+function listPreviewSql(preview: ReturnType<typeof sql<string | null>>) {
+  return sql<string | null>`case
+    when ${documents.kind} = 'epub' and ${documents.storagePath} is not null then null
+    else ${preview}
+  end`;
 }
 
 export async function fetchDirectoryPage(
@@ -164,7 +190,7 @@ export async function fetchDirectoryPage(
       .select({
         id: directoryItems.id,
         title: directoryItems.title,
-        preview: preview.as("preview"),
+        preview: listPreviewSql(preview).as("preview"),
         kind: directoryItems.kind,
         folderId: directoryItems.folderId,
         sourceUrl: directoryItems.sourceUrl,
@@ -184,6 +210,13 @@ export async function fetchDirectoryPage(
           "book_progress",
         ),
         bookAuthor: sql<string | null>`${documents.metadata} ->> 'author'`.as("book_author"),
+        // Only an explicit `false` suppresses the cover request. A book
+        // ingested before this flag was recorded has no key at all, and must
+        // keep today's behaviour of trying — the point is to stop a shelf
+        // firing a request per COVERLESS book, not to hide covers that exist.
+        bookHasCover: sql<boolean>`coalesce(${documents.metadata} ->> 'hasCover', 'true') <> 'false'`.as(
+          "book_has_cover",
+        ),
         readingStatus: directoryItems.readingStatus,
         createdAt: directoryItems.createdAt,
         updatedAt: directoryItems.updatedAt,
