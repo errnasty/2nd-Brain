@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import {
@@ -27,6 +27,56 @@ type JobOutcome = { ok: true; itemId: string | null } | { ok: false; error: stri
 export async function createAiJob(userId: string, kind: AiJobKind, payload: AiJobPayload): Promise<string> {
   const [row] = await db.insert(aiJobs).values({ userId, kind, payload }).returning({ id: aiJobs.id });
   return row.id;
+}
+
+/**
+ * A job of this kind that is already under way for this user, if there is one.
+ *
+ * "Under way" is pending, or running and recently alive — the same staleness
+ * window `runAiJob` uses to decide a job has been orphaned, so a job this
+ * reports as active is exactly one that `runAiJob` would refuse to re-claim.
+ *
+ * Exists because a Directory sort must not run twice at once: two sorts would
+ * plan against each other's half-finished state and interleave their moves,
+ * and only the second would leave an undo record, making the first one's moves
+ * permanent. A guard in the browser cannot see a second tab, so the check has
+ * to live where the job is created.
+ */
+export async function activeJobId(userId: string, kind: AiJobKind): Promise<string | null> {
+  const rows = await db
+    .select({ id: aiJobs.id, status: aiJobs.status, updatedAt: aiJobs.updatedAt })
+    .from(aiJobs)
+    .where(and(eq(aiJobs.userId, userId), eq(aiJobs.kind, kind)))
+    .orderBy(desc(aiJobs.updatedAt))
+    .limit(5);
+
+  // A pending row is only briefly legitimate — the gap between the create call
+  // and the kick that follows it, a few hundred milliseconds. One that is still
+  // pending after the staleness window never got a runner (the kick was
+  // refused, the tab was closed in between, the network dropped) and must not
+  // be allowed to block every future sort for the life of the account.
+  const alive = rows.find(
+    (r) =>
+      Date.now() - r.updatedAt.getTime() < STALE_RUNNING_MS &&
+      (r.status === "pending" || r.status === "running"),
+  );
+  return alive?.id ?? null;
+}
+
+/**
+ * Mark a job failed without running it — for a refusal the job can never get
+ * past, like a missing API key. Best-effort: the caller is already returning
+ * the real error, and a failed tidy-up must not replace it.
+ */
+export async function failAiJob(userId: string, jobId: string, error: string): Promise<void> {
+  try {
+    await db
+      .update(aiJobs)
+      .set({ status: "error", error, updatedAt: new Date() })
+      .where(and(eq(aiJobs.id, jobId), eq(aiJobs.userId, userId), eq(aiJobs.status, "pending")));
+  } catch {
+    // The staleness window in activeJobId is the backstop.
+  }
 }
 
 export async function getAiJob(userId: string, jobId: string) {

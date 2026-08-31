@@ -328,10 +328,18 @@ export async function setBookTypographyAction(input: {
     .onConflictDoUpdate({
       target: userSettings.userId,
       set: {
+        // The nested value is type-checked, not just coalesced: `||` between a
+        // jsonb string and a jsonb object raises, so a `bookReader` key that
+        // somehow holds anything but an object would turn every save of a
+        // reading preference into a 500 with no way to clear it from the app.
         settings: sql`jsonb_set(
           coalesce(${userSettings.settings}, '{}'::jsonb),
           '{bookReader}',
-          coalesce(${userSettings.settings} -> 'bookReader', '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb,
+          case
+            when jsonb_typeof(${userSettings.settings} -> 'bookReader') = 'object'
+              then ${userSettings.settings} -> 'bookReader'
+            else '{}'::jsonb
+          end || ${JSON.stringify(patch)}::jsonb,
           true
         )`,
         updatedAt: new Date(),

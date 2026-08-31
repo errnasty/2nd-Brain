@@ -80,6 +80,15 @@ function remembered(): string | null {
   }
 }
 
+/**
+ * `attached` is not a failure: no NEW sort was started, but one that was
+ * already running is now being watched, and the caller should close and get out
+ * of the way exactly as it would on success.
+ */
+export type StartResult =
+  | { ok: true; jobId: string }
+  | { ok: false; error: string; attached?: boolean };
+
 type JobStatus = {
   status: "pending" | "running" | "done" | "error";
   error: string | null;
@@ -94,7 +103,20 @@ type JobStatus = {
 export async function startOrganizeJob(opts: {
   scope: OrganizeScope;
   pruneEmpty?: boolean;
-}): Promise<{ ok: true; jobId: string } | { ok: false; error: string }> {
+}): Promise<StartResult> {
+  // One at a time. Two sorts running together would plan against each other's
+  // half-finished state and interleave their moves, and only the second would
+  // leave an undo record — so the first sort's moves would become permanent.
+  // The dialog closes on start, so starting a second is a couple of clicks
+  // away and worth refusing explicitly.
+  if (watching.size > 0) {
+    return {
+      ok: false,
+      attached: true,
+      error: "A sort is already running — watching that one instead.",
+    };
+  }
+
   let jobId: string;
   try {
     const res = await fetch("/api/jobs", {
@@ -103,6 +125,17 @@ export async function startOrganizeJob(opts: {
       body: JSON.stringify({ kind: "organize", scope: opts.scope, pruneEmpty: opts.pruneEmpty === true }),
     });
     const data = await res.json().catch(() => ({}));
+    // Another tab already started one. The server hands back its id, so attach
+    // to that sort rather than reporting a failure for work that is happening.
+    if (res.status === 409 && data.jobId) {
+      remember(data.jobId as string);
+      watchOrganizeJob(data.jobId as string);
+      return {
+        ok: false,
+        attached: true,
+        error: "A sort is already running — watching that one instead.",
+      };
+    }
     if (!res.ok || !data.jobId) return { ok: false, error: data.error ?? "Couldn't start sorting" };
     jobId = data.jobId as string;
   } catch (err) {
@@ -210,10 +243,14 @@ export function watchOrganizeJob(jobId: string, scope?: OrganizeScope): void {
     }
 
     if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
-      // Still going, or wedged — either way stop drawing a bar nobody can trust.
-      forget();
+      // Still going, or wedged — either way, stop drawing a bar nobody can
+      // trust. The job id is deliberately KEPT: this says to come back, and
+      // that has to be true. Re-opening the app re-attaches, and a sort that
+      // finished in the meantime is reported (and undoable) then, which is
+      // the outcome worth protecting — a wedged one costs a spurious strip
+      // until the next poll settles it.
       stop();
-      toast("Still sorting in the background. Refresh in a bit to see where it got to.");
+      toast("Still sorting in the background. Come back in a bit to see how it went.");
     }
   }, POLL_MS);
 }

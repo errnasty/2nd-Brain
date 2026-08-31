@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/rate-limit";
-import { createAiJob } from "@/lib/ai-jobs/run";
+import { activeJobId, createAiJob } from "@/lib/ai-jobs/run";
 import type { AiJobKind } from "@/lib/db/schema";
 import type { OrganizeScope } from "@/lib/directory/organize";
 
@@ -48,6 +48,20 @@ export async function POST(req: Request) {
   if (kind === "organize") {
     const scope = body.scope as OrganizeScope;
     if (!SCOPES.has(scope)) return NextResponse.json({ error: "Unknown scope" }, { status: 400 });
+
+    // One sort per account at a time. The browser guards this too, but it can
+    // only see its own tab — and two sorts running together would interleave
+    // their moves and leave only the later one undoable. The id of the sort
+    // already running comes back so the caller can watch that one instead of
+    // reporting a failure.
+    const running = await activeJobId(user.id, "organize");
+    if (running) {
+      return NextResponse.json(
+        { error: "A sort is already running", jobId: running, alreadyRunning: true },
+        { status: 409 },
+      );
+    }
+
     const jobId = await createAiJob(user.id, kind, {
       scope,
       // Only the whole-library run is allowed to delete anything, whatever the

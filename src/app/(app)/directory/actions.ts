@@ -21,6 +21,7 @@ import {
 import { requireUser } from "@/lib/auth";
 import { generateTags, tagSlug } from "@/lib/ai/tagging";
 import { organizeItems, type OrganizeItem } from "@/lib/ai/organize";
+import { activeJobId } from "@/lib/ai-jobs/run";
 import { undoOrganize } from "@/lib/directory/organize";
 import {
   describeOrganizeSummary,
@@ -1295,6 +1296,14 @@ export type LastSort = {
  */
 export async function lastUndoableSortAction(): Promise<LastSort | null> {
   const { user } = await requireUser();
+
+  // Nothing is undoable while a sort is in flight. Reversing the PREVIOUS run
+  // mid-way through a new one would move items back into folders the running
+  // sort has already taken them out of, and the two records would then disagree
+  // about where everything belongs — a worse mess than either sort could make
+  // on its own. The offer comes back the moment the run finishes.
+  if (await activeJobId(user.id, "organize")) return null;
+
   const [job] = await db
     .select()
     .from(aiJobs)
@@ -1336,6 +1345,15 @@ export async function undoSortAction(jobId: string): Promise<UndoSortResult> {
   if (!parsed.success) return { ok: false, error: "Invalid sort" };
 
   const { user } = await requireUser();
+
+  // The enforcement point for the rule the dialog only hints at: a completion
+  // toast can still be on screen (and its Undo still clickable) after a new
+  // sort has been started, and putting the old arrangement back underneath a
+  // running sort would leave the two disagreeing about where everything is.
+  if (await activeJobId(user.id, "organize")) {
+    return { ok: false, error: "A sort is running — try again once it's finished." };
+  }
+
   const [job] = await db
     .select()
     .from(aiJobs)

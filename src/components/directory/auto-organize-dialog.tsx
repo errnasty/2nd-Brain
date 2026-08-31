@@ -65,6 +65,14 @@ export function AutoOrganizeDialog({ open, onOpenChange }: { open: boolean; onOp
     const r = await startOrganizeJob({ scope, pruneEmpty: scope === "everything" && pruneEmpty });
     setStarting(null);
     if (!r.ok) {
+      // "Already running" is not a failure — the sort the user wanted is
+      // happening and is now on screen, so get out of the way rather than
+      // leaving them staring at a dialog with a red toast over it.
+      if (r.attached) {
+        onOpenChange(false);
+        toast(r.error);
+        return;
+      }
       toast.error(r.error);
       return;
     }
