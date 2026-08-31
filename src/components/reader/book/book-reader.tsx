@@ -213,6 +213,15 @@ export function BookReader({
   // and the finish prompt all need to know.
   const [chromeHidden, setChromeHidden] = useState(false);
 
+  // The hide timer, declared with the state it drives because several things
+  // above and below re-arm it: a mouse move, a tap in the text, and a chapter
+  // award that needs the footer back to show itself in.
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armIdle = useCallback(() => {
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => setChromeHidden(true), CHROME_IDLE_MS);
+  }, []);
+
   // Shown once, briefly, when a book opens on a saved position — otherwise
   // reopening drops you mid-paragraph with nothing saying where you are.
   const [resumeNote, setResumeNote] = useState<string | null>(null);
@@ -395,6 +404,12 @@ export function BookReader({
           // while the reader lingers on the last page.
           if (r.xp && r.xp.awarded > 0) {
             setXpFlash({ amount: r.xp.awarded, at: Date.now() });
+            // The flash lives in the footer, and the footer is collapsed
+            // whenever someone is actually reading — which is precisely when a
+            // chapter gets finished. Bring the bars back to show it, then let
+            // the idle timer take them away again.
+            setChromeHidden(false);
+            armIdle();
             // The award is only ever granted once per chapter, so this is also
             // the moment that chapter earned its tick in the contents list.
             setReadSet((prev) => (prev.has(idx) ? prev : new Set(prev).add(idx)));
@@ -403,13 +418,13 @@ export function BookReader({
         })
         .catch(() => {});
     },
-    [book.id],
+    [book.id, armIdle],
   );
 
   // Clear the flash a few seconds after the award that set it.
   useEffect(() => {
     if (!xpFlash) return;
-    const t = setTimeout(() => setXpFlash(null), 4000);
+    const t = setTimeout(() => setXpFlash(null), CHROME_IDLE_MS);
     return () => clearTimeout(t);
   }, [xpFlash]);
 
@@ -419,13 +434,7 @@ export function BookReader({
   // a MOUSE move: on a phone every swipe and every selection drag fires
   // pointermove, so honouring touch here would mean the bars were never gone
   // on the one screen size where the space actually matters. Touch users get
-  // them back by tapping the text, which `toggleChrome` handles.
-  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const armIdle = useCallback(() => {
-    if (idleTimer.current) clearTimeout(idleTimer.current);
-    idleTimer.current = setTimeout(() => setChromeHidden(true), CHROME_IDLE_MS);
-  }, []);
-
+  // them back by tapping the text, handled in `onContentClick`.
   useEffect(() => {
     // A panel is a thing you are using; hiding the bar it hangs off would be
     // absurd, so the timer simply does not run while one is open. Nor while
@@ -484,7 +493,13 @@ export function BookReader({
     // yet: pagination runs in a layout effect on this same commit and this
     // closure still holds the pre-layout `page` of 0.
     const show = setTimeout(
-      () => setResumeNote(`Picking up in ${name} · page ${pageRef.current + 1}`),
+      () =>
+        setResumeNote(
+          // A fixed-layout book scrolls rather than paginates, so it has no
+          // page number to quote — and quoting "page 1" for a position halfway
+          // down a chapter is worse than saying nothing about it.
+          scrollMode ? `Picking up in ${name}` : `Picking up in ${name} · page ${pageRef.current + 1}`,
+        ),
       80,
     );
     const hide = setTimeout(() => setResumeNote(null), 5000);
@@ -831,8 +846,13 @@ export function BookReader({
           // No height transition on purpose: the page box is measured by a
           // ResizeObserver, so an animated collapse would re-paginate the
           // chapter on every frame of it.
-          "flex shrink-0 items-center gap-1 overflow-hidden border-b border-border/60 px-2",
-          chromeHidden ? "pointer-events-none max-h-0 border-transparent py-0 opacity-0" : "max-h-16 py-1.5 opacity-100",
+          "flex shrink-0 items-center gap-1 border-b border-border/60 px-2",
+          // `overflow-hidden` ONLY while collapsed. Left on permanently it also
+          // clips what deliberately sits outside these bars — the chapter's XP
+          // flash draws above the footer's own line.
+          chromeHidden
+            ? "pointer-events-none max-h-0 overflow-hidden border-transparent py-0 opacity-0"
+            : "max-h-16 py-1.5 opacity-100",
         )}
       >
         <Button
@@ -1050,8 +1070,11 @@ export function BookReader({
       {/* ── bottom bar ──────────────────────────────────────────── */}
       <footer
         className={cn(
-          "flex shrink-0 items-center gap-2 overflow-hidden border-t border-border/60 px-3",
-          chromeHidden ? "pointer-events-none max-h-0 border-transparent py-0 opacity-0" : "max-h-20 py-2 opacity-100",
+          "flex shrink-0 items-center gap-2 border-t border-border/60 px-3",
+          // See the header: clipping is for the collapsed state only.
+          chromeHidden
+            ? "pointer-events-none max-h-0 overflow-hidden border-transparent py-0 opacity-0"
+            : "max-h-20 py-2 opacity-100",
         )}
       >
         <Button
