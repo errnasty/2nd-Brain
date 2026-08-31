@@ -8,6 +8,7 @@ const base: OrganizeSummary = {
   foldersCreated: [],
   foldersRemoved: [],
   undo: { moves: [], createdFolderIds: [], removedFolders: [] },
+  report: { moves: [], unplaced: [] },
 };
 
 describe("describeOrganizeSummary", () => {
@@ -74,6 +75,33 @@ describe("publicSummary", () => {
     const out = publicSummary(withUndo);
     expect(out).not.toHaveProperty("undo");
     expect(out.moved).toBe(3);
+  });
+
+  it("reports whether there is a per-item breakdown worth opening", () => {
+    expect(publicSummary(base).hasReport).toBe(false);
+    expect(
+      publicSummary({ ...base, report: { moves: [{ title: "A", from: null, to: "Physics" }], unplaced: [] } })
+        .hasReport,
+    ).toBe(true);
+    // A run that placed nothing still has something to show: which items it
+    // could not find a home for.
+    expect(publicSummary({ ...base, report: { moves: [], unplaced: ["A"] } }).hasReport).toBe(true);
+  });
+
+  // Runs stored before reports existed have no `report` key at all, and this
+  // reads straight off a jsonb payload.
+  it("survives a summary written before reports existed", () => {
+    const legacy = { ...base } as Partial<OrganizeSummary>;
+    delete legacy.report;
+    expect(publicSummary(legacy as OrganizeSummary).hasReport).toBe(false);
+  });
+
+  it("strips the report as well as the undo record", () => {
+    const out = publicSummary({
+      ...base,
+      report: { moves: [{ title: "A", from: null, to: "Physics" }], unplaced: [] },
+    });
+    expect(out).not.toHaveProperty("report");
   });
 
   it("reports whether there is anything to put back", () => {

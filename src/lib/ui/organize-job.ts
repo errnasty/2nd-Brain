@@ -50,6 +50,19 @@ const POLL_TIMEOUT_MS = 15 * 60_000;
 /** Fired when a sort (or its undo) has changed what's on screen. */
 export const DIRECTORY_CHANGED_EVENT = "directory-changed";
 
+/**
+ * Asks whoever is hosting the report dialog to open it for a job.
+ *
+ * An event rather than a callback because the request comes from a toast — code
+ * that runs outside any React tree and has no way to reach a component. The
+ * host is mounted once in the app layout; see `BackgroundSort`.
+ */
+export const SORT_REPORT_EVENT = "directory-sort-report";
+
+export function openSortReport(jobId: string): void {
+  window.dispatchEvent(new CustomEvent<string>(SORT_REPORT_EVENT, { detail: jobId }));
+}
+
 function announceChange(): void {
   window.dispatchEvent(new CustomEvent(DIRECTORY_CHANGED_EVENT));
 }
@@ -276,11 +289,16 @@ function celebrateSort(jobId: string, summary: PublicOrganizeSummary): void {
   toast.success("Your directory is sorted", {
     description: describeOrganizeSummary(summary),
     duration: 12_000,
-    // Offered only when there is something to put back. A sort whose undo has
-    // already been used still reports itself as done to a tab that reconnects
-    // to it later, and an Undo button that can only say "put back 0 items" is
-    // worse than no button.
-    action: summary.canUndo ? { label: "Undo", onClick: () => void undoSort(jobId) } : undefined,
+    // "See what moved" rather than "Undo", when there is a report: the undo
+    // lives inside that dialog, so one press gets you both the answer and the
+    // way back — where an Undo button alone asks you to decide without having
+    // seen anything. Undo stays the action when there is nothing to show (an
+    // older run, from before reports were recorded).
+    action: summary.hasReport
+      ? { label: "See what moved", onClick: () => openSortReport(jobId) }
+      : summary.canUndo
+        ? { label: "Undo", onClick: () => void undoSort(jobId) }
+        : undefined,
   });
 }
 

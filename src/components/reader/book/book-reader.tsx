@@ -831,28 +831,35 @@ export function BookReader({
     <div
       data-book-theme={theme}
       className={cn(
-        "flex h-dvh w-full flex-col overflow-hidden",
+        // `relative` so the overlaid bars position against the reader rather
+        // than the viewport, and the page below fills the whole of it.
+        "relative flex h-dvh w-full flex-col overflow-hidden",
         theme === "paper" && "book-theme-paper",
         theme === "night" && "book-theme-night",
         theme === "app" && "bg-background text-foreground",
       )}
     >
       {/* ── top bar ─────────────────────────────────────────────────
-          Collapsed rather than unmounted while reading: unmounting would
-          re-flow the page box, re-paginate the chapter and move the words
-          under the reader every time the bars came and went. */}
+          An OVERLAY, not a row in the layout. This is the whole reason the
+          reader can hide its chrome at all: the page is a measured box that
+          gets re-paginated whenever its size changes, and re-pagination
+          re-seeks to the saved character — which lands mid-page rather than at
+          the left edge, moving the text under the reader. A bar that took its
+          own height out of the flex column therefore turned "show me my
+          progress" into "and also skip me forward a page". Overlaid, showing
+          and hiding it costs the layout nothing at all.
+
+          The cost is that the bars cover a sliver of text while they are up,
+          which is what every e-reader does and what the backdrop blur is for. */}
       <header
         className={cn(
-          // No height transition on purpose: the page box is measured by a
-          // ResizeObserver, so an animated collapse would re-paginate the
-          // chapter on every frame of it.
-          "flex shrink-0 items-center gap-1 border-b border-border/60 px-2",
-          // `overflow-hidden` ONLY while collapsed. Left on permanently it also
-          // clips what deliberately sits outside these bars — the chapter's XP
-          // flash draws above the footer's own line.
-          chromeHidden
-            ? "pointer-events-none max-h-0 overflow-hidden border-transparent py-0 opacity-0"
-            : "max-h-16 py-1.5 opacity-100",
+          // `bg-inherit`, not a named colour: the page colour is set on the
+          // reader root by the paper/night theme classes, so inheriting is the
+          // only thing that stays right in all three themes. Opaque rather
+          // than translucent for the same reason — an alpha over an unknown
+          // colour is a guess.
+          "absolute inset-x-0 top-0 z-30 flex items-center gap-1 border-b border-border/60 bg-inherit px-2 py-1.5 shadow-sm transition-opacity duration-200",
+          chromeHidden ? "pointer-events-none opacity-0" : "opacity-100",
         )}
       >
         <Button
@@ -913,7 +920,9 @@ export function BookReader({
           paddingLeft: marginCss(typography.margin),
           paddingRight: marginCss(typography.margin),
         }}
-        className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 py-4 sm:py-6"
+        // Vertical padding is CONSTANT — it never tracks whether the bars are
+        // showing. That is the point: any change here would re-paginate.
+        className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 py-8 sm:py-9"
       >
         {/* The measured box is deliberately the one WITHOUT the gutter padding:
             clientWidth on the padded element counts the padding, and columns
@@ -1070,11 +1079,11 @@ export function BookReader({
       {/* ── bottom bar ──────────────────────────────────────────── */}
       <footer
         className={cn(
-          "flex shrink-0 items-center gap-2 border-t border-border/60 px-3",
-          // See the header: clipping is for the collapsed state only.
-          chromeHidden
-            ? "pointer-events-none max-h-0 overflow-hidden border-transparent py-0 opacity-0"
-            : "max-h-20 py-2 opacity-100",
+          // Overlaid for the same reason as the header above: the page box must
+          // not change size, or the chapter re-paginates and the reader loses
+          // their place.
+          "absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-border/60 bg-inherit px-3 py-2 shadow-[0_-1px_2px_rgb(0_0_0/0.06)] transition-opacity duration-200",
+          chromeHidden ? "pointer-events-none opacity-0" : "opacity-100",
         )}
       >
         <Button

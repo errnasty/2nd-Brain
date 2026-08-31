@@ -16,7 +16,7 @@ import {
   type LastSort,
   type OrganizeProposal,
 } from "@/app/(app)/directory/actions";
-import { startOrganizeJob, undoSort } from "@/lib/ui/organize-job";
+import { openSortReport, startOrganizeJob, undoSort } from "@/lib/ui/organize-job";
 
 type Mode = "menu" | "review";
 
@@ -109,6 +109,11 @@ export function AutoOrganizeDialog({ open, onOpenChange }: { open: boolean; onOp
               lastSort={lastSort}
               undoing={undoing}
               onUndo={runUndo}
+              onSeeReport={() => {
+                if (!lastSort) return;
+                onOpenChange(false);
+                openSortReport(lastSort.jobId);
+              }}
               onClose={() => onOpenChange(false)}
             />
           ) : (
@@ -135,6 +140,7 @@ function SortMenu({
   lastSort,
   undoing,
   onUndo,
+  onSeeReport,
   onClose,
 }: {
   starting: null | "unsorted" | "everything";
@@ -145,6 +151,7 @@ function SortMenu({
   lastSort: LastSort | null;
   undoing: boolean;
   onUndo: () => void;
+  onSeeReport: () => void;
   onClose: () => void;
 }) {
   const busy = starting !== null || undoing;
@@ -206,16 +213,33 @@ function SortMenu({
       </div>
 
       {lastSort && (
-        <div className="mt-4 flex items-start gap-2 rounded-lg bg-muted/50 p-3 text-xs">
-          <Undo2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">Not happy with the last sort?</div>
-            <div className="truncate text-muted-foreground">{lastSort.description}</div>
+        <div className="mt-4 rounded-lg bg-muted/50 p-3 text-xs">
+          <div className="flex items-start gap-2">
+            <Undo2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <div className="font-medium">Your last sort</div>
+              <div className="truncate text-muted-foreground">{lastSort.description}</div>
+            </div>
           </div>
-          <Button size="sm" variant="outline" className="h-7 shrink-0" onClick={onUndo} disabled={busy}>
-            {undoing && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
-            Undo it
-          </Button>
+          <div className="mt-2 flex justify-end gap-1.5">
+            {/* The toast that carried this is long gone by the time someone
+                has opened two folders and started wondering. */}
+            {lastSort.summary.hasReport && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 shrink-0"
+                onClick={onSeeReport}
+                disabled={busy}
+              >
+                See what moved
+              </Button>
+            )}
+            <Button size="sm" variant="outline" className="h-7 shrink-0" onClick={onUndo} disabled={busy}>
+              {undoing && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
+              Undo it
+            </Button>
+          </div>
         </div>
       )}
 

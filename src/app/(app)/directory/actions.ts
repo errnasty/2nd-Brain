@@ -26,6 +26,7 @@ import { undoOrganize } from "@/lib/directory/organize";
 import {
   describeOrganizeSummary,
   publicSummary,
+  type OrganizeReport,
   type PublicOrganizeSummary,
 } from "@/lib/directory/organize-plan";
 import { detectKind, extractByKind } from "@/lib/documents/extract";
@@ -1324,6 +1325,56 @@ export async function lastUndoableSortAction(): Promise<LastSort | null> {
     finishedAt: job.updatedAt.toISOString(),
     summary: publicSummary(summary),
     description: describeOrganizeSummary(summary),
+  };
+}
+
+export type SortReport = {
+  jobId: string;
+  finishedAt: string;
+  scope: "unsorted" | "everything";
+  description: string;
+  foldersCreated: string[];
+  foldersRemoved: string[];
+  report: OrganizeReport;
+  /** Whether this sort can still be put back. */
+  canUndo: boolean;
+};
+
+/**
+ * Everything a sort did, item by item.
+ *
+ * Fetched on demand rather than pushed with the completion toast: it can run to
+ * hundreds of rows, and the summary the toast needs is four numbers. This is
+ * the answer to the question the numbers cannot answer — not "did it move 40
+ * things" but "did it move MY things somewhere I would have put them".
+ */
+export async function sortReportAction(jobId: string): Promise<SortReport | null> {
+  const parsed = z.string().uuid().safeParse(jobId);
+  if (!parsed.success) return null;
+
+  const { user } = await requireUser();
+  const [job] = await db
+    .select()
+    .from(aiJobs)
+    .where(and(eq(aiJobs.id, parsed.data), eq(aiJobs.userId, user.id), eq(aiJobs.kind, "organize")))
+    .limit(1);
+  if (!job) return null;
+
+  const payload = job.payload as OrganizeJobPayload;
+  const summary = payload.summary;
+  if (!summary) return null;
+
+  return {
+    jobId: job.id,
+    finishedAt: job.updatedAt.toISOString(),
+    scope: summary.scope,
+    description: describeOrganizeSummary(summary),
+    foldersCreated: summary.foldersCreated,
+    foldersRemoved: summary.foldersRemoved,
+    // Older runs, from before the report existed, have no moves recorded. The
+    // dialog says so rather than showing an empty list as if nothing moved.
+    report: summary.report ?? { moves: [], unplaced: [] },
+    canUndo: summary.undo.moves.length > 0 || summary.undo.removedFolders.length > 0,
   };
 }
 

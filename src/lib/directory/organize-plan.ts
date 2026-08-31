@@ -37,7 +37,33 @@ export type OrganizeSummary = {
   foldersRemoved: string[];
   /** Everything needed to put the library back exactly as it was. */
   undo: OrganizeUndo;
+  /** What actually moved, in words, for the report. */
+  report: OrganizeReport;
 };
+
+/**
+ * The human-readable record of a sort: what went where, and what didn't move.
+ *
+ * Separate from the undo record even though the two describe the same events.
+ * The undo record is ids — the only thing a reversal can safely act on, since
+ * a folder can be renamed between the sort and the undo. This is names and
+ * titles as they were AT THE TIME, which is what a person needs to recognise
+ * their own library, and which stays readable after the undo record has been
+ * spent and cleared.
+ *
+ * Counts alone were not enough. "40 items filed" tells you a sort happened; it
+ * does not tell you whether it put your tax documents in "Machine Learning",
+ * which is the only question anyone actually has afterwards.
+ */
+export type OrganizeReport = {
+  /** Every move: what it was called, where it came from, where it went. */
+  moves: { title: string; from: string | null; to: string }[];
+  /** Items the model had no confident home for, left where they were. */
+  unplaced: string[];
+};
+
+/** Titles are for recognition, not for reading. Long ones are cut. */
+export const REPORT_TITLE_CHARS = 120;
 
 /**
  * The reversal record for one sort.
@@ -72,18 +98,29 @@ export type OrganizeUndo = {
  * server-side from the job row, so the browser needs the job id and nothing
  * else.
  */
-export type PublicOrganizeSummary = Omit<OrganizeSummary, "undo"> & { canUndo: boolean };
+export type PublicOrganizeSummary = Omit<OrganizeSummary, "undo" | "report"> & {
+  canUndo: boolean;
+  /** Whether there is a per-item report worth opening. */
+  hasReport: boolean;
+};
 
 export function publicSummary(s: OrganizeSummary): PublicOrganizeSummary {
-  const { undo, ...rest } = s;
+  const { undo, report, ...rest } = s;
   return {
     ...rest,
     canUndo: undo.moves.length > 0 || undo.removedFolders.length > 0,
+    // Optional-chained because a summary written before reports existed has no
+    // `report` at all, and this is read straight off a stored jsonb payload —
+    // an older run must degrade to "no report to show", not throw on the poll
+    // that reports the sort finished.
+    hasReport: (report?.moves.length ?? 0) > 0 || (report?.unplaced.length ?? 0) > 0,
   };
 }
 
 /** One line for the toast that lands when the job finishes. */
-export function describeOrganizeSummary(s: Omit<OrganizeSummary, "undo">): string {
+export function describeOrganizeSummary(
+  s: Omit<OrganizeSummary, "undo" | "report">,
+): string {
   const parts: string[] = [];
   // Skipped when nothing moved AND something else did happen, so a run that
   // only tidied folders reads "2 empty folders removed" rather than leading
