@@ -13,6 +13,7 @@ import { SyncConflictBanner } from "@/components/shell/sync-conflict-banner";
 import { PageTransition } from "@/components/shell/page-transition";
 import { RouteProgress } from "@/components/shell/route-progress";
 import { GenerationStatus } from "@/components/shell/generation-status";
+import { BackgroundSort } from "@/components/shell/background-sort";
 import { SettingsEffects } from "@/components/settings-effects";
 import { AppDialogProvider } from "@/components/ui/app-dialogs";
 
@@ -57,6 +58,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <MobileNav />
         <RouteProgress />
         <GenerationStatus />
+        <BackgroundSort />
         <CommandPalette />
         <QuickCapture />
         <Confetti />

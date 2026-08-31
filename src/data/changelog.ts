@@ -27,6 +27,51 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-08-31-b",
+    date: "August 31, 2026",
+    title: "A quieter page, and a reader that knows where you are",
+    tag: "improvement",
+    summary:
+      "The bars around a book now get out of the way while you read, the contents list ticks off the chapters you have finished, and the footer tells you how long is left in this one. Plus typeface, line spacing and margins.",
+    items: [
+      "The top and bottom bars get out of the way while you read, and come back when you move the mouse or tap the middle of the page — on a phone that hands the book most of the screen back.",
+      "The contents list ticks the chapters you have actually finished, so it reads as a map of where you have been rather than a flat list.",
+      "“About 12 min left” in the footer, for this chapter rather than the whole book — the number you actually want at eleven at night.",
+      "Typeface (serif or sans), line spacing and margins, in the reading settings. These three follow you to every book; type size and page colour still belong to the book you set them on.",
+      "Reopening a book says where it is picking up, instead of dropping you mid-paragraph with no idea where you are.",
+      "The very first book you open shows, once, where to tap to turn the page and where the menus are.",
+      "Closing a book takes you back to the folder you opened it from, not to the top of your Directory.",
+    ],
+  },
+  {
+    id: "2026-08-31-a",
+    date: "August 31, 2026",
+    title: "Chapters pay as you read, and any passage can explain itself",
+    tag: "feature",
+    summary:
+      "Reaching the end of a chapter now earns XP, so a book rewards the evenings that read it rather than only the day you finish. And selecting any passage lets you ask what it means, answered from the book itself.",
+    items: [
+      "Finish a chapter and you get 12 XP, shown briefly above the progress bar rather than as a toast over what you are reading. Each chapter pays once, only once you reach the end of it, and front matter shorter than a few hundred words does not count. A new badge for 100 chapters.",
+      "Select a passage and press the sparkle: the reader explains it in a panel beside the page — who that person was, what the term means, what the sentence is actually saying. You can ask a follow-up about the same passage.",
+      "The explanation only ever draws on the chapter you are in and the ones before it, so it cannot spoil a book for you even with the spoiler setting off. It uses earlier parts of the book itself, which is how a character introduced three hundred pages ago gets recognised.",
+    ],
+  },
+  {
+    id: "2026-08-31",
+    date: "August 31, 2026",
+    title: "Finishing a book pays properly, and sorting runs in the background",
+    tag: "feature",
+    summary:
+      "A finished book is now the biggest single XP award in the app, scaled by how long the book actually was. Sorting your Directory moved into the background, learned to build folders from scratch, and can now be undone.",
+    items: [
+      "Mark a book read and you get hundreds of XP — a short book pays 120, a long one up to 600 — credited to the skill that book belongs to, with three new badges for your first, fifth and twenty-fifth book. It pays once per book, so putting one back on the pile and finishing it again is not a way to farm it.",
+      "Sorting now runs in the background: start it, close the dialog, and carry on. A progress strip at the top of the app counts items as they are filed, it survives changing page or reloading, and a summary lands when it is done.",
+      "Sorting builds folders when there are none. A brand-new library with nothing in it but loose items now gets a structure proposed for it, instead of being told there was nothing to suggest.",
+      "New: sort the whole Directory, not just the loose items. It rethinks the structure across everything you have, re-files items that were already in folders, and optionally clears out folders left holding nothing.",
+      "Undo. Every sort records where each item came from, so one press puts the whole thing back — folders it removed included. The undo is on the finish notification and stays available in the sort dialog afterwards.",
+    ],
+  },
+  {
     id: "2026-08-30-c",
     date: "August 30, 2026",
     title: "Mark up a book, search it, and see your library",

@@ -326,7 +326,7 @@ export function DirectoryNav({
             variant="ghost"
             className="h-7 w-7"
             onClick={() => setOrganizeOpen(true)}
-            title="Auto-organize uncategorized items"
+            title="Sort my directory"
           >
             <Wand2 className="h-3.5 w-3.5" />
           </Button>

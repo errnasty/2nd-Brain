@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   Check,
   ChevronLeft,
@@ -23,9 +23,22 @@ import {
   setBookFinishedAction,
   saveBookPositionAction,
   setBookPrefsAction,
+  setBookTypographyAction,
 } from "@/app/read/actions";
+import { DEFAULT_RETURN_PATH, safeReturnPath } from "@/lib/books/return-path";
+import {
+  BOOK_TYPOGRAPHY_DEFAULT,
+  FONT_STACKS,
+  LINE_HEIGHT_STEPS,
+  MARGIN_STEPS,
+  marginCss,
+  type BookFont,
+  type BookTypography,
+} from "@/lib/books/typography";
 import { searchBookAction, type BookHighlight, type BookSearchHit } from "@/app/read/highlights";
+import { celebrate } from "@/lib/gamify/celebrate";
 import { BookHighlightLayer } from "./book-highlight-layer";
+import { BookExplainPanel } from "./book-explain-panel";
 
 export type BookChapterMeta = {
   idx: number;
@@ -77,22 +90,47 @@ const SPREAD_MIN_WIDTH = 900;
 
 const FONT_STEPS = [0.8, 0.9, 1, 1.15, 1.3, 1.5, 1.75];
 
+/** How long the bars stay after the last mouse movement. */
+const CHROME_IDLE_MS = 3000;
+
+/** Reading speed for "time left", in words a minute, and characters a word. */
+const WPM = 220;
+const CHARS_PER_WORD = 5.5;
+
+/** One-shot flag: this browser has been shown where the tap zones are. */
+const TAP_HINT_KEY = "book.tapHint.v1";
+
 function clamp(n: number, lo: number, hi: number) {
   return Math.min(hi, Math.max(lo, n));
+}
+
+/** Rough minutes to read `chars` at a steady pace. */
+function minutesFor(chars: number): number {
+  return Math.max(0, Math.round(chars / CHARS_PER_WORD / WPM));
 }
 
 export function BookReader({
   book,
   initialHtml = null,
   initialHighlights = [],
+  typography: initialTypography = BOOK_TYPOGRAPHY_DEFAULT,
+  readChapters = [],
 }: {
   book: BookPayload;
   /** The resume chapter, rendered on the server so the book opens instantly. */
   initialHtml?: string | null;
   /** Every highlight in the book — small enough that page turns never wait. */
   initialHighlights?: BookHighlight[];
+  /** Account-wide typeface, line spacing and margins. */
+  typography?: BookTypography;
+  /** Chapter indices already finished, for the contents list's ticks. */
+  readChapters?: number[];
 }) {
   const router = useRouter();
+  // Where the reader came from, so closing the book goes back to the folder it
+  // was opened from rather than dumping everyone at the Directory root. Only a
+  // same-origin path is honoured — this ends up in router.push().
+  const backTo = safeReturnPath(useSearchParams().get("from"));
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -112,7 +150,19 @@ export function BookReader({
   const [fontScale, setFontScale] = useState(book.state.fontScale);
   const [theme, setTheme] = useState<BookReaderTheme>(book.state.theme ?? "app");
   const [spoilerSafe, setSpoilerSafe] = useState(book.state.spoilerSafe);
-  const [panel, setPanel] = useState<"toc" | "settings" | "search" | null>(null);
+  const [panel, setPanel] = useState<"toc" | "settings" | "search" | "explain" | null>(null);
+  // The passage the explain panel is working on. Kept here rather than in the
+  // panel so a new selection replaces the old explanation instead of stacking.
+  // The chapter is captured WITH the passage, not read live: a passage selected
+  // in chapter 9 is a chapter 9 passage even after the reader turns on into
+  // chapter 10, and a live index would silently re-explain it against the wrong
+  // context — and re-fire the request on every chapter change while the panel
+  // sat open. `at` makes re-selecting the same words ask again.
+  const [explaining, setExplaining] = useState<{
+    text: string;
+    chapterIdx: number;
+    at: number;
+  } | null>(null);
   const [contentEl, setContentEl] = useState<HTMLDivElement | null>(null);
   const [highlights, setHighlights] = useState<BookHighlight[]>(initialHighlights);
   // Bumped after every relayout so the highlight overlay re-measures. Rects
@@ -141,6 +191,45 @@ export function BookReader({
   // font change or a rotation land back on the same words.
   const anchorRef = useRef(book.state.charOffset);
   const [progress, setProgress] = useState(book.state.progressPct);
+  // A chapter's XP, shown for a few seconds beside the progress bar rather than
+  // as a toast: a card sliding over the page you are reading, every chapter, is
+  // an interruption — the reward belongs in the furniture you already glance at.
+  const [xpFlash, setXpFlash] = useState<{ amount: number; at: number } | null>(null);
+
+  // Chapters already finished, for the contents ticks. Seeded from the server
+  // and added to as chapters are finished in this sitting — the tick has to
+  // appear when the chapter is read, not on the next time the book is opened.
+  // A Set because the list is walked once per contents entry, and a book can
+  // have hundreds of them.
+  const [readSet, setReadSet] = useState<Set<number>>(() => new Set(readChapters));
+
+  // Typography is one object rather than three pieces of state: the settings
+  // panel writes one field at a time but the page has to re-paginate on any of
+  // them, and a single value is one dependency instead of three.
+  const [typography, setTypography] = useState<BookTypography>(initialTypography);
+
+  // The bars fade out while reading and come back on a mouse move or a tap in
+  // the text. Held here rather than in CSS because the tap zones, the panels
+  // and the finish prompt all need to know.
+  const [chromeHidden, setChromeHidden] = useState(false);
+
+  // The hide timer, declared with the state it drives because several things
+  // above and below re-arm it: a mouse move, a tap in the text, and a chapter
+  // award that needs the footer back to show itself in.
+  const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armIdle = useCallback(() => {
+    if (idleTimer.current) clearTimeout(idleTimer.current);
+    idleTimer.current = setTimeout(() => setChromeHidden(true), CHROME_IDLE_MS);
+  }, []);
+
+  // Shown once, briefly, when a book opens on a saved position — otherwise
+  // reopening drops you mid-paragraph with nothing saying where you are.
+  const [resumeNote, setResumeNote] = useState<string | null>(null);
+
+  // The first book this browser ever opens gets one overlay showing where the
+  // page-turn taps are. They are invisible by design, which is right for the
+  // hundredth book and wrong for the first.
+  const [tapHint, setTapHint] = useState(false);
 
   // Measured once per reflow and reused for every page turn. Rebuilding it per
   // turn would mean a getBoundingClientRect for every text node in the chapter.
@@ -289,7 +378,7 @@ export function BookReader({
     const x = xOfOffset(index, content, anchorRef.current);
     setPage(x === null ? 0 : clamp(Math.floor((x + 1) / stride), 0, count - 1));
     setLayoutTick((t) => t + 1);
-  }, [html, size.w, size.h, fontScale, scrollMode, chapterIdx]);
+  }, [html, size.w, size.h, fontScale, scrollMode, chapterIdx, typography.lineHeight, typography.font]);
 
   // Scroll mode (fixed-layout books) anchors by proportion rather than by
   // character: those books are images with almost no text to anchor to.
@@ -308,12 +397,129 @@ export function BookReader({
     (idx: number, offset: number) => {
       void saveBookPositionAction({ documentId: book.id, chapterIdx: idx, charOffset: offset })
         .then((r) => {
-          if (r.ok) setProgress(r.progressPct);
+          if (!r.ok) return;
+          setProgress(r.progressPct);
+          // Only ever set on the save that actually crossed the end of a
+          // chapter — the server pays each chapter once, so this cannot repeat
+          // while the reader lingers on the last page.
+          if (r.xp && r.xp.awarded > 0) {
+            setXpFlash({ amount: r.xp.awarded, at: Date.now() });
+            // The flash lives in the footer, and the footer is collapsed
+            // whenever someone is actually reading — which is precisely when a
+            // chapter gets finished. Bring the bars back to show it, then let
+            // the idle timer take them away again.
+            setChromeHidden(false);
+            armIdle();
+            // The award is only ever granted once per chapter, so this is also
+            // the moment that chapter earned its tick in the contents list.
+            setReadSet((prev) => (prev.has(idx) ? prev : new Set(prev).add(idx)));
+            celebrate(r.xp);
+          }
         })
         .catch(() => {});
     },
-    [book.id],
+    [book.id, armIdle],
   );
+
+  // Clear the flash a few seconds after the award that set it.
+  useEffect(() => {
+    if (!xpFlash) return;
+    const t = setTimeout(() => setXpFlash(null), CHROME_IDLE_MS);
+    return () => clearTimeout(t);
+  }, [xpFlash]);
+
+  /* ── chrome ──────────────────────────────────────────────────────── */
+
+  // Fade the bars out while reading and bring them back on a mouse move. Only
+  // a MOUSE move: on a phone every swipe and every selection drag fires
+  // pointermove, so honouring touch here would mean the bars were never gone
+  // on the one screen size where the space actually matters. Touch users get
+  // them back by tapping the text, handled in `onContentClick`.
+  useEffect(() => {
+    // A panel is a thing you are using; hiding the bar it hangs off would be
+    // absurd, so the timer simply does not run while one is open. Nor while
+    // the first-run overlay is up, which is busy pointing at those very bars.
+    if (panel !== null || tapHint) {
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+      setChromeHidden(false);
+      return;
+    }
+    armIdle();
+    const onMouse = (e: PointerEvent) => {
+      if (e.pointerType !== "mouse") return;
+      setChromeHidden(false);
+      armIdle();
+    };
+    window.addEventListener("pointermove", onMouse);
+    return () => {
+      window.removeEventListener("pointermove", onMouse);
+      if (idleTimer.current) clearTimeout(idleTimer.current);
+    };
+  }, [panel, tapHint, armIdle]);
+
+  /* ── first-run + resume cues ─────────────────────────────────────── */
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(TAP_HINT_KEY)) return;
+    } catch {
+      return; // storage blocked: skip the hint rather than show it every time
+    }
+    setTapHint(true);
+  }, []);
+
+  const dismissTapHint = useCallback(() => {
+    setTapHint(false);
+    try {
+      localStorage.setItem(TAP_HINT_KEY, "1");
+    } catch {
+      // Shown once this session instead of once ever. Harmless.
+    }
+  }, []);
+
+  // "Picking up at…", once, after the first pagination — which is the earliest
+  // moment a page number exists to quote. A book that opens at its very start
+  // says nothing: there is nothing to be oriented about.
+  const resumeShown = useRef(false);
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  useEffect(() => {
+    if (resumeShown.current || html === null) return;
+    resumeShown.current = true;
+    if (book.state.chapterIdx === 0 && book.state.charOffset === 0) return;
+    const where = book.chapters.find((c) => c.idx === book.state.chapterIdx);
+    const name = where?.title ?? `Chapter ${book.state.chapterIdx + 1}`;
+    // Through a ref and a beat late, because the page number does not exist
+    // yet: pagination runs in a layout effect on this same commit and this
+    // closure still holds the pre-layout `page` of 0.
+    const show = setTimeout(
+      () =>
+        setResumeNote(
+          // A fixed-layout book scrolls rather than paginates, so it has no
+          // page number to quote — and quoting "page 1" for a position halfway
+          // down a chapter is worse than saying nothing about it.
+          scrollMode ? `Picking up in ${name}` : `Picking up in ${name} · page ${pageRef.current + 1}`,
+        ),
+      80,
+    );
+    const hide = setTimeout(() => setResumeNote(null), 5000);
+    return () => {
+      clearTimeout(show);
+      clearTimeout(hide);
+    };
+    // A one-shot on open. Reacting to `page` would turn it into a nag.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [html]);
+
+  /* ── typography ──────────────────────────────────────────────────── */
+
+  // Optimistic: the page re-flows on the next frame and the write is a
+  // preference, so a failed save costs the reader nothing this session and
+  // nothing is worth blocking the render for.
+  const changeTypography = useCallback((patch: Partial<BookTypography>) => {
+    setTypography((prev) => ({ ...prev, ...patch }));
+    void setBookTypographyAction(patch).catch(() => {});
+  }, []);
 
   // After a page turn, record which character now sits at the left edge. That
   // offset is what gets saved, and what the next reflow resolves back to.
@@ -451,7 +657,22 @@ export function BookReader({
 
   const onContentClick = (e: React.MouseEvent) => {
     const link = (e.target as HTMLElement).closest("a");
-    if (!link) return;
+    if (!link) {
+      // A plain tap in the middle of the page shows or hides the bars — the
+      // only way back to them on a touch screen, where there is no mouse to
+      // move. Guarded on the selection being collapsed so that finishing a
+      // highlight drag, or tapping to dismiss one, never counts as this.
+      if (window.getSelection()?.isCollapsed !== false) {
+        const showing = chromeHidden;
+        setChromeHidden(!showing);
+        // Asking for the bars has to KEEP them: the idle timer only means
+        // anything where there is a mouse to re-arm it, so leaving it running
+        // would take them away again three seconds later on the one device
+        // that has no other way to get them back.
+        if (showing && idleTimer.current) clearTimeout(idleTimer.current);
+      }
+      return;
+    }
 
     const target = link.getAttribute("data-book-chapter");
     if (target !== null) {
@@ -514,7 +735,18 @@ export function BookReader({
     void setBookFinishedAction({ documentId: book.id, finished: next })
       .then((r) => {
         if (!r.ok) return;
-        toast.success(next ? "Marked as read." : "Put back on the pile.");
+        // Finishing a book is worth hundreds of XP, so say the number rather
+        // than leaving it to be noticed on the Study page later. A repeat
+        // finish awards nothing (the server pays once per book) — that path
+        // falls back to the plain confirmation.
+        if (next && r.xp && r.xp.awarded > 0) {
+          toast.success(`Finished — +${r.xp.awarded} XP 📖`, {
+            description: r.xp.skill ? `Into ${r.xp.skill.name}. That's the whole book.` : "That's the whole book.",
+          });
+          celebrate(r.xp);
+        } else {
+          toast.success(next ? "Marked as read." : "Put back on the pile.");
+        }
       })
       .catch(() => {});
   }
@@ -566,6 +798,31 @@ export function BookReader({
     return key;
   }, [contents, chapterIdx]);
 
+  /**
+   * Minutes left in THIS chapter, not in the book.
+   *
+   * The percentage beside it already answers "how far through the book am I",
+   * and it is not the question anyone has at eleven at night. "Can I finish
+   * this chapter before I put it down" is, and it is the one number an e-reader
+   * can actually answer usefully — a whole-book estimate spans weeks and means
+   * nothing. Null for a fixed-layout book, whose character counts are a fiction.
+   */
+  const chapterMinutesLeft = useMemo(() => {
+    // `html === null` means the new chapter has not arrived, so `pageCount`
+    // still belongs to the previous one — pairing it with the new chapter's
+    // length would flash a wrong number (usually "nearly done") on every
+    // chapter change.
+    if (scrollMode || html === null || !chapter || chapter.charCount <= 0 || pageCount <= 0) {
+      return null;
+    }
+    // Measured in PAGES rather than from the saved character offset: the offset
+    // is written by a passive effect after the page has already turned, so
+    // reading it here would always report the previous page's number. Pages are
+    // also the honest unit — they are what is on screen.
+    const pagesLeft = Math.max(0, pageCount - 1 - page);
+    return minutesFor((chapter.charCount * pagesLeft) / pageCount);
+  }, [scrollMode, html, chapter, page, pageCount]);
+
   const atStart = chapterIdx === book.chapters[0]?.idx && page === 0;
   const lastIdx = book.chapters[book.chapters.length - 1]?.idx;
   const atEnd = chapterIdx === lastIdx && page >= pageCount - 1;
@@ -580,14 +837,30 @@ export function BookReader({
         theme === "app" && "bg-background text-foreground",
       )}
     >
-      {/* ── top bar ─────────────────────────────────────────────── */}
-      <header className="flex shrink-0 items-center gap-1 border-b border-border/60 px-2 py-1.5">
+      {/* ── top bar ─────────────────────────────────────────────────
+          Collapsed rather than unmounted while reading: unmounting would
+          re-flow the page box, re-paginate the chapter and move the words
+          under the reader every time the bars came and went. */}
+      <header
+        className={cn(
+          // No height transition on purpose: the page box is measured by a
+          // ResizeObserver, so an animated collapse would re-paginate the
+          // chapter on every frame of it.
+          "flex shrink-0 items-center gap-1 border-b border-border/60 px-2",
+          // `overflow-hidden` ONLY while collapsed. Left on permanently it also
+          // clips what deliberately sits outside these bars — the chapter's XP
+          // flash draws above the footer's own line.
+          chromeHidden
+            ? "pointer-events-none max-h-0 overflow-hidden border-transparent py-0 opacity-0"
+            : "max-h-16 py-1.5 opacity-100",
+        )}
+      >
         <Button
           size="icon"
           variant="ghost"
-          onClick={() => router.push("/directory")}
-          title="Back to Directory"
-          aria-label="Back to Directory"
+          onClick={() => router.push(backTo ?? DEFAULT_RETURN_PATH)}
+          title={backTo ? "Back" : "Back to Directory"}
+          aria-label={backTo ? "Back" : "Back to Directory"}
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -632,7 +905,15 @@ export function BookReader({
       <div
         onTouchStart={onTouchStart}
         onTouchEnd={onTouchEnd}
-        className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 px-5 py-4 sm:px-10 sm:py-6 lg:px-14"
+        // The gutter is the reader's own margin setting rather than a fixed
+        // class. The MEASURED box is the child below, which excludes this
+        // padding, so changing it resizes that box and the ResizeObserver
+        // re-paginates without anything else having to know.
+        style={{
+          paddingLeft: marginCss(typography.margin),
+          paddingRight: marginCss(typography.margin),
+        }}
+        className="relative mx-auto min-h-0 w-full max-w-[80rem] flex-1 py-4 sm:py-6"
       >
         {/* The measured box is deliberately the one WITHOUT the gutter padding:
             clientWidth on the padded element counts the padding, and columns
@@ -657,9 +938,15 @@ export function BookReader({
             className={cn("prose-book", scrollMode && "h-full overflow-y-auto")}
             style={
               scrollMode
-                ? { ["--book-font-scale" as string]: String(fontScale) }
+                ? {
+                    ["--book-font-scale" as string]: String(fontScale),
+                    ["--book-line-height" as string]: String(typography.lineHeight),
+                    ["--reader-font" as string]: FONT_STACKS[typography.font],
+                  }
                 : {
                     ["--book-font-scale" as string]: String(fontScale),
+                    ["--book-line-height" as string]: String(typography.lineHeight),
+                    ["--reader-font" as string]: FONT_STACKS[typography.font],
                     width: size.w ? `${size.w}px` : "100%",
                     height: size.h ? `${size.h}px` : "100%",
                     // One column on a phone, a two-page spread on a desktop.
@@ -688,6 +975,10 @@ export function BookReader({
                 contentEl={contentEl}
                 indexRef={indexRef}
                 layoutTick={layoutTick}
+                onExplain={(text) => {
+                  setExplaining({ text, chapterIdx, at: Date.now() });
+                  setPanel("explain");
+                }}
                 highlights={highlights}
                 onChange={setHighlights}
               />
@@ -712,6 +1003,45 @@ export function BookReader({
               className="absolute inset-y-0 right-0 w-[18%] cursor-e-resize opacity-0"
             />
           </>
+        )}
+
+        {/* First book only: say where the invisible controls are. They are
+            invisible on purpose — right for the hundredth book, wrong for the
+            first, where the reader has a page of text and no idea it turns. */}
+        {tapHint && !scrollMode && html !== null && (
+          <button
+            onClick={dismissTapHint}
+            aria-label="Got it"
+            className="absolute inset-0 z-40 flex items-stretch bg-black/55 text-white backdrop-blur-[1px] animate-in fade-in"
+          >
+            <span className="flex w-[18%] flex-col items-center justify-center gap-1.5 border-r border-white/25 px-1 text-center">
+              <ChevronLeft className="h-5 w-5" />
+              <span className="text-[11px] leading-tight">Tap to go back</span>
+            </span>
+            <span className="flex flex-1 flex-col items-center justify-center gap-1.5 px-4 text-center">
+              <span className="text-sm font-medium">Tap the middle for the menus</span>
+              <span className="max-w-[16rem] text-[11px] leading-snug text-white/75">
+                Select any words to highlight them or have them explained. Swipe, or use the
+                arrow keys, to turn pages.
+              </span>
+              <span className="mt-2 rounded-full border border-white/40 px-3 py-1 text-[11px]">
+                Got it
+              </span>
+            </span>
+            <span className="flex w-[18%] flex-col items-center justify-center gap-1.5 border-l border-white/25 px-1 text-center">
+              <ChevronRight className="h-5 w-5" />
+              <span className="text-[11px] leading-tight">Tap to go on</span>
+            </span>
+          </button>
+        )}
+
+        {/* Where you left off, once, on open. */}
+        {resumeNote && (
+          <div className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center px-4">
+            <div className="animate-in fade-in slide-in-from-top-1 rounded-full border border-border bg-popover/95 px-3 py-1.5 text-xs shadow-lg backdrop-blur">
+              {resumeNote}
+            </div>
+          </div>
         )}
       </div>
 
@@ -738,7 +1068,15 @@ export function BookReader({
       )}
 
       {/* ── bottom bar ──────────────────────────────────────────── */}
-      <footer className="flex shrink-0 items-center gap-2 border-t border-border/60 px-3 py-2">
+      <footer
+        className={cn(
+          "flex shrink-0 items-center gap-2 border-t border-border/60 px-3",
+          // See the header: clipping is for the collapsed state only.
+          chromeHidden
+            ? "pointer-events-none max-h-0 overflow-hidden border-transparent py-0 opacity-0"
+            : "max-h-20 py-2 opacity-100",
+        )}
+      >
         <Button
           size="icon"
           variant="ghost"
@@ -756,7 +1094,7 @@ export function BookReader({
               style={{ width: `${Math.round(progress * 100)}%` }}
             />
           </div>
-          <div className="text-center font-mono text-[11px] tabular-nums opacity-60">
+          <div className="relative text-center font-mono text-[11px] tabular-nums opacity-60">
             {scrollMode ? (
               <>
                 {chapterIdx + 1} / {book.chapters.length}
@@ -768,6 +1106,21 @@ export function BookReader({
             )}
             <span className="mx-1.5 opacity-40">·</span>
             {Math.round(progress * 100)}%
+            {chapterMinutesLeft !== null && (
+              <>
+                <span className="mx-1.5 opacity-40">·</span>
+                {chapterMinutesLeft === 0 ? "nearly done" : `${chapterMinutesLeft} min left`}
+              </>
+            )}
+            {xpFlash && (
+              <span
+                key={xpFlash.at}
+                aria-live="polite"
+                className="pointer-events-none absolute inset-x-0 -top-5 animate-in fade-in slide-in-from-bottom-1 font-sans font-medium text-emerald-500"
+              >
+                Chapter read · +{xpFlash.amount} XP
+              </span>
+            )}
           </div>
         </div>
 
@@ -793,14 +1146,37 @@ export function BookReader({
           <aside className="fixed inset-y-0 right-0 z-50 flex w-[min(22rem,90vw)] flex-col border-l border-border bg-background text-foreground shadow-xl">
             <div className="flex items-center gap-2 border-b border-border px-3 py-2">
               <div className="flex-1 font-mono text-[11px] uppercase tracking-wide text-muted-foreground">
-                {panel === "toc" ? "Contents" : panel === "search" ? "Find in book" : "Reading"}
+                {panel === "toc"
+                  ? "Contents"
+                  : panel === "search"
+                    ? "Find in book"
+                    : panel === "explain"
+                      ? "Explain"
+                      : "Reading"}
               </div>
               <Button size="icon" variant="ghost" onClick={() => setPanel(null)} aria-label="Close">
                 <X className="h-4 w-4" />
               </Button>
             </div>
 
-            {panel === "search" ? (
+            {panel === "explain" ? (
+              explaining ? (
+                <BookExplainPanel
+                  // Keyed on the selection, timestamp included, so asking again
+                  // about the same words remounts and re-asks rather than
+                  // sitting on the previous answer — and so a fresh selection
+                  // never tries to reconcile a half-streamed one.
+                  key={explaining.at}
+                  documentId={book.id}
+                  chapterIdx={explaining.chapterIdx}
+                  passage={explaining.text}
+                />
+              ) : (
+                <p className="p-4 text-[13px] leading-relaxed text-muted-foreground">
+                  Select a passage in the book, then press the sparkle to have it explained.
+                </p>
+              )
+            ) : panel === "search" ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <form
                   onSubmit={(e) => {
@@ -871,7 +1247,19 @@ export function BookReader({
                         style={{ paddingLeft: `${0.5 + (Math.min(entry.level, 5) - 1) * 0.85}rem` }}
                         title={entry.title}
                       >
-                        {entry.title}
+                        <span className="flex items-start gap-1.5">
+                          {/* A tick means "you reached the end of this one",
+                              which is what the XP ledger records. The space is
+                              held whether or not it is ticked, so the titles
+                              line up down the list instead of stepping in and
+                              out as chapters are finished. */}
+                          <span className="mt-[0.15em] w-3 shrink-0">
+                            {readSet.has(entry.chapterIdx) && (
+                              <Check className="h-3 w-3 text-emerald-500" aria-label="Read" />
+                            )}
+                          </span>
+                          <span className="min-w-0 flex-1">{entry.title}</span>
+                        </span>
                       </button>
                     </li>
                   ))}
@@ -899,6 +1287,82 @@ export function BookReader({
                       </button>
                     ))}
                   </div>
+                </section>
+
+                <section>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Typeface
+                  </div>
+                  <div className="flex gap-1">
+                    {(
+                      [
+                        { key: "serif", label: "Serif" },
+                        { key: "sans", label: "Sans" },
+                      ] as { key: BookFont; label: string }[]
+                    ).map((f) => (
+                      <button
+                        key={f.key}
+                        onClick={() => changeTypography({ font: f.key })}
+                        style={{ fontFamily: FONT_STACKS[f.key] }}
+                        className={cn(
+                          "flex-1 rounded-md border px-2 py-1.5 text-sm transition-colors",
+                          typography.font === f.key
+                            ? "border-foreground bg-accent"
+                            : "border-border text-muted-foreground hover:bg-accent",
+                        )}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Line spacing
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {LINE_HEIGHT_STEPS.map((step) => (
+                      <button
+                        key={step.value}
+                        onClick={() => changeTypography({ lineHeight: step.value })}
+                        className={cn(
+                          "rounded-md border px-2.5 py-1 text-sm transition-colors",
+                          typography.lineHeight === step.value
+                            ? "border-foreground bg-accent"
+                            : "border-border text-muted-foreground hover:bg-accent",
+                        )}
+                      >
+                        {step.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    Margins
+                  </div>
+                  <div className="flex gap-1">
+                    {MARGIN_STEPS.map((m) => (
+                      <button
+                        key={m.value}
+                        onClick={() => changeTypography({ margin: m.value })}
+                        className={cn(
+                          "flex-1 rounded-md border px-2 py-1.5 text-sm transition-colors",
+                          typography.margin === m.value
+                            ? "border-foreground bg-accent"
+                            : "border-border text-muted-foreground hover:bg-accent",
+                        )}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+                    Typeface, spacing and margins apply to every book. Type size and page
+                    colour stay with this one.
+                  </p>
                 </section>
 
                 <section>

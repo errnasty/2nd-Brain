@@ -15,6 +15,11 @@ import {
   DAILY_GOAL,
   BRIEF_DAILY_XP_CAP,
   splitXpByWeight,
+  bookFinishXp,
+  BOOK_XP_MIN,
+  BOOK_XP_MAX,
+  chapterCounts,
+  CHAPTER_MIN_CHARS,
 } from "./rules";
 
 describe("cardGradeXp", () => {
@@ -186,5 +191,80 @@ describe("brief XP economy", () => {
   it("pays one briefed article less than making cards or finishing a deck", () => {
     expect(XP_RULES.brief_article).toBeLessThan(XP_RULES.cards_made);
     expect(XP_RULES.brief_article).toBeLessThan(XP_RULES.deck_finished);
+  });
+});
+
+describe("bookFinishXp", () => {
+  it("scales with the length of the book", () => {
+    expect(bookFinishXp(600_000)).toBeGreaterThan(bookFinishXp(300_000));
+  });
+
+  it("floors a short book and caps an enormous one", () => {
+    expect(bookFinishXp(0)).toBe(BOOK_XP_MIN);
+    expect(bookFinishXp(1_000)).toBe(BOOK_XP_MIN);
+    expect(bookFinishXp(50_000_000)).toBe(BOOK_XP_MAX);
+  });
+
+  it("survives junk input rather than paying NaN", () => {
+    expect(bookFinishXp(-1)).toBe(BOOK_XP_MIN);
+    expect(bookFinishXp(Number.NaN)).toBe(BOOK_XP_MIN);
+  });
+
+  // The point of the source: a book is weeks of work, so finishing one has to
+  // dwarf every single-sitting award in the economy, and clear a day's goal.
+  it("pays far more than any other single act", () => {
+    const biggestOther = Math.max(
+      ...Object.entries(XP_RULES)
+        .filter(([source]) => source !== "book_finished")
+        .map(([, amount]) => amount),
+    );
+    expect(bookFinishXp(0)).toBeGreaterThan(biggestOther);
+    expect(bookFinishXp(0)).toBeGreaterThan(DAILY_GOAL);
+  });
+
+  // A typical non-fiction book (~90k words, ~500k characters) should land in
+  // the middle of the band, not pinned to either end — if it doesn't, the rate
+  // is wrong rather than the clamps.
+  it("puts an ordinary book between the floor and the cap", () => {
+    const typical = bookFinishXp(500_000);
+    expect(typical).toBeGreaterThan(BOOK_XP_MIN);
+    expect(typical).toBeLessThan(BOOK_XP_MAX);
+  });
+});
+
+describe("chapterCounts", () => {
+  const LONG = 20_000;
+
+  it("pays only once the end of the chapter is in sight", () => {
+    expect(chapterCounts(LONG * 0.5, LONG)).toBe(false);
+    expect(chapterCounts(LONG * 0.89, LONG)).toBe(false);
+    expect(chapterCounts(LONG * 0.95, LONG)).toBe(true);
+    expect(chapterCounts(LONG, LONG)).toBe(true);
+  });
+
+  // Opening a chapter is not reading it — if entry paid, flicking through the
+  // contents list would be the fastest XP in the app.
+  it("pays nothing for merely opening a chapter", () => {
+    expect(chapterCounts(0, LONG)).toBe(false);
+  });
+
+  // Title pages, dedications and part dividers are real spine entries.
+  it("ignores anything too short to be a chapter", () => {
+    expect(chapterCounts(CHAPTER_MIN_CHARS - 1, CHAPTER_MIN_CHARS - 1)).toBe(false);
+    expect(chapterCounts(CHAPTER_MIN_CHARS, CHAPTER_MIN_CHARS)).toBe(true);
+  });
+
+  it("survives junk rather than paying on a NaN", () => {
+    expect(chapterCounts(Number.NaN, LONG)).toBe(false);
+    expect(chapterCounts(LONG, Number.NaN)).toBe(false);
+    expect(chapterCounts(-5, LONG)).toBe(false);
+    expect(chapterCounts(10, 0)).toBe(false);
+  });
+
+  // A chapter is a sitting's work: worth several skimmed articles, worth less
+  // than finishing a whole study session.
+  it("is priced between an article and a session", () => {
+    expect(XP_RULES.chapter_read).toBeGreaterThan(XP_RULES.article_read);
+    expect(XP_RULES.chapter_read).toBeLessThan(XP_RULES.session_complete);
   });
 });
