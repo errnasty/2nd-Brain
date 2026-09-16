@@ -169,19 +169,19 @@ async function directorySemantic(userId: string, q: string): Promise<SearchHit[]
 async function unsavedArticleSemantic(userId: string, q: string): Promise<SearchHit[]> {
   try {
     const { sql } = await import("drizzle-orm");
-    const { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } = await import(
+    const { clampForEmbedding, embeddingParam, getEmbeddingsProvider } = await import(
       "@/lib/embeddings"
     );
     const provider = getEmbeddingsProvider();
     const [vector] = await provider.embed([clampForEmbedding(q)], "query");
-    const lit = toVectorLiteral(vector);
+    const lit = embeddingParam(vector);
 
     const rows = (await db.execute(sql`
       select
         a.id,
         a.title,
         substring(coalesce(a.excerpt, a.full_text, ''), 1, 400) as snippet,
-        1 - (e.embedding <=> ${lit}::vector) as similarity
+        1 - (e.embedding <=> ${lit}) as similarity
       from article_embeddings e
       inner join articles a on a.id = e.article_id
       where e.user_id = ${userId}
@@ -189,7 +189,7 @@ async function unsavedArticleSemantic(userId: string, q: string): Promise<Search
           select 1 from directory_items di
           where di.article_id = a.id and di.user_id = ${userId}
         )
-      order by e.embedding <=> ${lit}::vector
+      order by e.embedding <=> ${lit}
       limit 6
     `)) as unknown as Array<{ id: string; title: string; snippet: string; similarity: number }>;
 

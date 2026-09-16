@@ -1,7 +1,7 @@
 import { asc, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { directoryFolders, directoryItems } from "@/lib/db/schema";
-import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+import { clampForEmbedding, embeddingParam, getEmbeddingsProvider } from "@/lib/embeddings";
 import { spoilerClampSql } from "@/lib/books/spoiler-clamp";
 
 /**
@@ -129,7 +129,7 @@ export async function retrieveFromDirectory(
   const provider = getEmbeddingsProvider();
   const text = clampForEmbedding(query);
   const [vector] = await provider.embed([text], "query");
-  const lit = toVectorLiteral(vector);
+  const lit = embeddingParam(vector);
 
   type Hit = {
     directory_item_id: string;
@@ -158,14 +158,14 @@ export async function retrieveFromDirectory(
           di.id as directory_item_id,
           di.title,
           substring(c.content, 1, 400) as snippet,
-          1 - (c.embedding <=> ${lit}::vector) as similarity
+          1 - (c.embedding <=> ${lit}) as similarity
         from directory_items di
         inner join document_chunks c on c.document_id = di.document_id
         where di.user_id = ${userId}
           and di.kind = 'uploaded_document'
           and c.embedding is not null
           and ${spoilerClampSql("c")}
-        order by c.embedding <=> ${lit}::vector
+        order by c.embedding <=> ${lit}
         limit ${limit * 2}
       `),
     ),
@@ -176,13 +176,13 @@ export async function retrieveFromDirectory(
           di.id as directory_item_id,
           di.title,
           substring(coalesce(a.full_text, a.excerpt, ''), 1, 400) as snippet,
-          1 - (e.embedding <=> ${lit}::vector) as similarity
+          1 - (e.embedding <=> ${lit}) as similarity
         from directory_items di
         inner join articles a on a.id = di.article_id
         inner join article_embeddings e on e.article_id = a.id
         where di.user_id = ${userId}
           and di.kind = 'saved_article'
-        order by e.embedding <=> ${lit}::vector
+        order by e.embedding <=> ${lit}
         limit ${limit * 2}
       `),
     ),
@@ -193,12 +193,12 @@ export async function retrieveFromDirectory(
           id as directory_item_id,
           title,
           coalesce(substring(content, 1, 400), '') as snippet,
-          1 - (embedding <=> ${lit}::vector) as similarity
+          1 - (embedding <=> ${lit}) as similarity
         from directory_items
         where user_id = ${userId}
           and kind = 'user_note'
           and embedding is not null
-        order by embedding <=> ${lit}::vector
+        order by embedding <=> ${lit}
         limit ${limit * 2}
       `),
     ),

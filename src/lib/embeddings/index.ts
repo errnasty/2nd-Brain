@@ -1,3 +1,4 @@
+import { sql, type SQL } from "drizzle-orm";
 import { EMBEDDING_DIMS } from "@/lib/db/schema";
 
 export type EmbeddingInputType = "document" | "query";
@@ -168,4 +169,27 @@ export function clampForEmbedding(text: string, maxChars = 8000): string {
 /** Convert a number[] to the literal pgvector string format Postgres expects: `[0.1,0.2,...]`. */
 export function toVectorLiteral(v: number[]): string {
   return `[${v.join(",")}]`;
+}
+
+/**
+ * The SQL type of every stored embedding column — see `EMBEDDING_TABLES` and
+ * the note above `articleEmbeddings` in src/lib/db/schema.ts.
+ */
+export const EMBEDDING_SQL_TYPE = `halfvec(${EMBEDDING_DIMS})`;
+
+/**
+ * A query vector, bound as a parameter and cast to the stored column type.
+ *
+ * Always go through this rather than writing the cast inline. pgvector defines
+ * no `halfvec <=> vector` operator, so a query vector cast to the wrong type
+ * fails loudly at runtime instead of silently comparing the wrong thing — but
+ * only if there is a single place to keep in step with the schema.
+ *
+ * The returned fragment can be interpolated more than once in the same query
+ * (distance in the projection, distance again in ORDER BY); each use binds its
+ * own parameter, which is what the previous inline casts did too.
+ */
+export function embeddingParam(vec: number[] | string): SQL {
+  const literal = typeof vec === "string" ? vec : toVectorLiteral(vec);
+  return sql`${literal}::${sql.raw(EMBEDDING_SQL_TYPE)}`;
 }
