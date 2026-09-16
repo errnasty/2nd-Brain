@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-16-b",
+    date: "September 16, 2026",
+    title: "Old read articles are actually cleared out now",
+    tag: "fix",
+    summary:
+      "Feeds were meant to clear out articles you had already read and left alone for 45 days. That clean-up silently failed every time it ran, so nothing was ever removed and libraries grew without limit. It works now — and it will never touch anything you saved.",
+    items: [
+      "Articles you starred, put in Read Later, or saved to your Directory are kept no matter how old they are. Unread articles are never removed at any age.",
+      "On the desktop app, the indexes that keep Feeds and the Directory quick were not being created at all, so both got slower as your library grew. They are created properly now.",
+    ],
+  },
+  {
     id: "2026-09-16-a",
     date: "September 16, 2026",
     title: "Ask follows the connections you made",
