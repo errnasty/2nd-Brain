@@ -105,6 +105,19 @@ write-only column. It is where most of this app's database size lives —
 embeddings and their HNSW index were ~70% of one real 0.92 GB library, and
 0037 takes `article_embeddings` down to roughly a third of that.
 
+**Do not paste it into the dashboard SQL Editor.** The dashboard proxies every
+statement through `api.supabase.com`, which gives up long before a table rewrite
+and an HNSW rebuild finish, and you get `Error: Failed to fetch
+(api.supabase.com)`. That is the browser's request dying, not the migration —
+but the statement keeps running server-side afterwards, so check
+`supabase/check_0037.sql` (read-only, instant, dashboard-safe) before you retry.
+Run the migration over a direct connection instead, where nothing times out:
+`supabase db push`, or `psql "$DATABASE_URL" -f
+supabase/migrations/0037_halfvec_embeddings.sql` against the **session** pooler
+on port 5432 — not the transaction pooler on 6543, which will not hold one
+connection for the whole run. The migration is split into five idempotent steps
+and is safe to re-run; it resumes from wherever it stopped.
+
 Run it **before or with** the deploy, not after. The app casts every query
 vector to `halfvec`, and pgvector has no `halfvec <=> vector` operator, so
 against an unconverted database semantic search fails (Ask degrades to its

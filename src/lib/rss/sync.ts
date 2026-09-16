@@ -190,22 +190,37 @@ const RETENTION_DAYS = 45;
 const PURGE_BATCH = 2000;
 
 /**
- * Delete a bounded batch of old, already-read articles (never touches unread,
- * starred, or read-later). Bounded so one run can't lock the table for long;
- * repeated sync runs catch up. Optionally scoped to a single user.
+ * Delete a bounded batch of old, already-read articles. Bounded so one run
+ * can't lock the table for long; repeated sync runs catch up. Optionally scoped
+ * to a single user.
+ *
+ * "Kept" means every way a user can say keep this: starred, read-later, or
+ * saved into the Directory. The Directory check is not optional —
+ * directory_items.article_id is ON DELETE SET NULL, so deleting a saved
+ * article does not remove the saved item, it hollows it out into a row with no
+ * title, no url and no text, and takes its embedding with it. Unread articles
+ * are never touched at any age.
+ *
+ * `cutoff` goes in as an ISO string, NOT a Date. drizzle has no column type to
+ * encode against inside a raw sql`` template, so postgres-js receives the Date
+ * object itself and throws "The \"string\" argument must be of type string";
+ * the catch below then swallowed it, and this purge silently never ran.
  */
 export async function purgeOldReadArticles(userId?: string): Promise<void> {
-  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000);
-  const userCond = userId ? sql`and user_id = ${userId}` : sql``;
+  const cutoff = new Date(Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const userCond = userId ? sql`and a.user_id = ${userId}` : sql``;
   try {
     await db.execute(sql`
       delete from articles
       where id in (
-        select id from articles
-        where read_status in ('read', 'archived')
-          and starred = false
-          and read_later = false
-          and created_at < ${cutoff}
+        select a.id from articles a
+        where a.read_status in ('read', 'archived')
+          and a.starred = false
+          and a.read_later = false
+          and a.created_at < ${cutoff}
+          and not exists (
+            select 1 from directory_items di where di.article_id = a.id
+          )
           ${userCond}
         limit ${PURGE_BATCH}
       )

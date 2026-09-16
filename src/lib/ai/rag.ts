@@ -278,7 +278,12 @@ export async function retrieveFromDirectory(
         limit ${limit * 2}
       `),
     );
-    const patterns = terms.map((t) => `%${t}%`);
+    // sql.param, not a bare `${patterns}`: drizzle flattens an interpolated
+    // array into one bind per element, so `any(${patterns}::text[])` renders as
+    // `any(($1, $2)::text[])` — a ROW constructor, which Postgres rejects with
+    // "cannot cast type record to text[]" (and "malformed array literal" at
+    // length 1). sql.param binds the whole array as a single text[] value.
+    const patternsParam = sql.param(terms.map((t) => `%${t}%`));
     const keywordHits =
       tsHits.length > 0
         ? tsHits
@@ -288,7 +293,8 @@ export async function retrieveFromDirectory(
                      coalesce(substring(content, 1, 400), '') as snippet
               from directory_items
               where user_id = ${userId}
-                and (title ilike any(${patterns}::text[]) or content ilike any(${patterns}::text[]))
+                and (title ilike any(${patternsParam}::text[])
+                     or content ilike any(${patternsParam}::text[]))
               limit ${limit * 2}
             `),
           );

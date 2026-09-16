@@ -150,6 +150,16 @@ function safeDate(s: string | undefined): Date | undefined {
   return Number.isNaN(d.getTime()) ? undefined : d;
 }
 
+/**
+ * A value only if it carries something. Feeds are full of empty elements, and
+ * an empty element parses as "" — which survives `??` and every other nullish
+ * check, so it silently becomes real data. Use this wherever a feed value has
+ * a fallback.
+ */
+function nonBlank(value: string | null | undefined): string | undefined {
+  return value && value.trim() ? value : undefined;
+}
+
 export async function fetchAndParseFeed(url: string): Promise<NormalizedFeed>;
 export async function fetchAndParseFeed(
   url: string,
@@ -171,15 +181,22 @@ export async function fetchAndParseFeed(
   const items: NormalizedItem[] = (feed.items ?? []).flatMap((item) => {
     const url = item.link;
     if (!url) return [];
-    const guid = item.guid ?? url;
+    // `?? url` is not enough on its own: an empty <guid></guid> element parses
+    // as "", which is not nullish, so every item in such a feed took the same
+    // empty guid. articles has UNIQUE (feed_id, guid) and the insert is
+    // onConflictDoNothing, so only the FIRST item was ever stored and the rest
+    // of the feed silently disappeared on every sync.
+    const guid = nonBlank(item.guid) ?? url;
     const content = item.contentEncoded ?? item["content:encoded"] ?? item.content;
     const excerpt = stripHtml(item.contentSnippet ?? item.summary ?? content)?.slice(0, 500);
     return [
       {
         guid,
         url,
-        title: (item.title ?? "Untitled").trim(),
-        author: item.creator ?? item.author ?? undefined,
+        // Same trap: <title></title> or <title>   </title> would otherwise
+        // store a blank title and render as an unclickable empty row.
+        title: (nonBlank(item.title) ?? "Untitled").trim(),
+        author: nonBlank(item.creator) ?? nonBlank(item.author),
         excerpt,
         content,
         publishDate: safeDate(item.isoDate ?? item.pubDate),
@@ -189,7 +206,7 @@ export async function fetchAndParseFeed(
   });
 
   return {
-    title: (feed.title ?? new URL(url).hostname).trim(),
+    title: (nonBlank(feed.title) ?? new URL(url).hostname).trim(),
     description: feed.description ?? undefined,
     siteUrl,
     iconUrl,

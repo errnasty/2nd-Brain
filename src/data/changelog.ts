@@ -27,6 +27,50 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-16-d",
+    date: "September 16, 2026",
+    title: "Sign-in links can only ever send you back into the app",
+    tag: "fix",
+    summary:
+      "The address you land on after signing in was taken from the link you clicked without being checked. A carefully written link could have sent you to another site straight after a successful sign-in. It is now restricted to pages inside the app.",
+  },
+  {
+    id: "2026-09-16-c",
+    date: "September 16, 2026",
+    title: "Feeds that only ever showed one article now show all of them",
+    tag: "fix",
+    summary:
+      "Some feeds leave the hidden id field on their items blank. We were treating that blank as a real id, so every article in such a feed looked like the same article and only the first one was ever kept. Those feeds now import properly.",
+    items: [
+      "Articles from affected feeds will appear on the next sync.",
+      "Items with a blank headline now read \"Untitled\" instead of showing as an empty row, and a feed with no name of its own falls back to its website address.",
+    ],
+  },
+  {
+    id: "2026-09-16-b",
+    date: "September 16, 2026",
+    title: "Old read articles are actually cleared out now",
+    tag: "fix",
+    summary:
+      "Feeds were meant to clear out articles you had already read and left alone for 45 days. That clean-up silently failed every time it ran, so nothing was ever removed and libraries grew without limit. It works now — and it will never touch anything you saved.",
+    items: [
+      "Articles you starred, put in Read Later, or saved to your Directory are kept no matter how old they are. Unread articles are never removed at any age.",
+      "On the desktop app, the indexes that keep Feeds and the Directory quick were not being created at all, so both got slower as your library grew. They are created properly now.",
+    ],
+  },
+  {
+    id: "2026-09-16-a",
+    date: "September 16, 2026",
+    title: "Ask follows the connections you made",
+    tag: "fix",
+    summary:
+      "Ask was supposed to follow your own links, tags and folders out from whatever it found, so it could reach a note that never uses your words but sits next to three that do. That step silently did nothing. It works now.",
+    items: [
+      "Asking a question now pulls in items connected to the ones it found — linked from a note, filed under the same tag, or sitting in the same folder — and tells you which connection it followed.",
+      "Searching your library for several words at once no longer quietly skips the plain word-match pass, so short and unusual phrasings find more.",
+    ],
+  },
+  {
     id: "2026-09-16",
     date: "September 16, 2026",
     title: "Your library takes up less than half the storage",

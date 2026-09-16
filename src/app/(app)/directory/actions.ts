@@ -923,7 +923,14 @@ async function runDirectoryUpload(formData: FormData): Promise<DirectoryUploadRe
     // and it captures tasks past the preview cutoff.
     await syncDirectoryTasks(user.id, item.id, text);
 
-    void autoTagDirectoryItem(user.id, item.id);
+    // .catch, unlike embedDocument/embedNote/syncWikilinks below and around,
+    // because autoTagDirectoryItem does NOT swallow its own errors — it is also
+    // awaited elsewhere for its return value. Un-caught here, a database error
+    // during tagging is an unhandled rejection, which Node terminates the
+    // process over by default.
+    void autoTagDirectoryItem(user.id, item.id).catch((err) => {
+      console.warn("autoTagDirectoryItem skipped:", err instanceof Error ? err.message : err);
+    });
     // Embed inline so the doc is answerable in Ask right away (no manual
     // Refresh Memory needed for typical-size uploads).
     void embedDocument(doc.id, user.id);
@@ -1102,7 +1109,11 @@ async function uploadBookToDirectory(
 
     await db.insert(bookReadingState).values({ userId, documentId: doc.id }).onConflictDoNothing();
 
-    void autoTagDirectoryItem(userId, item.id);
+    // See the note on the other call site: this one does not swallow its own
+    // errors, so an un-caught rejection here would take the process down.
+    void autoTagDirectoryItem(userId, item.id).catch((err) => {
+      console.warn("autoTagDirectoryItem skipped:", err instanceof Error ? err.message : err);
+    });
     void embedDocument(doc.id, userId);
     await awardXp(userId, {
       source: "doc_uploaded",

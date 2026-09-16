@@ -648,6 +648,23 @@ export async function ensureLocalSchema(): Promise<void> {
     console.warn("[local-bootstrap] fsrs columns failed:", err instanceof Error ? err.message : err);
   }
 
+  // Always run: trending columns + tables (mirror cloud migration 0028). The
+  // queries that read them run on desktop too, so the columns must exist even
+  // though nothing here ever populates them.
+  //
+  // MUST come before PERF_INDEX_SQL: two of those indexes are on trend_score,
+  // which this block adds. Run the other way round, PGlite aborts the whole
+  // PERF_INDEX_SQL batch at the first of them and rolls back the lot — desktop
+  // then had NONE of the nine feeds/directory indexes and no
+  // directory_items.preview column, which is precisely the "everything feels
+  // slow with a lot of articles" those indexes exist to prevent. The failure
+  // was invisible: it only ever surfaced as the console warning below.
+  try {
+    await client.exec(TRENDING_SQL);
+  } catch (err) {
+    console.warn("[local-bootstrap] trending schema failed:", err instanceof Error ? err.message : err);
+  }
+
   // Always run: feeds-tab perf indexes (mirror cloud migration 0015). Idempotent
   // create-if-not-exists so existing local DBs pick them up without a reinstall.
   try {
@@ -662,15 +679,6 @@ export async function ensureLocalSchema(): Promise<void> {
     await client.exec(THINKTANK_EXPLORE_SQL);
   } catch (err) {
     console.warn("[local-bootstrap] thinktank explore failed:", err instanceof Error ? err.message : err);
-  }
-
-  // Always run: trending columns + tables (mirror cloud migration 0028). The
-  // queries that read them run on desktop too, so the columns must exist even
-  // though nothing here ever populates them.
-  try {
-    await client.exec(TRENDING_SQL);
-  } catch (err) {
-    console.warn("[local-bootstrap] trending schema failed:", err instanceof Error ? err.message : err);
   }
 
   bootstrapped = true;
