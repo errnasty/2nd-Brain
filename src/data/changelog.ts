@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-16-c",
+    date: "September 16, 2026",
+    title: "Feeds that only ever showed one article now show all of them",
+    tag: "fix",
+    summary:
+      "Some feeds leave the hidden id field on their items blank. We were treating that blank as a real id, so every article in such a feed looked like the same article and only the first one was ever kept. Those feeds now import properly.",
+    items: [
+      "Articles from affected feeds will appear on the next sync.",
+      "Items with a blank headline now read \"Untitled\" instead of showing as an empty row, and a feed with no name of its own falls back to its website address.",
+    ],
+  },
+  {
     id: "2026-09-16-b",
     date: "September 16, 2026",
     title: "Old read articles are actually cleared out now",
