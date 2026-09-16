@@ -1,7 +1,12 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { documentChunks } from "@/lib/db/schema";
-import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+import {
+  EMBEDDING_SQL_TYPE,
+  clampForEmbedding,
+  embeddingParam,
+  getEmbeddingsProvider,
+} from "@/lib/embeddings";
 import { EMBEDDING_TABLES } from "@/lib/embeddings/tables";
 
 // Embedding batch size (one provider call per batch) and how many batches run
@@ -124,24 +129,69 @@ let schemaEnsured = false;
 
 /**
  * Idempotently guarantee the pgvector columns + HNSW indexes exist (the
- * contents of migration 0005). This removes the recurring
+ * contents of migrations 0005 and 0037). This removes the recurring
  * `column "embedding" does not exist` failures when a migration wasn't run by
  * hand. Each statement is isolated — `create extension` may be a no-op or
  * permission-gated on managed Postgres, and that's fine.
+ *
+ * It also upgrades a legacy `vector(1024)` column in place to `halfvec(1024)`.
+ * That path exists for the DESKTOP app, which has no migration runner: an
+ * existing PGlite database was created with fp32 columns, and every query now
+ * casts its query vector to halfvec (pgvector has no `halfvec <=> vector`
+ * operator), so without this an updated desktop build would lose semantic
+ * search entirely. On the cloud, prefer running migration 0037 during a
+ * maintenance window — the ALTER rewrites the table under an exclusive lock,
+ * and the migration also reclaims the space this path leaves behind.
  */
 export async function ensureVectorSchema(): Promise<void> {
   if (schemaEnsured) return;
-  const statements = [sql`create extension if not exists vector`];
-  // Table names come from the EMBEDDING_TABLES allowlist (not user input), so
-  // sql.raw interpolation is safe here.
+  await runIsolated([sql`create extension if not exists vector`]);
+
   for (const table of EMBEDDING_TABLES) {
-    statements.push(sql.raw(`alter table ${table} add column if not exists embedding vector(1024)`));
-    statements.push(
+    // Table names come from the EMBEDDING_TABLES allowlist (not user input), so
+    // sql.raw interpolation is safe here.
+    const stored = await storedVectorType(table);
+
+    if (stored === "vector") {
+      // Legacy fp32 column. The HNSW index has to go first: `vector_cosine_ops`
+      // does not accept halfvec, so an in-place ALTER would fail trying to
+      // rebuild it.
+      await runIsolated([
+        sql.raw(`drop index if exists ${table}_embedding_idx`),
+        sql.raw(`alter table ${table} alter column embedding type ${EMBEDDING_SQL_TYPE}`),
+      ]);
+    }
+
+    await runIsolated([
+      sql.raw(`alter table ${table} add column if not exists embedding ${EMBEDDING_SQL_TYPE}`),
       sql.raw(
-        `create index if not exists ${table}_embedding_idx on ${table} using hnsw (embedding vector_cosine_ops)`,
+        `create index if not exists ${table}_embedding_idx on ${table} using hnsw (embedding halfvec_cosine_ops)`,
       ),
-    );
+    ]);
   }
+  schemaEnsured = true;
+}
+
+/** The base type of `<table>.embedding`, or null when the column is absent. */
+async function storedVectorType(table: string): Promise<string | null> {
+  try {
+    const rows = (await db.execute(sql`
+      select t.typname
+      from pg_attribute a
+      join pg_type t on t.oid = a.atttypid
+      where a.attrelid = ${table}::regclass and a.attname = 'embedding' and not a.attisdropped
+    `)) as unknown as { typname: string }[];
+    const list = Array.isArray(rows) ? rows : ((rows as { rows?: { typname: string }[] }).rows ?? []);
+    return list[0]?.typname ?? null;
+  } catch {
+    // Table missing, or no permission to read the catalog — treat as "nothing
+    // to upgrade" and let the add-column/create-index pass below do its best.
+    return null;
+  }
+}
+
+/** Run DDL one statement at a time so one failure can't abort the rest. */
+async function runIsolated(statements: SQL[]): Promise<void> {
   for (const stmt of statements) {
     try {
       await db.execute(stmt);
@@ -149,7 +199,6 @@ export async function ensureVectorSchema(): Promise<void> {
       console.warn("ensureVectorSchema statement skipped:", err instanceof Error ? err.message : err);
     }
   }
-  schemaEnsured = true;
 }
 
 /**
@@ -208,14 +257,11 @@ export async function backfillEmbeddings(
       (a) => clampForEmbedding(`${a.title}\n\n${a.excerpt ?? a.full_text?.slice(0, 800) ?? ""}`.trim()),
       async (rows) => {
         const values = sql.join(
-          rows.map(
-            (x) =>
-              sql`(${x.item.id}::uuid, ${userId}::uuid, 0, ${x.text}, ${toVectorLiteral(x.vec)}::vector)`,
-          ),
+          rows.map((x) => sql`(${x.item.id}::uuid, ${userId}::uuid, 0, ${embeddingParam(x.vec)})`),
           sql`, `,
         );
         await db.execute(sql`
-          insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
+          insert into article_embeddings (article_id, user_id, chunk_index, embedding)
           values ${values}
           on conflict (article_id, chunk_index) do nothing
         `);
@@ -245,7 +291,7 @@ export async function backfillEmbeddings(
       (c) => clampForEmbedding(c.content),
       async (rows) => {
         const values = sql.join(
-          rows.map((x) => sql`(${x.item.id}::uuid, ${toVectorLiteral(x.vec)}::vector)`),
+          rows.map((x) => sql`(${x.item.id}::uuid, ${embeddingParam(x.vec)})`),
           sql`, `,
         );
         await db.execute(sql`
@@ -282,7 +328,7 @@ export async function backfillEmbeddings(
       (n) => clampForEmbedding(`${n.title}\n\n${n.content ?? ""}`.trim()),
       async (rows) => {
         const values = sql.join(
-          rows.map((x) => sql`(${x.item.id}::uuid, ${toVectorLiteral(x.vec)}::vector)`),
+          rows.map((x) => sql`(${x.item.id}::uuid, ${embeddingParam(x.vec)})`),
           sql`, `,
         );
         await db.execute(sql`
@@ -318,10 +364,10 @@ export async function embedNote(
     const text = clampForEmbedding(`${title}\n\n${content ?? ""}`.trim());
     if (!text) return;
     const [vector] = await provider.embed([text]);
-    const literal = toVectorLiteral(vector);
+    const literal = embeddingParam(vector);
     await db.execute(sql`
       update directory_items
-      set embedding = ${literal}::vector
+      set embedding = ${literal}
       where id = ${noteId} and user_id = ${userId}
     `);
   } catch (err) {
@@ -350,8 +396,8 @@ export async function embedDocument(documentId: string, userId: string, maxChunk
       const vectors = await safeEmbedBatch(provider, batch.map((c) => clampForEmbedding(c.content)));
       for (let j = 0; j < batch.length; j += 1) {
         if (!vectors[j]) continue;
-        const literal = toVectorLiteral(vectors[j]!);
-        await db.execute(sql`update document_chunks set embedding = ${literal}::vector where id = ${batch[j].id}`);
+        const literal = embeddingParam(vectors[j]!);
+        await db.execute(sql`update document_chunks set embedding = ${literal} where id = ${batch[j].id}`);
       }
     }
   } catch (err) {
@@ -370,10 +416,10 @@ export async function embedArticle(
     const provider = getEmbeddingsProvider();
     const text = clampForEmbedding(`${title}\n\n${excerpt ?? ""}`.trim());
     const [vector] = await provider.embed([text]);
-    const literal = toVectorLiteral(vector);
+    const literal = embeddingParam(vector);
     await db.execute(sql`
-      insert into article_embeddings (article_id, user_id, chunk_index, content, embedding)
-      values (${articleId}, ${userId}, 0, ${text}, ${literal}::vector)
+      insert into article_embeddings (article_id, user_id, chunk_index, embedding)
+      values (${articleId}, ${userId}, 0, ${literal})
       on conflict (article_id, chunk_index) do nothing
     `);
   } catch (err) {
@@ -401,7 +447,7 @@ export async function findRelated(
   const provider = getEmbeddingsProvider();
   const text = clampForEmbedding(query);
   const [vector] = await provider.embed([text]);
-  const literal = toVectorLiteral(vector);
+  const literal = embeddingParam(vector);
 
   // Cosine distance (<=>) on pgvector returns 0 = identical, 2 = opposite.
   // similarity = 1 - distance (in [-1, 1], but for normalized OpenAI vectors ~[0, 1]).
@@ -411,12 +457,12 @@ export async function findRelated(
       e.article_id as ref_id,
       a.title,
       a.excerpt,
-      1 - (e.embedding <=> ${literal}::vector) as similarity
+      1 - (e.embedding <=> ${literal}) as similarity
     from article_embeddings e
     inner join articles a on a.id = e.article_id
     where e.user_id = ${userId}
       ${excludeArticleId ? sql`and e.article_id <> ${excludeArticleId}` : sql``}
-    order by e.embedding <=> ${literal}::vector
+    order by e.embedding <=> ${literal}
     limit ${limit}
   `)) as unknown as ArticleResultRow[];
 
@@ -436,11 +482,11 @@ export async function findRelated(
       c.document_id as ref_id,
       d.title,
       substring(c.content, 1, 240) as snippet,
-      1 - (c.embedding <=> ${literal}::vector) as similarity
+      1 - (c.embedding <=> ${literal}) as similarity
     from document_chunks c
     inner join documents d on d.id = c.document_id
     where c.user_id = ${userId} and c.embedding is not null
-    order by c.embedding <=> ${literal}::vector
+    order by c.embedding <=> ${literal}
     limit ${limit}
   `)) as unknown as ChunkResultRow[];
 

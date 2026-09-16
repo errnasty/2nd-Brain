@@ -97,6 +97,31 @@ Now apply RLS policies and the auto-create-profile trigger. Open Supabase **SQL 
 
 Also apply the search-index migration (trigram indexes that keep global search fast as your library grows): paste `supabase/migrations/0008_search_and_index_perf.sql` into the SQL Editor and run it.
 
+### Storage: migration 0037 is not optional
+
+`supabase/migrations/0037_halfvec_embeddings.sql` converts the embedding
+columns from `vector(1024)` (fp32) to `halfvec(1024)` (fp16) and drops a
+write-only column. It is where most of this app's database size lives —
+embeddings and their HNSW index were ~70% of one real 0.92 GB library, and
+0037 takes `article_embeddings` down to roughly a third of that.
+
+Run it **before or with** the deploy, not after. The app casts every query
+vector to `halfvec`, and pgvector has no `halfvec <=> vector` operator, so
+against an unconverted database semantic search fails (Ask degrades to its
+keyword sources, global search drops its semantic hits). If the migration is
+missed, the app converts the columns itself on the next cold start —
+`ensureVectorSchema` in `src/lib/embeddings/backfill.ts` — but that runs under
+the same exclusive lock at an arbitrary moment and does not reclaim the dropped
+column's space. Prefer the migration, in a window.
+
+It needs pgvector >= 0.7 for `halfvec`. Supabase ships 0.8; check with
+`select extversion from pg_extension where extname = 'vector';` and upgrade
+under Dashboard → Database → Extensions if yours is older. On an older pgvector
+the migration prints a notice and changes nothing.
+
+To see where your own space is going, before and after, run
+`supabase/report_sizes.sql` (read-only).
+
 For production, you'll later switch `DATABASE_URL` (in Railway's service variables) to the **pooled** connection string — see step 7.
 
 ---

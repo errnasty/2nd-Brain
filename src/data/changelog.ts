@@ -27,6 +27,19 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-16",
+    date: "September 16, 2026",
+    title: "Your library takes up less than half the storage",
+    tag: "improvement",
+    summary:
+      "The same library now fits in a fraction of the space it did before, so a big collection of feeds and saved reading stops bumping into storage limits. Nothing was removed, and search and Ask work exactly as before.",
+    items: [
+      "The index behind semantic search — the thing that finds related reading and answers questions about your library — was by far the biggest thing stored. It is now roughly a third of its former size, with no change to the results you get.",
+      "A copy of every article's title and opening lines was being kept a second time, purely as leftovers. It is gone.",
+      "Two indexes on your articles that could never be picked over the ones next to them have been removed, which also makes syncing feeds a little lighter.",
+    ],
+  },
+  {
     id: "2026-08-31-d",
     date: "August 31, 2026",
     title: "Folders full of books open on the shelf, and open faster",

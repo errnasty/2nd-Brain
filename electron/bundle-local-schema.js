@@ -11,9 +11,25 @@ if (!gen) {
   console.error("No *_local_schema.sql found in drizzle/. Run drizzle-kit generate --name local_schema first.");
   process.exit(1);
 }
-const sql = fs.readFileSync(path.join(drizzleDir, gen), "utf8");
+let sql = fs.readFileSync(path.join(drizzleDir, gen), "utf8");
 if (sql.includes("`") || sql.includes("${")) {
   console.error("SQL contains a backtick or ${ — cannot embed as a template literal safely.");
+  process.exit(1);
+}
+
+// drizzle-kit 0.28 emits parameterised pgvector types it doesn't know as a
+// QUOTED identifier — `"embedding" "halfvec(1024)"` — which Postgres reads as a
+// type literally named `halfvec(1024)` and rejects. (It gets plain `vector(n)`
+// right; halfvec/sparsevec/bit it does not.) Unquote them.
+sql = sql.replace(/"(halfvec|sparsevec|vector)\((\d+)\)"/g, "$1($2)");
+
+// Anything still quoted-with-parens is a type drizzle-kit mangled the same way
+// and this script hasn't been taught about. Fail loudly rather than shipping a
+// desktop bootstrap that dies on first launch.
+const mangled = sql.match(/"[a-z_]+\(\d+(?:\s*,\s*\d+)*\)"/g);
+if (mangled) {
+  console.error(`Generated DDL has quoted parameterised types: ${[...new Set(mangled)].join(", ")}`);
+  console.error("Add them to the unquote list in electron/bundle-local-schema.js.");
   process.exit(1);
 }
 const header =

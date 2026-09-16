@@ -13,8 +13,7 @@ CREATE TABLE IF NOT EXISTS "article_embeddings" (
 	"article_id" uuid NOT NULL,
 	"user_id" uuid NOT NULL,
 	"chunk_index" integer DEFAULT 0 NOT NULL,
-	"content" text NOT NULL,
-	"embedding" vector(1024),
+	"embedding" halfvec(1024),
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -77,7 +76,7 @@ CREATE TABLE IF NOT EXISTS "directory_items" (
 	"document_id" uuid,
 	"metadata" jsonb,
 	"reading_status" "directory_reading_status" DEFAULT 'inbox' NOT NULL,
-	"embedding" vector(1024),
+	"embedding" halfvec(1024),
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -110,7 +109,7 @@ CREATE TABLE IF NOT EXISTS "document_chunks" (
 	"chunk_index" integer NOT NULL,
 	"content" text NOT NULL,
 	"token_count" integer,
-	"embedding" vector(1024),
+	"embedding" halfvec(1024),
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -379,11 +378,9 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "article_chunk_unique" ON "article_embeddings" USING btree ("article_id","chunk_index");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "article_embeddings_embedding_idx" ON "article_embeddings" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "article_embeddings_embedding_idx" ON "article_embeddings" USING hnsw ("embedding" halfvec_cosine_ops);--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "articles_feed_guid_unique" ON "articles" USING btree ("feed_id","guid");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "articles_user_status_idx" ON "articles" USING btree ("user_id","read_status","publish_date");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "articles_folder_idx" ON "articles" USING btree ("folder_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "articles_publish_idx" ON "articles" USING btree ("publish_date");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "articles_user_readlater_idx" ON "articles" USING btree ("user_id","publish_date" DESC NULLS LAST) WHERE "articles"."read_later";--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "articles_retention_idx" ON "articles" USING btree ("read_status","created_at") WHERE not "articles"."starred" and not "articles"."read_later";--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "articles_user_updated_idx" ON "articles" USING btree ("user_id","updated_at");--> statement-breakpoint
@@ -396,13 +393,13 @@ CREATE INDEX IF NOT EXISTS "directory_items_reading_status_idx" ON "directory_it
 CREATE INDEX IF NOT EXISTS "directory_items_folder_idx" ON "directory_items" USING btree ("folder_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "directory_items_article_idx" ON "directory_items" USING btree ("article_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "directory_items_document_idx" ON "directory_items" USING btree ("document_id");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "directory_items_embedding_idx" ON "directory_items" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "directory_items_embedding_idx" ON "directory_items" USING hnsw ("embedding" halfvec_cosine_ops);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "directory_links_target_idx" ON "directory_links" USING btree ("target_item_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "directory_links_user_idx" ON "directory_links" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "directory_tasks_user_idx" ON "directory_tasks" USING btree ("user_id","done","due_date");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "directory_tasks_item_idx" ON "directory_tasks" USING btree ("item_id");--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "doc_chunk_unique" ON "document_chunks" USING btree ("document_id","chunk_index");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "document_chunks_embedding_idx" ON "document_chunks" USING hnsw ("embedding" vector_cosine_ops);--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS "document_chunks_embedding_idx" ON "document_chunks" USING hnsw ("embedding" halfvec_cosine_ops);--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "document_chunks_user_idx" ON "document_chunks" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "documents_user_idx" ON "documents" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "documents_folder_idx" ON "documents" USING btree ("folder_id");--> statement-breakpoint

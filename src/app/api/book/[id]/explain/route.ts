@@ -7,7 +7,7 @@ import { requireUser } from "@/lib/auth";
 import { loadBookDoc, loadChapters } from "@/lib/books/access";
 import { getChatModel } from "@/lib/ai/models";
 import { openrouterClient, openrouterKey } from "@/lib/ai/provider";
-import { clampForEmbedding, getEmbeddingsProvider, toVectorLiteral } from "@/lib/embeddings";
+import { clampForEmbedding, embeddingParam, getEmbeddingsProvider } from "@/lib/embeddings";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { checkAiBudget, recordAiUsage, budgetExceededMessage } from "@/lib/ai/budget";
 
@@ -254,7 +254,7 @@ async function earlierContext(
   try {
     const provider = getEmbeddingsProvider();
     const [vector] = await provider.embed([clampForEmbedding(passage)], "query");
-    const lit = toVectorLiteral(vector);
+    const lit = embeddingParam(vector);
     const rows = (await db.execute(sql`
       select left(content, 1200) as text
       from document_chunks
@@ -263,7 +263,7 @@ async function earlierContext(
         and chapter_index is not null
         and chapter_index < ${chapterIdx}
         and embedding is not null
-      order by embedding <=> ${lit}::vector
+      order by embedding <=> ${lit}
       limit 4
     `)) as unknown as { text: string | null }[];
     return rows

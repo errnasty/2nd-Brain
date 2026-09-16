@@ -8,6 +8,7 @@ import type {
 import {
   bigint,
   boolean,
+  halfvec,
   index,
   integer,
   jsonb,
@@ -19,10 +20,21 @@ import {
   timestamp,
   uniqueIndex,
   uuid,
-  vector,
 } from "drizzle-orm/pg-core";
 
 const EMBEDDING_DIMS = 1024;
+
+// Embeddings are stored as `halfvec` (IEEE fp16), not `vector` (fp32). Both the
+// column and its HNSW index carry the raw vector, so fp16 halves BOTH — on a
+// library of any size the embedding index is the single largest object in the
+// database. The precision that buys it is not precision we were using: cosine
+// ranking over unit-norm vectors is stable to ~1e-3, and fp16 resolves ~1e-4
+// at these magnitudes.
+//
+// `halfvec <=> vector` is NOT a defined operator, so every query vector must be
+// cast to this same type — see `embeddingParam()` in src/lib/embeddings.
+// Requires pgvector >= 0.7 (Supabase ships 0.8; the desktop PGlite bundle
+// ships 0.8).
 
 export const readStatusEnum = pgEnum("read_status", ["unread", "read", "archived"]);
 export const itemKindEnum = pgEnum("item_kind", ["article", "document", "directory_item"]);
@@ -182,8 +194,12 @@ export const articles = pgTable(
       t.publishDate.desc(),
       t.id.desc(),
     ),
-    folderIdx: index("articles_folder_idx").on(t.folderId),
-    publishIdx: index("articles_publish_idx").on(t.publishDate),
+    // No bare (folder_id) or (publish_date) index here. The first is a leading
+    // prefix of folder_status_pub_idx / folder_status_trend_idx above, so it
+    // could never be the better plan; the second is table-global, and every
+    // query that orders by publish_date also filters on user/feed/folder, which
+    // the composites already serve. Both were pure write amplification on a
+    // table this app inserts into on every feed sync. See migration 0037.
     // Feeds "All" view: per-user list across every read status. The
     // (user,status,date) index above can't give a cross-status date order.
     userPubIdx: index("articles_user_pub_idx").on(t.userId, t.publishDate.desc(), t.id.desc()),
@@ -254,14 +270,14 @@ export const documentChunks = pgTable(
     /** Spine position this chunk came from — books only. Null for every other
      *  document kind, and the spoiler clamp reads null as "always visible". */
     chapterIndex: integer("chapter_index"),
-    embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
+    embedding: halfvec("embedding", { dimensions: EMBEDDING_DIMS }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     docChunkUnique: uniqueIndex("doc_chunk_unique").on(t.documentId, t.chunkIndex),
     embeddingIdx: index("document_chunks_embedding_idx")
-      .using("hnsw", t.embedding.op("vector_cosine_ops")),
+      .using("hnsw", t.embedding.op("halfvec_cosine_ops")),
     userIdx: index("document_chunks_user_idx").on(t.userId),
   }),
 );
@@ -411,6 +427,15 @@ export const bookHighlights = pgTable(
   }),
 );
 
+/**
+ * One row per article, holding the vector for `title + lead` (chunk 0).
+ *
+ * There is deliberately NO `content` column. The text that was embedded is
+ * `title + "\n\n" + excerpt`, which already lives on `articles` — every reader
+ * of this table joins `articles` for the snippet it shows (see rag.ts,
+ * search.ts, findRelated), so a copy here was written on every insert and read
+ * by nothing.
+ */
 export const articleEmbeddings = pgTable(
   "article_embeddings",
   {
@@ -422,14 +447,13 @@ export const articleEmbeddings = pgTable(
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
     chunkIndex: integer("chunk_index").default(0).notNull(),
-    content: text("content").notNull(),
-    embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
+    embedding: halfvec("embedding", { dimensions: EMBEDDING_DIMS }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (t) => ({
     articleChunkUnique: uniqueIndex("article_chunk_unique").on(t.articleId, t.chunkIndex),
     embeddingIdx: index("article_embeddings_embedding_idx")
-      .using("hnsw", t.embedding.op("vector_cosine_ops")),
+      .using("hnsw", t.embedding.op("halfvec_cosine_ops")),
     // RAG/related queries filter by user_id; without this the tenant predicate
     // was an unindexed scan layered on the global HNSW search.
     userIdx: index("article_embeddings_user_idx").on(t.userId),
@@ -600,7 +624,7 @@ export const directoryItems = pgTable(
     // For user_note rows we store the embedding directly here (notes have no
     // separate documents row). For saved_article + uploaded_document this is
     // left null — their embeddings live on article_embeddings / document_chunks.
-    embedding: vector("embedding", { dimensions: EMBEDDING_DIMS }),
+    embedding: halfvec("embedding", { dimensions: EMBEDDING_DIMS }),
     // NOTE: there is also a generated `preview` column (migration 0031) holding
     // substring(content, 1, 240). It is deliberately NOT declared here. Drizzle
     // would then include it in every `select()` over this table, and any
@@ -643,7 +667,7 @@ export const directoryItems = pgTable(
     documentIdx: index("directory_items_document_idx").on(t.documentId),
     embeddingIdx: index("directory_items_embedding_idx").using(
       "hnsw",
-      t.embedding.op("vector_cosine_ops"),
+      t.embedding.op("halfvec_cosine_ops"),
     ),
   }),
 );
