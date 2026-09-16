@@ -27,6 +27,14 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-16-d",
+    date: "September 16, 2026",
+    title: "Sign-in links can only ever send you back into the app",
+    tag: "fix",
+    summary:
+      "The address you land on after signing in was taken from the link you clicked without being checked. A carefully written link could have sent you to another site straight after a successful sign-in. It is now restricted to pages inside the app.",
+  },
+  {
     id: "2026-09-16-c",
     date: "September 16, 2026",
     title: "Feeds that only ever showed one article now show all of them",
