@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { sql, type SQL } from "drizzle-orm";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { admit, finalScore, describePath, type GraphPath } from "./graph";
 
 describe("admit — two-threshold admission", () => {
@@ -84,5 +88,43 @@ describe("describePath", () => {
     const out = describePath(paths, titleOf);
     expect(out).toBe('linked from "Info Ops Notes"; shares tag "ops"');
     expect(out).not.toContain("Archive");
+  });
+});
+
+// Every one of these queries bound its array wrongly and therefore returned
+// nothing, at every array length — `safeRows` turned the Postgres error into an
+// empty result, so graph traversal was silently dead rather than broken. These
+// two guards check the rendered SQL, which is where the bug actually lived.
+describe("array parameters are bound as arrays, not row constructors", () => {
+  const render = (q: SQL) => new PgDialect().sqlToQuery(q);
+
+  it("sql.param binds one array, a bare array binds one param per element", () => {
+    const ids = ["a", "b", "c"];
+    // The bug: drizzle flattens the array, and `($1, $2, $3)` is a record.
+    expect(render(sql`x = any(${ids}::uuid[])`).sql).toBe("x = any(($1, $2, $3)::uuid[])");
+    // The fix.
+    const fixed = render(sql`x = any(${sql.param(ids)}::uuid[])`);
+    expect(fixed.sql).toBe("x = any($1::uuid[])");
+    expect(fixed.params).toEqual([ids]);
+  });
+
+  it("no query in the retrieval path interpolates a bare array into any()", () => {
+    const sources = ["src/lib/ai/retrieval/graph.ts", "src/lib/ai/rag.ts"].map((f) =>
+      // Comments stripped: both files spell the broken form out as an example.
+      readFileSync(resolve(process.cwd(), f), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, ""),
+    );
+    for (const src of sources) {
+      // `any(${foo}::` is only safe when `foo` was produced by sql.param.
+      const bindings = [...src.matchAll(/any\(\$\{([A-Za-z0-9_.()[\]\s]+?)\}::/g)].map((m) =>
+        m[1].trim(),
+      );
+      expect(bindings.length).toBeGreaterThan(0);
+      for (const b of bindings) {
+        const viaParam = b.startsWith("sql.param(") || /Param$/.test(b);
+        expect(viaParam, `any(\${${b}}::…) must bind through sql.param`).toBe(true);
+      }
+    }
   });
 });

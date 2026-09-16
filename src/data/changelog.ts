@@ -27,6 +27,18 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-16-a",
+    date: "September 16, 2026",
+    title: "Ask follows the connections you made",
+    tag: "fix",
+    summary:
+      "Ask was supposed to follow your own links, tags and folders out from whatever it found, so it could reach a note that never uses your words but sits next to three that do. That step silently did nothing. It works now.",
+    items: [
+      "Asking a question now pulls in items connected to the ones it found — linked from a note, filed under the same tag, or sitting in the same folder — and tells you which connection it followed.",
+      "Searching your library for several words at once no longer quietly skips the plain word-match pass, so short and unusual phrasings find more.",
+    ],
+  },
+  {
     id: "2026-09-16",
     date: "September 16, 2026",
     title: "Your library takes up less than half the storage",

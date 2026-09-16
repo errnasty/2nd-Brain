@@ -20,6 +20,14 @@ import { db } from "@/lib/db";
  * Traversal is unconditional by design. Gating it behind "does this question
  * look graph-shaped?" makes retrieval quality a property of how the question
  * was phrased, which is exactly the failure it exists to remove.
+ *
+ * Every array bound into a query below goes through `sql.param`. Interpolating
+ * a JS array directly gives drizzle one bind PER ELEMENT, so
+ * `any(${frontier}::uuid[])` renders as `any(($1, $2)::uuid[])` — a row
+ * constructor, which Postgres rejects. Because `safeRows` swallows the error
+ * and returns [], the whole traversal degrades to silence rather than failing
+ * loudly, so this is worth keeping an eye on. See the guard in
+ * src/lib/ai/retrieval/graph.test.ts.
  */
 
 export type EdgeKind = "wikilink" | "tag" | "folder";
@@ -125,16 +133,17 @@ function recencyFactor(at: string | null): number {
 
 /** Wikilinks, in both directions — a link is a relationship regardless of who authored it. */
 function wikilinkEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
+  const frontierParam = sql.param(frontier);
   return safeRows(() =>
     db.execute(sql`
       select
-        case when dl.source_item_id = any(${frontier}::uuid[]) then dl.source_item_id else dl.target_item_id end as a,
-        case when dl.source_item_id = any(${frontier}::uuid[]) then dl.target_item_id else dl.source_item_id end as b,
+        case when dl.source_item_id = any(${frontierParam}::uuid[]) then dl.source_item_id else dl.target_item_id end as a,
+        case when dl.source_item_id = any(${frontierParam}::uuid[]) then dl.target_item_id else dl.source_item_id end as b,
         null::text as label,
         dl.created_at as at
       from directory_links dl
       where dl.user_id = ${userId}
-        and (dl.source_item_id = any(${frontier}::uuid[]) or dl.target_item_id = any(${frontier}::uuid[]))
+        and (dl.source_item_id = any(${frontierParam}::uuid[]) or dl.target_item_id = any(${frontierParam}::uuid[]))
       limit ${MAX_EDGE_ROWS}
     `),
   );
@@ -142,6 +151,7 @@ function wikilinkEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
 
 /** Co-tagged items, skipping tags too broad to mean anything. */
 function tagEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
+  const frontierParam = sql.param(frontier);
   return safeRows(() =>
     db.execute(sql`
       with seed_tags as (
@@ -149,7 +159,7 @@ function tagEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
         from item_tags it
         where it.user_id = ${userId}
           and it.item_kind = 'directory_item'
-          and it.item_id = any(${frontier}::uuid[])
+          and it.item_id = any(${frontierParam}::uuid[])
       ),
       tag_size as (
         select tag_id, count(*) as n
@@ -173,6 +183,7 @@ function tagEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
 
 /** Items sharing a folder, skipping folders large enough to be a filing cabinet. */
 function folderEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
+  const frontierParam = sql.param(frontier);
   return safeRows(() =>
     db.execute(sql`
       with seed_folders as (
@@ -180,7 +191,7 @@ function folderEdges(userId: string, frontier: string[]): Promise<EdgeRow[]> {
         from directory_items di
         where di.user_id = ${userId}
           and di.folder_id is not null
-          and di.id = any(${frontier}::uuid[])
+          and di.id = any(${frontierParam}::uuid[])
       ),
       folder_size as (
         select folder_id, count(*) as n
@@ -310,7 +321,7 @@ export async function expandByGraph(
     db.execute(sql`
       select id as a, title as b, kind as label, null::text as at
       from directory_items
-      where user_id = ${userId} and id = any(${ids}::uuid[])
+      where user_id = ${userId} and id = any(${sql.param(ids)}::uuid[])
     `),
   );
   const meta = new Map(rows.map((r) => [r.a, { title: r.b, kind: r.label }]));
