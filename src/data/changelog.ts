@@ -52,9 +52,10 @@ export const CHANGELOG: ChangelogEntry[] = [
     title: "Old read articles are actually cleared out now",
     tag: "fix",
     summary:
-      "Feeds were meant to clear out articles you had already read and left alone for 45 days. That clean-up silently failed every time it ran, so nothing was ever removed and libraries grew without limit. It works now — and it will never touch anything you saved.",
+      "Feeds were meant to clear out articles you had already read and left alone. That clean-up silently failed every time it ran, so nothing was ever removed and libraries grew without limit. It works now, and keeps a rolling month of read articles.",
     items: [
       "Articles you starred, put in Read Later, or saved to your Directory are kept no matter how old they are. Unread articles are never removed at any age.",
+      "Your XP, level, streak, stat block, achievements and Study figures are unaffected by the clean-up — they are counted as you earn them, not recounted from articles later. Feed quality scores now measure the same month that is kept, so clearing out old articles cannot change them either.",
       "On the desktop app, the indexes that keep Feeds and the Directory quick were not being created at all, so both got slower as your library grew. They are created properly now.",
     ],
   },
