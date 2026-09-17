@@ -1,6 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
+import { RETENTION_DAYS } from "@/lib/feeds/retention";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
 
 export type SyncResult = {
@@ -183,10 +184,14 @@ export async function syncUserFeeds(
   };
 }
 
-// Retention: read/archived articles older than this are purged so the table
-// (and its indexes) stay lean — the main cause of "everything feels slow when
-// I have a lot of articles". Starred and Read-Later items are kept forever.
-const RETENTION_DAYS = 45;
+// Retention: read/archived articles older than RETENTION_DAYS are purged so the
+// table (and its indexes) stay lean — the main cause of "everything feels slow
+// when I have a lot of articles". Starred, Read-Later and Directory-saved items
+// are kept forever.
+//
+// The window lives in lib/feeds/retention.ts, not here, because every signal
+// that counts articles has to be clamped to it — see that file for why a
+// window longer than retention is biased rather than merely smaller.
 const PURGE_BATCH = 2000;
 
 /**

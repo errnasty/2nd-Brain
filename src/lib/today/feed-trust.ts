@@ -1,3 +1,5 @@
+import { articleWindowDays } from "@/lib/feeds/retention";
+
 /**
  * How much each of your feeds has earned.
  *
@@ -44,8 +46,16 @@ export type FeedEngagement = {
   saved: number;
 };
 
-/** Days of history trust is computed over. */
-export const TRUST_WINDOW_DAYS = 60;
+/**
+ * Days of history trust is computed over.
+ *
+ * 60 is what the signal wants; the clamp is what the data can support. The
+ * retention purge removes READ articles past its own window and keeps unread
+ * ones, so counting further back than that measures a leftover biased against
+ * reading — a feed you always read would score worse than one you ignore. See
+ * lib/feeds/retention.ts.
+ */
+export const TRUST_WINDOW_DAYS = articleWindowDays(60);
 
 /**
  * Articles a feed must have delivered before its rate means anything. Below
