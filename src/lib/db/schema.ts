@@ -452,10 +452,14 @@ export const articleEmbeddings = pgTable(
   },
   (t) => ({
     articleChunkUnique: uniqueIndex("article_chunk_unique").on(t.articleId, t.chunkIndex),
-    embeddingIdx: index("article_embeddings_embedding_idx")
-      .using("hnsw", t.embedding.op("halfvec_cosine_ops")),
-    // RAG/related queries filter by user_id; without this the tenant predicate
-    // was an unindexed scan layered on the global HNSW search.
+    // No HNSW index here, deliberately — see ANN_INDEXED_TABLES in
+    // src/lib/embeddings/tables.ts and migration 0038. An HNSW element tuple
+    // carries the whole vector, so the index cost about as much as the table it
+    // indexed, and it could not use the `user_id` predicate every query here
+    // has. With the expiry policy in embeddings/policy.ts keeping this table
+    // small, an exact scan is fast enough and strictly more accurate.
+    // RAG/related queries filter by user_id, and now that the scan is exact
+    // this index is what makes it a per-tenant scan rather than a global one.
     userIdx: index("article_embeddings_user_idx").on(t.userId),
   }),
 );

@@ -39,7 +39,12 @@ select
     (select pg_size_pretty(pg_relation_size(i.indexrelid))
      from pg_stat_user_indexes i
      where i.relname = c.relname and i.indexrelname = c.relname || '_embedding_idx'),
-    'MISSING — step 4 pending') as ann_index
+    -- article_embeddings has no ANN index BY DESIGN since migration 0038 (the
+    -- index cost as much as the table and could not use the per-user
+    -- predicate), so its absence is the finished state, not a pending step.
+    case when c.relname = 'article_embeddings'
+         then 'none — dropped in 0038, by design'
+         else 'MISSING — step 4 pending' end) as ann_index
 from pg_attribute a
 join pg_class c on c.oid = a.attrelid
 join pg_namespace n on n.oid = c.relnamespace

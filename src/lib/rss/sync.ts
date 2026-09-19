@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { articles, feeds } from "@/lib/db/schema";
 import { RETENTION_DAYS } from "@/lib/feeds/retention";
+import { expireStaleArticleEmbeddings } from "@/lib/embeddings/backfill";
 import { fetchAndParseFeed } from "@/lib/rss/parser";
 
 export type SyncResult = {
@@ -154,6 +155,10 @@ export async function syncAllFeeds(): Promise<{ total: number; processed: number
     .orderBy(STALEST_FIRST);
   const results = await runSyncBatched(all);
   await purgeOldReadArticles(); // global cleanup on the cron path
+  // …and the vectors of articles the embedding policy no longer keeps one for.
+  // Separate from the purge because it targets the opposite set: the purge
+  // removes READ articles, this removes vectors from UNREAD ones nobody touched.
+  await expireStaleArticleEmbeddings();
   return {
     total: all.length,
     processed: results.length,
@@ -174,6 +179,7 @@ export async function syncUserFeeds(
     .orderBy(STALEST_FIRST);
   const results = await runSyncBatched(all);
   await purgeOldReadArticles(userId); // keep this user's table lean
+  await expireStaleArticleEmbeddings(userId);
   bustUnreadCounts(userId); // new articles changed the counts
   return {
     total: all.length,

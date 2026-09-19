@@ -7,7 +7,8 @@ import {
   embeddingParam,
   getEmbeddingsProvider,
 } from "@/lib/embeddings";
-import { EMBEDDING_TABLES } from "@/lib/embeddings/tables";
+import { deservesEmbeddingSql } from "@/lib/embeddings/policy";
+import { EMBEDDING_TABLES, hasAnnIndex } from "@/lib/embeddings/tables";
 
 // Embedding batch size (one provider call per batch) and how many batches run
 // concurrently. Bigger batches = fewer provider round-trips; concurrency
@@ -17,6 +18,9 @@ import { EMBEDDING_TABLES } from "@/lib/embeddings/tables";
 const BATCH = 32;
 const EMBED_CONCURRENCY = 3;
 const CHUNK_BATCH = 16; // inline doc/embed helpers below keep their smaller size
+// Vectors removed per expiry pass. Larger than the article purge's batch: this
+// deletes one narrow row each, with no cascade to follow.
+const EMBEDDING_EXPIRY_BATCH = 5000;
 
 /** Run async tasks with a bounded number in flight; preserves result order. */
 async function runPool<T>(tasks: (() => Promise<T>)[], concurrency: number): Promise<T[]> {
@@ -164,10 +168,21 @@ export async function ensureVectorSchema(): Promise<void> {
 
     await runIsolated([
       sql.raw(`alter table ${table} add column if not exists embedding ${EMBEDDING_SQL_TYPE}`),
-      sql.raw(
-        `create index if not exists ${table}_embedding_idx on ${table} using hnsw (embedding halfvec_cosine_ops)`,
-      ),
     ]);
+
+    // ANN index only where tables.ts says one is worth its size. Dropping
+    // article_embeddings_embedding_idx in migration 0038 would be pointless if
+    // this recreated it on the next cold start — and DROPPING it here is what
+    // carries that decision to the desktop build, which has no migrations.
+    if (hasAnnIndex(table)) {
+      await runIsolated([
+        sql.raw(
+          `create index if not exists ${table}_embedding_idx on ${table} using hnsw (embedding halfvec_cosine_ops)`,
+        ),
+      ]);
+    } else {
+      await runIsolated([sql.raw(`drop index if exists ${table}_embedding_idx`)]);
+    }
   }
   schemaEnsured = true;
 }
@@ -247,7 +262,9 @@ export async function backfillEmbeddings(
       select a.id, a.title, a.excerpt, a.full_text
       from articles a
       left join article_embeddings e on e.article_id = a.id
-      where a.user_id = ${userId} and e.id is null
+      where a.user_id = ${userId}
+        and e.id is null
+        and ${deservesEmbeddingSql("a")}
       order by a.publish_date desc nulls last
       limit ${limit}
     `)) as unknown as ArticleRow[];
@@ -349,6 +366,49 @@ export async function backfillEmbeddings(
   }
 
   return { articlesEmbedded, chunksEmbedded, notesEmbedded, failed, errors };
+}
+
+/**
+ * Delete stored vectors for articles the policy no longer keeps one for.
+ *
+ * The exact complement of the backfill's filter — see
+ * `deservesEmbeddingSql` for why that has to be true to the row, and
+ * `policy.test.ts` for the assertion that it is. Written as `not (…)` over the
+ * same expression rather than a second hand-written predicate so the two cannot
+ * drift apart and start fighting over a row.
+ *
+ * Bounded like purgeOldReadArticles so one run can't lock the table for long;
+ * repeated sync runs catch up. Never throws — losing a cleanup pass costs disk,
+ * and must not cost the sync that called it.
+ *
+ * Returns how many vectors it removed.
+ */
+export async function expireStaleArticleEmbeddings(
+  userId?: string,
+  limit = EMBEDDING_EXPIRY_BATCH,
+): Promise<number> {
+  const userCond = userId ? sql`and a.user_id = ${userId}` : sql``;
+  try {
+    const rows = (await db.execute(sql`
+      delete from article_embeddings e
+      where e.id in (
+        select e2.id
+        from article_embeddings e2
+        join articles a on a.id = e2.article_id
+        where not ${deservesEmbeddingSql("a")}
+          ${userCond}
+        limit ${limit}
+      )
+      returning 1
+    `)) as unknown as unknown[];
+    return Array.isArray(rows) ? rows.length : 0;
+  } catch (err) {
+    console.warn(
+      "expireStaleArticleEmbeddings skipped:",
+      err instanceof Error ? err.message : err,
+    );
+    return 0;
+  }
 }
 
 /** Embed a single user note inline (fire-and-forget after note save). */
