@@ -378,7 +378,6 @@ EXCEPTION
 END $$;
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "article_chunk_unique" ON "article_embeddings" USING btree ("article_id","chunk_index");--> statement-breakpoint
-CREATE INDEX IF NOT EXISTS "article_embeddings_embedding_idx" ON "article_embeddings" USING hnsw ("embedding" halfvec_cosine_ops);--> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "articles_feed_guid_unique" ON "articles" USING btree ("feed_id","guid");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "articles_user_status_idx" ON "articles" USING btree ("user_id","read_status","publish_date");--> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "articles_user_readlater_idx" ON "articles" USING btree ("user_id","publish_date" DESC NULLS LAST) WHERE "articles"."read_later";--> statement-breakpoint

@@ -27,6 +27,20 @@ export type ChangelogEntry = {
 
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    id: "2026-09-19",
+    date: "September 19, 2026",
+    title: "Semantic search keeps a rolling month, and stops growing forever",
+    tag: "improvement",
+    summary:
+      "Every article the app had ever seen kept a search vector for good, and that was the largest thing in the database. Articles now keep theirs for a month, and keep it permanently the moment you star, save, open or file them.",
+    items: [
+      "Nothing about your articles changes — they stay in your feeds with their titles and text, and searching by word still finds every one of them.",
+      "What an expired article loses is its place in meaning-based search and in the Related panel. Star it, save it for later, open it, or add it to your Directory and it comes back on the next refresh.",
+      "Ask is untouched: it only ever searched things you had saved to your Directory, and those keep their vectors forever. The Daily Brief is untouched too.",
+      "Meaning-based search results are now exact rather than approximate, so the closest match really is the closest one. On a big library a search takes a few tens of milliseconds longer.",
+    ],
+  },
+  {
     id: "2026-09-16-d",
     date: "September 16, 2026",
     title: "Sign-in links can only ever send you back into the app",
